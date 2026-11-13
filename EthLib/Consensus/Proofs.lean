@@ -121,6 +121,7 @@ public import EthLib.Consensus.Proofs.Transition.BuilderDebtWithdrawals
 public import EthLib.Consensus.Proofs.Transition.BuilderPayments
 public import EthLib.Consensus.Proofs.Transition.BuilderRequests
 public import EthLib.Consensus.Proofs.Transition.Chain
+public import EthLib.Consensus.Proofs.Transition.ChainList
 public import EthLib.Consensus.Proofs.Transition.Committees
 public import EthLib.Consensus.Proofs.Transition.ConsolidationWindow
 public import EthLib.Consensus.Proofs.Transition.EpochJustification
