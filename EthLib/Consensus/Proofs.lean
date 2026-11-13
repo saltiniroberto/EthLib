@@ -130,6 +130,7 @@ public import EthLib.Consensus.Proofs.Transition.EpochPending
 public import EthLib.Consensus.Proofs.Transition.EpochRewards
 public import EthLib.Consensus.Proofs.Transition.EpochUpdates
 public import EthLib.Consensus.Proofs.Transition.Execution
+public import EthLib.Consensus.Proofs.Transition.FfgChainLists
 public import EthLib.Consensus.Proofs.Transition.FfgFinality
 public import EthLib.Consensus.Proofs.Transition.FfgFinalityChain
 public import EthLib.Consensus.Proofs.Transition.FfgFinalityMonotonicity
