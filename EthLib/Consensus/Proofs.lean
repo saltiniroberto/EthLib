@@ -88,6 +88,7 @@ public import EthLib.Consensus.Proofs.LightClient.Sync
 public import EthLib.Consensus.Proofs.LightClient.Unforgeable
 public import EthLib.Consensus.Proofs.LightClient.Upgrade
 public import EthLib.Consensus.Proofs.Models.Ffg.AccountableSafety
+public import EthLib.Consensus.Proofs.Models.Ffg.AccountableSafetyKinds
 public import EthLib.Consensus.Proofs.Models.Ffg.GuaranteedIntersection
 public import EthLib.Consensus.Proofs.Models.Ffg.Monotonicity
 public import EthLib.Consensus.Proofs.Models.Ffg.PlausibleLiveness
