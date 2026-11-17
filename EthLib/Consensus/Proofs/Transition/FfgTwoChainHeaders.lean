@@ -23,7 +23,7 @@ The root of the header of a listed block is the root of the block.
 
 The second way is the zero root, the specification's value for no block and for no state root.
 
-It is the root of a listed block, of the genesis header, or of a state that the chains record.
+It is the root of a listed block or of a state that the chains record.
 
 These states are the genesis state and the state after each listed block.
 
@@ -599,7 +599,7 @@ The root of the header of a listed block is the root of the block, so the blocks
 
 A listed block comes after slot zero, so its header is never the genesis header.
 
-Or one of these headers has the zero root, or a state that the chains record has it.
+Or a listed block has the zero root, or a state that the chains record has it.
 
 These states are the genesis state and the state after each listed block.
 
@@ -695,9 +695,6 @@ theorem accountable_safety_isSlashableAttestationData_of_chainLists
         SszType.hashTreeRoot block.2 = .ok root) ∨
     ((∃ block ∈ chain₁.blocks ++ chain₂.blocks,
         SszType.hashTreeRoot block.2 = .ok (Vector.replicate 32 0)) ∨
-      (∃ genesisRoot, SszType.hashTreeRoot state = .ok genesisRoot ∧
-        SszType.hashTreeRoot { state.latestBlockHeader with stateRoot := genesisRoot } =
-          .ok (Vector.replicate 32 0)) ∨
       SszType.hashTreeRoot state = .ok (Vector.replicate 32 0) ∨
       ∃ applied ∈ chain₁.appliedBlocks ++ chain₂.appliedBlocks,
         SszType.hashTreeRoot applied.after = .ok (Vector.replicate 32 0)) := by
@@ -741,10 +738,10 @@ theorem accountable_safety_isSlashableAttestationData_of_chainLists
     events (.inr (.inl ⟨block, listed _ _ _ found, zero⟩))
   have nonzero : genesisRoot ≠ Vector.replicate 32 0 := fun zero => by
     rw [zero] at rooted
-    exact events (.inr (.inr (.inr (.inl rooted))))
+    exact events (.inr (.inr (.inl rooted)))
   have nonzeroAfter : ∀ applied ∈ chain₁.appliedBlocks ++ chain₂.appliedBlocks,
       SszType.hashTreeRoot applied.after ≠ .ok (Vector.replicate 32 0) :=
-    fun applied member zero => events (.inr (.inr (.inr (.inr ⟨applied, member, zero⟩))))
+    fun applied member zero => events (.inr (.inr (.inr ⟨applied, member, zero⟩)))
   obtain ⟨headers₁, recorded₁, links₁, -⟩ := chain₁.recordedHeaders computed rooted nonzero
     stateRooted₁ fun applied member => nonzeroAfter applied (List.mem_append_left _ member)
   obtain ⟨headers₂, recorded₂, links₂, -⟩ := chain₂.recordedHeaders computed rooted nonzero
