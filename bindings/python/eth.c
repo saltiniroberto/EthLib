@@ -35,6 +35,8 @@ eth_check_pooled(
   lean_object* response
 );
 
+extern lean_object* eth_session(lean_object* args);
+
 extern lean_object*
 eth_wire_hash(
   lean_object* tx
@@ -46,6 +48,13 @@ eth_receipts_match(
   lean_object* fork,
   lean_object* root,
   lean_object* receipts
+);
+
+extern lean_object*
+eth_check_body(
+  lean_object* fork,
+  lean_object* header,
+  lean_object* body
 );
 
 extern lean_object*
@@ -183,6 +192,27 @@ py_eth_receipts_match(
 }
 
 PyObject*
+py_eth_check_body(
+  PyObject* self,
+  PyObject* args
+) {
+  PyObject *fork_obj, *header_obj, *body_obj;
+  if (!PyArg_ParseTuple(args, "OOO", &fork_obj, &header_obj, &body_obj)) return NULL;
+  if (!PyUnicode_Check(fork_obj)) {
+    PyErr_SetString(PyExc_TypeError, "fork must be str");
+    return NULL;
+  }
+  Py_ssize_t len;
+  const char* utf8 = PyUnicode_AsUTF8AndSize(fork_obj, &len);
+  if (!utf8) return NULL;
+  lean_object *header, *body;
+  if (parse_bytes(header_obj, "header", &header)) return NULL;
+  if (parse_bytes(body_obj, "body", &body)) { lean_dec(header); return NULL; }
+  lean_object* fork = mk_bytearray((const uint8_t*) utf8, (size_t) len);
+  return except_into_pybool(eth_check_body(fork, header, body), ETH_WIRE_ERROR);
+}
+
+PyObject*
 py_eth_access_lists_answer(
   PyObject* self,
   PyObject* args
@@ -222,4 +252,12 @@ py_eth_check_partial_receipts(
   if (parse_bytes(receipts_obj, "receipts", &receipts)) { lean_dec(limits); return NULL; }
   return except_into_pybool(
     eth_check_partial_receipts(limits, block_gas_limit, receipts), ETH_WIRE_ERROR);
+}
+
+PyObject*
+py_eth_session(
+  PyObject* self,
+  PyObject* args
+) {
+  return call_pyvalue_export(eth_session, args, 5, ETH_WIRE_ERROR);
 }

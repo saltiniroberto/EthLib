@@ -1,6 +1,7 @@
 module
 
 public import EthLib.Base.U256
+public import EthLib.Execution.ErrorFormat
 public import EthLib.Cryptography.Hash.Keccak
 public import EthLib.Execution.Network.Blocks
 public import EthLib.Networking.Snappy.Frame
@@ -126,19 +127,51 @@ inductive Era1Error where
   | frame (i : Nat) (e : Networking.Snappy.FrameError)
   /-- A record of the block `i` is not one RLP item, or its header lacks a field. -/
   | rlp (i : Nat) (e : Rlp.RlpError)
-  /-- The header of the block `i` has another number than the index gives it. -/
-  | blockNumber (i : Nat)
-  /-- The header of the block `i` does not name the hash of the block before as its parent. -/
-  | parentHash (i : Nat)
-  /-- The total difficulty of the block `i` is not the one before plus its difficulty.
+  /-- The header of the block `i` has the number `actual`, not `expected`, the one of the index. -/
+  | blockNumber (i expected actual : Nat)
+  /-- The header of the block `i` names the parent `actual`, not `expected`, the block before. -/
+  | parentHash (i : Nat) (expected actual : Hash32)
+  /-- The total difficulty `actual` of the block `i` is not `expected`.
 
-  For the genesis block, it is not its difficulty. -/
-  | totalDifficulty (i : Nat)
+  It is the one before plus the difficulty of the block, or for the genesis block its difficulty.
+  -/
+  | totalDifficulty (i expected actual : Nat)
   /-- The SSZ root of the header records fails. -/
   | ssz (e : Ssz.Err)
-  /-- The accumulator is not the root of the header records of the blocks. -/
-  | accumulator
-  deriving Repr
+  /-- The accumulator `actual` of the file is not `expected`, the root of its header records. -/
+  | accumulator (expected actual : Bytes32)
+
+/-- A constructor of the error, named in full, applied to its arguments. -/
+def era1ErrorFormat (name : String) (args : List Std.Format) (prec : Nat) : Std.Format :=
+  constructorFormat ("EthLib.Execution.History.Era1Error." ++ name) args prec
+
+/-- The form of the error in Lean syntax, with each value named and each hash in hex. -/
+def Era1Error.reprPrec : Era1Error → Nat → Std.Format
+  | .e2store e, p => era1ErrorFormat "e2store" [reprArg e] p
+  | .noTrailer, p => era1ErrorFormat "noTrailer" [] p
+  | .misplacedRecord type, p => era1ErrorFormat "misplacedRecord" [namedArg "type" type] p
+  | .tooManyBlocks count, p => era1ErrorFormat "tooManyBlocks" [namedArg "count" count] p
+  | .wrongSize type size, p =>
+    era1ErrorFormat "wrongSize" [namedArg "type" type, namedArg "size" size] p
+  | .blockCount counted held, p =>
+    era1ErrorFormat "blockCount" [namedArg "counted" counted, namedArg "held" held] p
+  | .blockOffset i, p => era1ErrorFormat "blockOffset" [namedArg "i" i] p
+  | .frame i e, p => era1ErrorFormat "frame" [namedArg "i" i, reprArg e] p
+  | .rlp i e, p => era1ErrorFormat "rlp" [namedArg "i" i, reprArg e] p
+  | .blockNumber i expected actual, p =>
+    era1ErrorFormat "blockNumber"
+      [namedArg "i" i, namedArg "expected" expected, namedArg "actual" actual] p
+  | .parentHash i expected actual, p =>
+    era1ErrorFormat "parentHash"
+      [namedArg "i" i, namedArg "expected" expected, namedArg "actual" actual] p
+  | .totalDifficulty i expected actual, p =>
+    era1ErrorFormat "totalDifficulty"
+      [namedArg "i" i, namedArg "expected" expected, namedArg "actual" actual] p
+  | .ssz e, p => era1ErrorFormat "ssz" [reprArg e] p
+  | .accumulator expected actual, p =>
+    era1ErrorFormat "accumulator" [namedArg "expected" expected, namedArg "actual" actual] p
+
+instance : Repr Era1Error := ⟨Era1Error.reprPrec⟩
 
 /-- The stable code of an error, one per constructor.
 
@@ -153,16 +186,17 @@ def Era1Error.code : Era1Error → UInt32
   | .blockOffset _ => 7
   | .frame _ _ => 8
   | .rlp _ _ => 9
-  | .blockNumber _ => 10
-  | .parentHash _ => 11
-  | .totalDifficulty _ => 12
+  | .blockNumber .. => 10
+  | .parentHash .. => 11
+  | .totalDifficulty .. => 12
   | .ssz _ => 13
-  | .accumulator => 14
+  | .accumulator .. => 14
 
 /-- The blocks at the front of the records, four records each, and the records after them.
 
 A block is a header, a body, receipts and a total difficulty, in that order. -/
 def takeBlocks : List Record → List (Record × Record × Record × Record) × List Record
+  -- `block-tuple := CompressedHeader | CompressedBody | CompressedReceipts | TotalDifficulty`.
   | h :: b :: r :: t :: rest =>
     if h.type = COMPRESSED_HEADER ∧ b.type = COMPRESSED_BODY ∧
         r.type = COMPRESSED_RECEIPTS ∧ t.type = TOTAL_DIFFICULTY then
@@ -180,8 +214,7 @@ def splitLastTwo : List Record → Option (List Record × Record × Record)
 
 /-- The 32 bytes of a TotalDifficulty or Accumulator record. -/
 def bytes32Of (record : Record) : Except Era1Error Bytes32 :=
-  if h : record.data.size = 32 then .ok ⟨record.data.data, h⟩
-  else .error (.wrongSize record.type record.data.size)
+  exactBytes 32 record.data (.wrongSize record.type)
 
 /-- The data of the compressed record of the block `i`. -/
 def decompressRecord (i : Nat) (record : Record) : Except Era1Error ByteArray :=
@@ -201,16 +234,23 @@ The result also gives the difficulty and the parent hash of the header. -/
 def readBlock (start i : Nat) (records : Record × Record × Record × Record) :
     Except Era1Error (Era1Block × Nat × Hash32) := do
   let (h, b, r, t) := records
+  -- Each compressed record holds the RLP of its part, in the framing format of Snappy.
   let header ← decompressRecord i h
   let body ← decompressRecord i b
   let receipts ← decompressRecord i r
+  -- Each part must be one RLP item; only the header is read further.
   let item ← rlpItem i header
   discard <| rlpItem i body
   discard <| rlpItem i receipts
+  -- EthLib's check: block `i` of the file has the number `starting-number + i`.
   let number ← (Execution.Network.headerNumber item).mapError (.rlp i)
-  unless number = start + i do throw (.blockNumber i)
+  unless number = start + i do throw (.blockNumber i (start + i) number)
+  -- The difficulty and the parent hash of the header, for the chain checks.
   let difficulty ← (Execution.Network.headerDifficulty item).mapError (.rlp i)
   let parent ← (Execution.Network.headerParent item).mapError (.rlp i)
+  -- The document gives the total difficulty as an unsigned 256-bit integer, with no byte order.
+  --
+  -- EthLib reads it little-endian, as SSZ and the accumulator do.
   let td := BitVec.ofNat 256 (Base.bytesToUint (← bytes32Of t))
   return (⟨header, body, receipts, td⟩, difficulty, parent)
 
@@ -233,11 +273,18 @@ def readBlocks (start : Nat) :
     let (block, difficulty, parent) ← readBlock start i records
     let td := block.totalDifficulty.toNat
     match before with
+    -- EthLib's check after a block: the parent hash is the hash of the block before.
+    --
+    -- And the total difficulty is the one before plus the difficulty of this block.
     | some (hash, tdBefore) =>
-      unless parent = hash do throw (.parentHash i)
-      unless td = tdBefore + difficulty do throw (.totalDifficulty i)
+      unless parent = hash do throw (.parentHash i hash parent)
+      unless td = tdBefore + difficulty do throw (.totalDifficulty i (tdBefore + difficulty) td)
+    -- EthLib's check at the genesis block: its total difficulty is its difficulty.
+    --
+    -- A first block with another number has no block before it in the file, so it is not checked.
     | none =>
-      if start = 0 ∧ td ≠ difficulty then throw (.totalDifficulty i)
+      if start = 0 ∧ td ≠ difficulty then throw (.totalDifficulty i difficulty td)
+    -- The hash of the block, the Keccak-256 hash of the RLP of its header.
     let hash := Cryptography.Hash.Keccak.keccak256 block.header
     return block :: (← readBlocks start (i + 1) (some (hash, td)) rest)
 
@@ -245,8 +292,10 @@ def readBlocks (start : Nat) :
 
 The list holds at most 8192 records. -/
 def accumulatorRoot (blocks : List Era1Block) : Except Era1Error Bytes32 := do
+  -- `header-record := { block-hash: Bytes32, total-difficulty: Uint256 }`, for each block.
   let records := blocks.toArray.map fun block =>
     (⟨Cryptography.Hash.Keccak.keccak256 block.header, block.totalDifficulty⟩ : HeaderRecord)
+  -- The hash tree root of the list of header records, at most 8192 long.
   if bound : records.size ≤ MAX_ERA1_BLOCKS then
     let list : Ssz.SszList HeaderRecord MAX_ERA1_BLOCKS := ⟨records, bound⟩
     (Ssz.SszType.hashTreeRoot list).mapError .ssz
@@ -269,7 +318,7 @@ EthLib takes the layout of a SlotIndex record: 8 bytes each, little-endian, offs
 
 The blocks must form a chain from the first number of the index, with their total difficulties.
 
-The TotalDifficulty document gives no byte order.
+The era1 document gives no byte order for the TotalDifficulty record.
 
 EthLib takes that of SSZ, little-endian, which the accumulator also uses.
 
@@ -277,25 +326,39 @@ The accumulator must be the root of the hashes and total difficulties of the blo
 def decodeEra1 (bytes : ByteArray) : Except Era1Error Era1 := do
   let records ← (E2store.decodeFile bytes).mapError .e2store
   let starts := (E2store.recordStarts 0 records).toArray
+  -- `era1 := Version | block-tuple* | other-entries* | Accumulator | BlockIndex`.
+  --
   -- The Version record comes first, as decoding the file checks.
   let (tuples, after) := takeBlocks (records.drop 1)
+  -- The last two records are the Accumulator and the BlockIndex.
   let some (others, acc, idx) := splitLastTwo after | throw .noTrailer
   unless acc.type = ACCUMULATOR ∧ idx.type = BLOCK_INDEX do throw .noTrailer
+  -- EthLib's reading: no other entry takes a type of the era1 document.
   if let some other := others.find? (ERA1_TYPES.contains ·.type) then
     throw (.misplacedRecord other.type)
+  -- At most 8192 blocks, the limit of the accumulator.
   unless tuples.length ≤ MAX_ERA1_BLOCKS do throw (.tooManyBlocks tuples.length)
+  -- `block-index := starting-number | index | index | index ... | count`.
+  --
+  -- EthLib's choice, as the document gives no width or sign: the layout of a SlotIndex record.
   let index ← (E2store.readIndex idx.data).mapError .e2store
+  -- The count is the number of blocks.
   unless index.offsets.length = tuples.length do
     throw (.blockCount index.offsets.length tuples.length)
-  -- The BlockIndex record is the last one, and the header of the block `i` the record `1 + 4 i`.
+  -- EthLib's reading: each index counts from the start of the BlockIndex record, the last record.
+  --
+  -- Index `i` must point at the CompressedHeader record of block `i`, the record `1 + 4 i`.
   let indexStart := bytes.size - 8 - idx.data.size
   let offsets := index.offsets.toArray
   let misplaced := (List.range tuples.length).find? fun i =>
     (indexStart : Int) + offsets.getD i 0 ≠ starts.getD (1 + 4 * i) 0
   if let some i := misplaced then throw (.blockOffset i)
+  -- The blocks, numbered from `starting-number`, each checked against the one before by EthLib.
   let blocks ← readBlocks index.start 0 none tuples
+  -- The Accumulator record is the root of the header records of the blocks.
   let accumulator ← bytes32Of acc
-  unless (← accumulatorRoot blocks) = accumulator do throw .accumulator
+  let root ← accumulatorRoot blocks
+  unless root = accumulator do throw (.accumulator root accumulator)
   return ⟨index.start, index.offsets, blocks, others, accumulator⟩
 
 end EthLib.Execution.History

@@ -79,7 +79,7 @@ def names(exception: str, message: str) -> bool:
         "RLP_INVALID_HEADER": r"decoding: (?!field )",
         "TYPE_NOT_SUPPORTED": r"unsupportedType|emptyTransaction",
         "VALUE_OVERFLOW": r"decoding: field 4: scalarTooLarge",
-        "NONCE_OVERFLOW": r"nonceOverflow",
+        "NONCE_OVERFLOW": r"nonceOverflow|decoding: field 1: scalarTooLarge",
         "INVALID_SIGNATURE_VRS": r"invalidSignature",
         "INVALID_CHAINID": r"wrongChainId",
         "TYPE_4_EMPTY_AUTHORIZATION_LIST": r"emptyAuthorizationList",
@@ -155,5 +155,5 @@ def test_type_of_typed_transaction():
     tx = bytes.fromhex(next(iter(fixture.values()))["txbytes"].removeprefix("0x"))
     assert transactions.tx_type("fusaka", tx) == 4
     # Before Pectra, no fork has the type 4.
-    with raises(ValueError, "unsupportedType 4"):
+    with raises(ValueError, "unsupportedType (type := 4)"):
         transactions.tx_type("dencun", tx)

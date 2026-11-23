@@ -106,11 +106,11 @@ private theorem builderEpochFrameLaws : EpochFrameLaws (@BuilderFrame preset for
     where
   refl := BuilderFrame.refl
   trans := BuilderFrame.trans
-  setValidatorAt := fun set _ _ => builderFrame_setValidatorAt set
+  setValidatorAt := fun set _ _ _ _ _ => builderFrame_setValidatorAt set
   increaseBalance := builderFrame_increaseBalance
   decreaseBalance := builderFrame_decreaseBalance
   initiateValidatorExit := builderFrame_initiateValidatorExit
-  addValidatorToRegistry := builderFrame_addValidatorToRegistry
+  addValidatorToRegistry := fun computed _ => builderFrame_addValidatorToRegistry computed
   eth1DataVotes _ _ := ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩
   inactivityScores _ _ := ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩
   slashings _ _ := ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩
@@ -196,16 +196,11 @@ theorem advanceSlot_builderSplit {gloas : .glamsterdam ≤ fork}
           BuilderFrame { paid with slot := next } after)) := by
   obtain ⟨next, cached, epoched, sum, cachedOk, epochedOk, rfl⟩ := advanceSlot_ok computed
   refine ⟨next, cached, sum, cachedOk, builderFrame_processSlot cachedOk, ?_⟩
-  unfold epochIfLast at epochedOk
-  split at epochedOk
-  · rename_i boundary
-    obtain ⟨pending, paid, pendingOk, before, paidOk, tail⟩ :=
+  obtain ⟨boundary, epochedOk⟩ | ⟨inside, rfl⟩ := epochIfLast_cases epochedOk
+  · obtain ⟨pending, paid, pendingOk, before, paidOk, tail⟩ :=
       processEpoch_builderSplit (gloas := gloas) epochedOk
     exact .inr ⟨boundary, pending, paid, pendingOk, before, paidOk, tail.withSlot next⟩
-  · rename_i inside
-    simp only [pure, Except.pure, Except.ok.injEq] at epochedOk
-    subst epochedOk
-    exact .inl ⟨inside, rfl⟩
+  · exact .inl ⟨inside, rfl⟩
 
 /-- One slot keeps the builders. -/
 theorem advanceSlot_builders (gloas : .glamsterdam ≤ fork)

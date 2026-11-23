@@ -1,10 +1,13 @@
 module
 
 public import EthLib.Execution.Proofs.Network.Blocks
+public import EthLib.Execution.Proofs.Network.Bodies
 public import EthLib.Execution.Proofs.Network.Cells
 public import EthLib.Execution.Proofs.Network.Message
+public import EthLib.Execution.Proofs.Network.Pool
 public import EthLib.Execution.Proofs.Network.Protocol
 public import EthLib.Execution.Proofs.Network.Receipts
+public import EthLib.Execution.Proofs.Network.Session
 public import EthLib.Execution.Proofs.Network.Snap
 public import EthLib.Execution.Proofs.Network.SnapRange
 public import EthLib.Execution.Proofs.Network.SnapRangeBinding

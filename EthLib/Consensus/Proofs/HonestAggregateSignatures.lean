@@ -46,7 +46,7 @@ private theorem attestation_signing_root {config : Config} {state : BeaconState 
   exact ⟨domain, root, mapError_ok_iff.mp domained, mapError_ok_iff.mp rooted⟩
 
 /-- A duty signature is the BLS signature of its computed signing root. -/
-private theorem attestation_sign_eq {config : Config} {state : BeaconState preset fork}
+theorem sign_of_getAttestationSignature {config : Config} {state : BeaconState preset fork}
     {data : AttestationData} {key : Signatures.SecretKey} {signature : BLSSignature}
     {domain : Domain} {root : Root}
     (domained :
@@ -63,12 +63,17 @@ private theorem attestation_sign_eq {config : Config} {state : BeaconState prese
   subst rooted'
   exact mapError_ok_iff.mp signed
 
-/-- Attesters that permute distinct honest signers give an indexed form that passes its check. -/
-private theorem indexed_attestation_of_aggregate {config : Config}
+/-- An attestation passes its indexed check when its signature verifies under its signers' keys.
+
+Its attesters must permute distinct signers, whose keys the registry holds.
+
+The signature must verify under those keys, on the signing root of the data.
+
+From Gloas, the number of signers must also fit the bound of the check. -/
+theorem isValidIndexedAttestation_of_fastAggregateVerify {config : Config}
     {state : BeaconState preset fork} {data : AttestationData}
     {attestation : Attestation preset fork} {indices signers : List ValidatorIndex}
-    {key : ValidatorIndex → Signatures.SecretKey} {signatures : List BLSSignature}
-    {domain : Domain} {root : Root}
+    {key : ValidatorIndex → Signatures.SecretKey} {domain : Domain} {root : Root}
     (computed : getAttestingIndices state attestation = .ok indices)
     (sameData : attestation.data = data) (permuted : indices.Perm signers)
     (nonempty : signers ≠ [])
@@ -78,11 +83,8 @@ private theorem indexed_attestation_of_aggregate {config : Config}
     (domained :
       getDomain config state DOMAIN_BEACON_ATTESTER (some data.target.epoch) = .ok domain)
     (rooted : computeSigningRoot data domain = .ok root)
-    (signed : List.Forall₂ (fun secret signature =>
-      Signatures.sign secret (Base.packBytes root) = .ok signature) (signers.map key) signatures)
-    (sum : ((signers.map key).map (·.val)).sum ≠ 0)
-    (aggregated : Signatures.aggregate (signatures.map Signatures.sigBytes).toArray =
-      .ok attestation.signature) :
+    (verifies : Signatures.fastAggregateVerify ((signers.map key).map Signatures.skToPk).toArray
+      (Base.packBytes root) attestation.signature = true) :
     ∃ indexed, getIndexedAttestation state attestation = .ok indexed ∧
       isValidIndexedAttestation config .bls state indexed = .ok true := by
   obtain ⟨indexed, indexedOf, sameIndices, indexedData, indexedSignature⟩ :=
@@ -94,28 +96,25 @@ private theorem indexed_attestation_of_aggregate {config : Config}
     intro empty
     exact nonempty (empty ▸ permuted.symm).eq_nil
   have keysOf : indices.toArray.mapM (fun index => do
-      return Base.packBytes (← liftAccessor (getValidator state index)).pubkey) =
-        .ok ((indices.map fun index => Signatures.pkBytes (key index)).toArray) := by
+      return (← liftAccessor (getValidator state index)).pubkey) =
+        .ok ((indices.map fun index => Signatures.skToPk (key index)).toArray) := by
     rw [Array.mapM_eq_mapM_toList]
     have mapped := mapM_eq_ok_map (xs := indices)
       (f := fun index => do
-        return Base.packBytes (← liftAccessor (getValidator state index)).pubkey)
-      (g := fun index => Signatures.pkBytes (key index)) fun index member => by
+        return (← liftAccessor (getValidator state index)).pubkey)
+      (g := fun index => Signatures.skToPk (key index)) fun index member => by
         obtain ⟨validator, found, owned⟩ :=
           registered index (permuted.mem_iff.mp member)
         simp only [found, liftAccessor, Except.mapError, bind, Except.bind, pure, Except.pure,
-          owned, Signatures.pkBytes, Base.packBytes]
+          owned]
     rw [mapped]
     rfl
-  have verifies := Signatures.fastAggregateVerify_aggregate_of_forall₂
-    signed (by simpa using nonempty) sum aggregated
-  have permutes := Signatures.fastAggregateVerify_pkBytes_perm (permuted.map key)
-    (Base.packBytes root) (Signatures.sigBytes attestation.signature)
+  have permutes := Signatures.fastAggregateVerify_skToPk_perm (permuted.map key)
+    (Base.packBytes root) attestation.signature
   have verifiesSorted : Signatures.fastAggregateVerify
-      ((indices.map fun index => Signatures.pkBytes (key index)).toArray)
-      (Base.packBytes root) (Base.packBytes attestation.signature) = true := by
-    simpa only [List.map_map, Function.comp_def, Signatures.sigBytes, Base.packBytes]
-      using permutes.trans verifies
+      ((indices.map fun index => Signatures.skToPk (key index)).toArray)
+      (Base.packBytes root) attestation.signature = true := by
+    simpa only [List.map_map, Function.comp_def] using permutes.trans verifies
   refine ⟨indexed, indexedOf, ?_⟩
   unfold isValidIndexedAttestation
   have readIndices : indexed.attestingIndices.data.toList = indices := by
@@ -135,6 +134,32 @@ private theorem indexed_attestation_of_aggregate {config : Config}
   simpa only [indexedData, sameData, domained, rooted, liftAccessor, liftSsz, Except.mapError,
     bind, Except.bind, pure, Except.pure, SignatureChecks.bls, indexedSignature]
     using congrArg (Except.ok (ε := TransitionError)) verifiesSorted
+
+/-- Attesters that permute distinct honest signers give an indexed form that passes its check. -/
+private theorem indexed_attestation_of_aggregate {config : Config}
+    {state : BeaconState preset fork} {data : AttestationData}
+    {attestation : Attestation preset fork} {indices signers : List ValidatorIndex}
+    {key : ValidatorIndex → Signatures.SecretKey} {signatures : List BLSSignature}
+    {domain : Domain} {root : Root}
+    (computed : getAttestingIndices state attestation = .ok indices)
+    (sameData : attestation.data = data) (permuted : indices.Perm signers)
+    (nonempty : signers ≠ [])
+    (bounded : .glamsterdam ≤ fork → signers.length ≤ maxAttesters preset fork)
+    (registered : ∀ index ∈ signers, ∃ validator,
+      getValidator state index = .ok validator ∧ validator.pubkey = Signatures.skToPk (key index))
+    (domained :
+      getDomain config state DOMAIN_BEACON_ATTESTER (some data.target.epoch) = .ok domain)
+    (rooted : computeSigningRoot data domain = .ok root)
+    (signed : List.Forall₂ (fun secret signature =>
+      Signatures.sign secret (Base.packBytes root) = .ok signature) (signers.map key) signatures)
+    (sum : ((signers.map key).map (·.val)).sum ≠ 0)
+    (aggregated : Signatures.aggregate signatures.toArray =
+      .ok attestation.signature) :
+    ∃ indexed, getIndexedAttestation state attestation = .ok indexed ∧
+      isValidIndexedAttestation config .bls state indexed = .ok true :=
+  isValidIndexedAttestation_of_fastAggregateVerify computed sameData permuted nonempty bounded
+    registered domained rooted (Signatures.fastAggregateVerify_aggregate_of_forall₂
+      signed (by simpa using nonempty) sum aggregated)
 
 /-- Before Electra, an aggregate of distinct honest attesters passes the indexed signature check.
 
@@ -188,17 +213,17 @@ theorem isValidIndexedAttestation_constructAggregate {config : Config}
       (signers.map key) ((attestations.filter (·.data = data)).map (·.signature)) := by
     rw [List.forall₂_map_left_iff, List.forall₂_map_right_iff]
     exact honest.imp fun _ _ made =>
-      attestation_sign_eq domained rooted (constructAttestation_spec made).choose_spec.2.2.2.2
+      sign_of_getAttestationSignature domained rooted
+        (constructAttestation_spec made).choose_spec.2.2.2.2
   have bounded : .glamsterdam ≤ fork → signers.length ≤ maxAttesters preset fork := by
     intro gloas
     exact False.elim (Nat.not_le_of_lt before (le_trans (by decide) gloas))
   apply indexed_attestation_of_aggregate computed sameData permuted nonempty bounded registered
     domained rooted signed sum
-  simpa only [getAggregateSignature, List.map_map, Function.comp_def, Signatures.sigBytes,
-    Base.packBytes] using aggregateSignature
+  simpa only [getAggregateSignature, List.map_map, Function.comp_def] using aggregateSignature
 
 /-- A single attestation holds its signer's index, committee, data and signature. -/
-private theorem single_attestation_spec {config : Config} {state : BeaconState preset fork}
+theorem constructSingleAttestation_spec {config : Config} {state : BeaconState preset fork}
     {data : AttestationData} {committeeIndex : CommitteeIndex} {index : ValidatorIndex}
     {key : Signatures.SecretKey} {single : SingleAttestation}
     (made : constructSingleAttestation config state data committeeIndex index key = .ok single) :
@@ -245,11 +270,11 @@ theorem isValidIndexedAttestation_constructAggregateOfSingleAttestations {config
     · rintro ⟨single, member, sameData, sameCommittee, attester⟩
       obtain ⟨signer, signerMember, made⟩ := exists_mem_of_forall₂ honest.flip
         (List.mem_filter.mpr ⟨member, by simp [sameData, sameCommittee]⟩)
-      have same : index = signer := attester.symm.trans (single_attestation_spec made).1
+      have same : index = signer := attester.symm.trans (constructSingleAttestation_spec made).1
       exact same.symm ▸ signerMember
     · intro member
       obtain ⟨single, singleMember, made⟩ := exists_mem_of_forall₂ honest member
-      obtain ⟨sameIndex, sameData, sameCommittee, _⟩ := single_attestation_spec made
+      obtain ⟨sameIndex, sameData, sameCommittee, _⟩ := constructSingleAttestation_spec made
       exact ⟨single, (List.mem_filter.mp singleMember).1, sameData, sameCommittee, sameIndex⟩
   have permuted : indices.Perm signers :=
     (List.perm_ext_iff_of_nodup (getAttestingIndices_sorted computed).nodup distinct).mpr
@@ -259,7 +284,7 @@ theorem isValidIndexedAttestation_constructAggregateOfSingleAttestations {config
     simp [empty] at sum
   obtain ⟨signer, signerMember⟩ := List.exists_mem_of_ne_nil signers nonempty
   obtain ⟨single, _, made⟩ := exists_mem_of_forall₂ honest signerMember
-  obtain ⟨_, _, _, signedOne⟩ := single_attestation_spec made
+  obtain ⟨_, _, _, signedOne⟩ := constructSingleAttestation_spec made
   obtain ⟨domain, root, domained, rooted⟩ := attestation_signing_root signedOne
   have signed : List.Forall₂ (fun secret signature =>
       Signatures.sign secret (Base.packBytes root) = .ok signature)
@@ -267,11 +292,10 @@ theorem isValidIndexedAttestation_constructAggregateOfSingleAttestations {config
         single.data = data ∧ single.committeeIndex = committeeIndex).map (·.signature)) := by
     rw [List.forall₂_map_left_iff, List.forall₂_map_right_iff]
     exact honest.imp fun _ _ made =>
-      attestation_sign_eq domained rooted (single_attestation_spec made).2.2.2
+      sign_of_getAttestationSignature domained rooted (constructSingleAttestation_spec made).2.2.2
   apply indexed_attestation_of_aggregate computed sameData permuted nonempty bounded registered
     domained rooted signed sum
-  simpa only [List.map_map, Function.comp_def, Signatures.sigBytes, Base.packBytes]
-    using aggregateSignature
+  simpa only [List.map_map, Function.comp_def] using aggregateSignature
 
 /-- The topic's committee check accepts an honest aggregate exactly when its other checks pass.
 

@@ -26,7 +26,7 @@ Whether a node is optimistic is read from a fork choice store, built by a run of
 
 An input that does not decode, an unknown name or a fork without the rule has code 0.
 
-A failed step has the code of its fork choice error.
+A failed step has the code of its fork choice error, and its printed form after `optimistic sync: `.
 
 From Heze an export reads the answers on the inclusion lists after a run of steps.
 -/
@@ -36,17 +36,13 @@ public section
 namespace EthLib.Consensus.Exports
 
 open Lean Base Serialization.Ssz
-open EthLib.Exports (Result PyValue pyExport)
-
-/-- The result of a step of optimistic sync, with the code of its error. -/
-def runOptimistic {α : Type} (result : Except ForkChoiceError α) : Result α :=
-  result.mapError fun e => (e.code, s!"optimistic sync failed with code {e.code}")
+open EthLib.Exports (Result PyValue UnreadArgument pyExport rejectArgument toResult)
 
 /-- The preset and the fork, which must be from Bellatrix, or code 0. -/
 def optimisticPresetAndFork (name fork : ByteArray) : Result (Preset × Fork) := do
   let (preset, fork) ← transitionPresetAndFork name fork
   unless .bellatrix ≤ fork do
-    throw (0, s!"no optimistic sync at {fork.name}")
+    rejectArgument none s!"no optimistic sync at {fork.name}"
   return (preset, fork)
 
 /-- An optimistic store from its optimistic roots and the SSZ bytes of its blocks.
@@ -56,7 +52,8 @@ def optimisticStoreOf (preset : Preset) (fork : Fork) (blocks : Array ByteArray)
     (optimisticRoots : List Root) : Result (OptimisticStore preset fork) := do
   let decoded ← blocks.toList.mapM fun bytes => do
     let block ← decodeInput (BeaconBlock preset fork) bytes
-    let root ← (SszType.hashTreeRoot block).mapError fun e => (0, s!"block rejected: {reprStr e}")
+    let root ← toResult none ((SszType.hashTreeRoot block).mapError fun e =>
+      UnreadArgument.mk s!"block rejected: {reprStr e}")
     return (root, block)
   return {
     optimisticRoots := optimisticRoots
@@ -80,7 +77,7 @@ def isOptimisticCandidateBlockExport (name fork : ByteArray) (blocks : Array Byt
   let (preset, fork) ← optimisticPresetAndFork name fork
   let store ← optimisticStoreOf preset fork blocks []
   let block ← decodeInput (BeaconBlock preset fork) block
-  runOptimistic (store.isOptimisticCandidateBlock currentSlot block safeSlots)
+  toResult "optimistic sync" (store.isOptimisticCandidateBlock currentSlot block safeSlots)
 
 /-- From Bellatrix: the root of the latest block of a chain that is not optimistic.
 
@@ -91,7 +88,7 @@ def latestVerifiedAncestorOf
   let (preset, fork) ← optimisticPresetAndFork name.toUTF8 fork.toUTF8
   let status ← payloadStatusOf code.toUInt64
   let store ← optimisticStoreOf preset fork blocks optimisticRoots
-  runOptimistic (store.latestVerifiedAncestor ⟨root, status⟩)
+  toResult "optimistic sync" (store.latestVerifiedAncestor ⟨root, status⟩)
 
 /-- From Bellatrix: the root of the latest block of a chain that is not optimistic.
 
@@ -111,7 +108,7 @@ def onValidPayloadOf (args : String × String × Array ByteArray × List Root ×
   let (name, fork, blocks, optimisticRoots, root) := args
   let (preset, fork) ← optimisticPresetAndFork name.toUTF8 fork.toUTF8
   let store ← optimisticStoreOf preset fork blocks optimisticRoots
-  return (← runOptimistic (store.onValidPayload root)).optimisticRoots
+  return (← toResult "optimistic sync" (store.onValidPayload root)).optimisticRoots
 
 /-- From Bellatrix: the optimistic roots after the payload of a block is found valid, as a list.
 
@@ -130,7 +127,7 @@ def onInvalidatedPayloadOf (args : String × String × Array ByteArray × List R
   let (name, fork, blocks, optimisticRoots, first) := args
   let (preset, fork) ← optimisticPresetAndFork name.toUTF8 fork.toUTF8
   let store ← optimisticStoreOf preset fork blocks optimisticRoots
-  return (← runOptimistic (store.onInvalidatedPayload first)).optimisticRoots
+  return (← toResult "optimistic sync" (store.onInvalidatedPayload first)).optimisticRoots
 
 /-- From Bellatrix: the optimistic roots after a block is found the first invalid one, as a list.
 
@@ -163,18 +160,18 @@ def isOptimisticNodeOf (args : String × String × ByteArray × ByteArray × Lis
   let (store, outcomes) ← replayForkChoice config checks anchorState anchorBlock steps
   -- Only blocks that the store accepted count, so a rejected block never looks dropped.
   let blocks ← (steps.zip outcomes).filterMapM fun
-    | (.block input, .ok _) => do
+    | (.block input, .ok _ :: _) => do
       let signed ← decodeInput (SignedBeaconBlock preset fork) input.block
-      let root ← (SszType.hashTreeRoot signed.message).mapError fun e =>
-        (0, s!"block rejected: {reprStr e}")
+      let root ← toResult none ((SszType.hashTreeRoot signed.message).mapError fun e =>
+        UnreadArgument.mk s!"block rejected: {reprStr e}")
       return some (root, signed.message)
     | _ => pure none
-  let anchorRoot ← (SszType.hashTreeRoot anchorBlock).mapError fun e =>
-    (0, s!"block rejected: {reprStr e}")
+  let anchorRoot ← toResult none ((SszType.hashTreeRoot anchorBlock).mapError fun e =>
+    UnreadArgument.mk s!"block rejected: {reprStr e}")
   let optimistic : OptimisticStore preset fork :=
     { optimisticRoots := roots, head := ⟨head, status⟩,
       blocks := Std.TreeMap.ofList ((anchorRoot, anchorBlock) :: blocks) }
-  runOptimistic (isOptimisticNode config optimistic store)
+  toResult "optimistic sync" (isOptimisticNode config optimistic store)
 
 /-- From Bellatrix: whether a node is optimistic, after a run of fork choice steps.
 
@@ -214,7 +211,7 @@ def inclusionListSatisfactionOf (args : String × String × ByteArray × ByteArr
   let (preset, fork) ← optimisticPresetAndFork name.toUTF8 fork.toUTF8
   if heze : .hegota ≤ fork then
     unless status ≤ PAYLOAD_STATUS_NOT_VALIDATED do
-      throw (0, s!"unknown payload validation status {status}")
+      rejectArgument none s!"unknown payload validation status {status}"
     let config ← configWithValue name replacements
     let checks := if verify then SignatureChecks.bls else SignatureChecks.acceptAll
     let anchorState ← decodeInput (BeaconState preset fork) anchorState
@@ -231,10 +228,11 @@ def inclusionListSatisfactionOf (args : String × String × ByteArray × ByteArr
           optimisticRoots := if status = PAYLOAD_STATUS_NOT_VALIDATED then kept else []
           head := { root := Vector.replicate 32 0 }
           blocks := store.blocks }
-        let (_, store) ← runOptimistic (optimistic.onValidatedPayload store heze root satisfied)
+        let (_, store) ← toResult "optimistic sync"
+          (optimistic.onValidatedPayload store heze root satisfied)
         pure store
     return roots.map ((store.payloadInclusionListSatisfaction heze)[·]?)
-  else throw (0, s!"no inclusion lists at {fork.name}")
+  else rejectArgument none s!"no inclusion lists at {fork.name}"
 
 /-- From Heze: the answers on the inclusion lists after a run of fork choice steps.
 
@@ -250,8 +248,8 @@ def inclusionListSatisfactionExport (args : PyValue) : Result PyValue :=
 /-- Whether an optimistic validator may not sign under a domain type of 4 bytes. -/
 @[export eth_consensus_is_optimistic_restricted_domain]
 def isOptimisticRestrictedDomainExport (domainType : ByteArray) : Result Bool := do
-  if sized : domainType.size = 4 then
-    return isOptimisticRestrictedDomain ⟨domainType.data, sized⟩
-  else throw (0, s!"a domain type is 4 bytes, not {domainType.size}")
+  let domainType ← toResult none (Base.exactBytes 4 domainType fun size =>
+    UnreadArgument.mk s!"a domain type is 4 bytes, not {size}")
+  return isOptimisticRestrictedDomain domainType
 
 end EthLib.Consensus.Exports

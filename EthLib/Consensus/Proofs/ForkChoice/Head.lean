@@ -1,6 +1,7 @@
 module
 
 public import EthLib.Consensus.ForkChoice.Head
+import EthLib.Base.Proofs.FilterM
 public import EthLib.Base.Proofs.MapM
 public import EthLib.Consensus.Proofs.ForkChoice.Store
 
@@ -22,6 +23,10 @@ Such a node weighs nothing.
 Any other node weighs its votes in the justified state when the boost does not apply.
 
 The boost applies after a parent older than the previous slot, and after a parent that is not weak.
+
+After a weak parent it needs the timeliness of every block of the store.
+
+It then applies exactly when no other timely block of the parent's proposer is in the slot before.
 
 The head has no child among the viable nodes, so the walk stops only at a leaf.
 
@@ -178,6 +183,16 @@ theorem getSupportedNode_of_lt_slot {message : LatestMessage fork}
       .ok ⟨message.root, if message.payloadPresent gloas then .full else .empty⟩ := by
   simp [getSupportedNode, gloas, Store.block, found, later, bind, Except.bind, pure, Except.pure]
 
+/-- A vote for a held block supports a node. -/
+theorem getSupportedNode_exists {message : LatestMessage fork}
+    {block : BeaconBlock preset fork} (found : store.blocks[message.root]? = some block) :
+    ∃ node, store.getSupportedNode message = .ok node := by
+  by_cases gloas : .glamsterdam ≤ fork
+  · by_cases lt : block.slot < message.slot gloas
+    · exact ⟨_, getSupportedNode_of_lt_slot gloas found lt⟩
+    · exact ⟨_, getSupportedNode_of_same_slot gloas found (UInt64.not_lt.mp lt)⟩
+  · exact ⟨_, getSupportedNode_of_lt (Nat.lt_of_not_le gloas)⟩
+
 /-- From Gloas a vote for a block the store does not hold supports no node. -/
 theorem getSupportedNode_of_unknown {message : LatestMessage fork} (gloas : .glamsterdam ≤ fork)
     (missing : store.blocks[message.root]? = none) :
@@ -262,6 +277,18 @@ theorem mem_getNodeChildren_of_gloas {node child : ForkChoiceNode}
     rw [empty] at built
     cases built
 
+/-- The children of a node can be computed when the store holds its block. -/
+theorem getNodeChildren_ok_of_known {root : Root} {status : PayloadStatus}
+    {block : BeaconBlock preset fork} (found : store.blocks[root]? = some block) :
+    ∃ children, store.getNodeChildren ⟨root, status⟩ = .ok children := by
+  unfold Store.getNodeChildren
+  split
+  · exact ⟨_, rfl⟩
+  · dsimp only
+    split
+    · simp [Store.block, found, bind, Except.bind, pure, Except.pure]
+    · exact ⟨_, rfl⟩
+
 /-- The tally of the justified state, when the store holds that state. -/
 theorem justifiedTally_of_state {state : BeaconState preset fork}
     (justifiedState : store.checkpointState store.justifiedCheckpoint = .ok state) :
@@ -305,11 +332,195 @@ private theorem nextSlot_ok {slot : Slot} (fits : slot.toNat + 1 < 2 ^ 64) :
   rw [mapError_ok_iff, Uint64.addChecked_ok_iff, nextSlot_toNat fits]
   exact ⟨fits, rfl⟩
 
+/-- A successful filter over the entries of a map, when its test decides a property of each entry.
+
+Every entry is then known, and the filter keeps nothing exactly when none is chosen. -/
+private theorem filterM_entries_ok_iff {β ε : Type} {test : Root × β → Except ε Bool}
+    {entries : Std.TreeMap Root β} {known chosen : Root → β → Prop} {out : List (Root × β)}
+    (computed : entries.toList.filterM test = .ok out)
+    (element : ∀ root value passes, test (root, value) = .ok passes ↔
+      known root value ∧ (passes = true ↔ chosen root value)) :
+    (∀ root value, entries[root]? = some value → known root value) ∧
+      (out.isEmpty = true ↔
+        ∀ root value, entries[root]? = some value → ¬ chosen root value) := by
+  have tested := fun root value (entry : entries[root]? = some value) =>
+    filterM_ok_of_mem computed (root, value)
+      (Std.TreeMap.mem_toList_iff_getElem?_eq_some.mpr entry)
+  refine ⟨fun root value entry => ?_, ?_⟩
+  · obtain ⟨passes, passesOk⟩ := tested root value entry
+    exact ((element root value passes).mp passesOk).1
+  · rw [List.isEmpty_iff, eq_nil_iff_of_filterM_ok computed]
+    constructor
+    · intro none root value entry picked
+      obtain ⟨passes, passesOk⟩ := tested root value entry
+      have verdict := ((element root value passes).mp passesOk).2
+      exact none (root, value) (Std.TreeMap.mem_toList_iff_getElem?_eq_some.mpr entry)
+        (verdict.mpr picked ▸ passesOk)
+    · rintro none ⟨root, value⟩ member passesOk
+      exact none root value (Std.TreeMap.mem_toList_iff_getElem?_eq_some.mp member)
+        (((element root value true).mp passesOk).2.mp rfl)
+
+/-- A filter over the entries of a map fails only when some entry is not known. -/
+private theorem not_known_of_filterM_error {β ε : Type} {test : Root × β → Except ε Bool}
+    {entries : Std.TreeMap Root β} {known chosen : Root → β → Prop} {e : ε}
+    (computed : entries.toList.filterM test = .error e)
+    (element : ∀ root value passes, test (root, value) = .ok passes ↔
+      known root value ∧ (passes = true ↔ chosen root value)) :
+    ¬ ∀ root value, entries[root]? = some value → known root value := by
+  intro all
+  classical
+  obtain ⟨out, ok⟩ := filterM_exists_ok (test := test) (list := entries.toList)
+    fun ⟨root, value⟩ member => by
+      have entry := Std.TreeMap.mem_toList_iff_getElem?_eq_some.mp member
+      exact ⟨decide (chosen root value),
+        (element root value _).mpr ⟨all root value entry, by simp⟩⟩
+  rw [computed] at ok
+  cases ok
+
+/-- A filter over the entries of a map, then whether it kept nothing.
+
+It succeeds exactly when every entry is known, and it keeps nothing exactly when none is chosen. -/
+private theorem filterM_entries_isEmpty_iff {β ε : Type} {test : Root × β → Except ε Bool}
+    {entries : Std.TreeMap Root β} (known chosen : Root → β → Prop) {empty : Bool}
+    (element : ∀ root value passes, test (root, value) = .ok passes ↔
+      known root value ∧ (passes = true ↔ chosen root value)) :
+    Except.bind (entries.toList.filterM test) (fun out => Except.ok out.isEmpty) = .ok empty ↔
+      (∀ root value, entries[root]? = some value → known root value) ∧
+        (empty = true ↔ ∀ root value, entries[root]? = some value → ¬ chosen root value) := by
+  cases computed : entries.toList.filterM test with
+  | error e =>
+    simp only [Except.bind, reduceCtorEq, false_iff, not_and]
+    exact fun all => absurd all (not_known_of_filterM_error computed element)
+  | ok out =>
+    obtain ⟨all, none⟩ := filterM_entries_ok_iff computed element
+    simp only [Except.bind, Except.ok.injEq]
+    rw [← none]
+    exact ⟨fun same => ⟨all, by rw [same]⟩, fun ⟨_, same⟩ => Bool.eq_iff_iff.mpr same.symm⟩
+
+/-- Whether the boost applies, from Gloas, on the blocks of the store and their timeliness.
+
+Without a boosted block it does not apply.
+
+Otherwise the store must hold the boosted block and a parent that is not in the last slot.
+
+A parent older than the slot before the boosted block lets the boost apply.
+
+So does a parent of that slot or later that is not weak.
+
+After a weak parent, every block of the store must have its timeliness for the payload committee.
+
+A timely block of the parent's proposer must not be in the last slot either.
+
+The boost then applies exactly when each such block of the slot before is the parent itself. -/
+theorem shouldApplyProposerBoost_eq_ok_iff {apply : Bool} (gloas : .glamsterdam ≤ fork) :
+    store.shouldApplyProposerBoost config gloas = .ok apply ↔
+      store.proposerBoostRoot = Vector.replicate 32 0 ∧ apply = false ∨
+      store.proposerBoostRoot ≠ Vector.replicate 32 0 ∧ ∃ block parent,
+        store.blocks[store.proposerBoostRoot]? = some block ∧
+        store.blocks[block.parentRoot]? = some parent ∧
+        parent.slot.toNat + 1 < 2 ^ 64 ∧
+        (parent.slot.toNat + 1 < block.slot.toNat ∧ apply = true ∨
+          block.slot.toNat ≤ parent.slot.toNat + 1 ∧
+            (store.isHeadWeak config block.parentRoot = .ok false ∧ apply = true ∨
+              store.isHeadWeak config block.parentRoot = .ok true ∧
+                (∀ (root : Root) (other : BeaconBlock preset fork),
+                  store.blocks[root]? = some other →
+                  ∃ timely, (store.ptcTimeliness gloas)[root]? = some timely ∧
+                    (timely = true → other.proposerIndex = parent.proposerIndex →
+                      other.slot.toNat + 1 < 2 ^ 64)) ∧
+                (apply = true ↔ ∀ (root : Root) (other : BeaconBlock preset fork),
+                  store.blocks[root]? = some other →
+                  (store.ptcTimeliness gloas)[root]? = some true →
+                  other.proposerIndex = parent.proposerIndex →
+                  other.slot.toNat + 1 = block.slot.toNat → root = block.parentRoot))) := by
+  by_cases zero : store.proposerBoostRoot = Vector.replicate 32 0
+  · simp [shouldApplyProposerBoost, zero, pure, Except.pure, eq_comm]
+  cases foundBlock : store.blocks[store.proposerBoostRoot]? with
+  | none =>
+    simp [shouldApplyProposerBoost, zero, Store.block, foundBlock, bind, Except.bind, throw,
+      throwThe, MonadExceptOf.throw]
+  | some block =>
+  cases foundParent : store.blocks[block.parentRoot]? with
+  | none =>
+    simp [shouldApplyProposerBoost, zero, Store.block, foundBlock, foundParent, bind, Except.bind,
+      throw, throwThe, MonadExceptOf.throw, pure, Except.pure]
+  | some parent =>
+  by_cases overflow : 2 ^ 64 ≤ parent.slot.toNat + 1
+  · have fits : ¬ parent.slot.toNat + 1 < 2 ^ 64 := by omega
+    cases next : (Uint64.addChecked parent.slot 1) with
+    | ok value => exact absurd (Uint64.addChecked_ok_iff.mp next).1 fits
+    | error e =>
+      simp [shouldApplyProposerBoost, zero, Store.block, foundBlock, foundParent, next, fits,
+        bind, Except.bind, pure, Except.pure, Except.mapError]
+  have fits : parent.slot.toNat + 1 < 2 ^ 64 := by omega
+  by_cases old : parent.slot.toNat + 1 < block.slot.toNat
+  · have older : parent.slot + 1 < block.slot := by
+      rw [UInt64.lt_iff_toNat_lt, nextSlot_toNat fits]
+      exact old
+    have notRecent : ¬ block.slot.toNat ≤ parent.slot.toNat + 1 := by omega
+    simp [shouldApplyProposerBoost, zero, Store.block, foundBlock, foundParent, nextSlot_ok fits,
+      older, old, notRecent, fits, bind, Except.bind, pure, Except.pure, eq_comm]
+  have notOlder : ¬ parent.slot + 1 < block.slot := by
+    rw [UInt64.lt_iff_toNat_lt, nextSlot_toNat fits]
+    exact old
+  have recent : block.slot.toNat ≤ parent.slot.toNat + 1 := by omega
+  cases weakOk : store.isHeadWeak config block.parentRoot with
+  | error e =>
+    simp [shouldApplyProposerBoost, zero, Store.block, foundBlock, foundParent, nextSlot_ok fits,
+      notOlder, old, fits, weakOk, bind, Except.bind, pure, Except.pure]
+  | ok weak =>
+  cases weak
+  · simp [shouldApplyProposerBoost, zero, Store.block, foundBlock, foundParent, nextSlot_ok fits,
+      notOlder, old, fits, weakOk, recent, bind, Except.bind, pure, Except.pure, eq_comm]
+  simp only [shouldApplyProposerBoost, zero, Store.block, foundBlock, foundParent, nextSlot_ok fits,
+    notOlder, weakOk, bind, Except.bind, pure, Except.pure, ↓reduceIte, Bool.not_true,
+    Bool.false_eq_true]
+  simp only [ne_eq, zero, not_false_eq_true, true_and, false_and, false_or, Option.some.injEq]
+  refine filterM_entries_isEmpty_iff
+    (fun root (other : BeaconBlock preset fork) => ∃ timely,
+      (store.ptcTimeliness gloas)[root]? = some timely ∧
+        (timely = true → other.proposerIndex = parent.proposerIndex →
+          other.slot.toNat + 1 < 2 ^ 64))
+    (fun root (other : BeaconBlock preset fork) =>
+      (store.ptcTimeliness gloas)[root]? = some true ∧
+        other.proposerIndex = parent.proposerIndex ∧ other.slot.toNat + 1 = block.slot.toNat ∧
+          root ≠ block.parentRoot) ?_ |>.trans ?_
+  · intro root other passes
+    simp only [ptcTimely]
+    cases timeliness : (store.ptcTimeliness gloas)[root]? with
+    | none => simp [throw, throwThe, MonadExceptOf.throw]
+    | some timely =>
+      by_cases same : other.proposerIndex = parent.proposerIndex
+      · cases timely
+        · simp [pure, Except.pure, same]
+        by_cases fitsOther : other.slot.toNat + 1 < 2 ^ 64
+        · have slotEq :
+              other.slot + 1 = block.slot ↔ other.slot.toNat + 1 = block.slot.toNat := by
+            rw [← UInt64.toNat_inj, nextSlot_toNat fitsOther]
+          cases passes <;>
+            simp [pure, Except.pure, same, fitsOther, nextSlot_ok fitsOther, slotEq]
+        · cases next : Uint64.addChecked other.slot 1 with
+          | ok value => exact absurd (Uint64.addChecked_ok_iff.mp next).1 fitsOther
+          | error e => simp [pure, Except.pure, same, fitsOther, Except.mapError]
+      · cases timely <;> simp [pure, Except.pure, same]
+  · constructor
+    · rintro ⟨all, verdict⟩
+      simp only [not_and, Decidable.not_not] at verdict
+      exact ⟨block, parent, rfl, foundParent, fits, .inr ⟨recent, .inr ⟨weakOk, all, verdict⟩⟩⟩
+    · rintro ⟨_, other, rfl, otherFound, -, branch⟩
+      rw [foundParent, Option.some.injEq] at otherFound
+      subst otherFound
+      rcases branch with ⟨older, -⟩ | ⟨-, ⟨notWeak, -⟩ | ⟨-, all, verdict⟩⟩
+      · exact absurd older old
+      · exact absurd (weakOk.symm.trans notWeak) (by simp)
+      · simp only [not_and, Decidable.not_not]
+        exact ⟨all, verdict⟩
+
 /-- Without a boosted block the boost does not apply. -/
 theorem shouldApplyProposerBoost_of_zero (gloas : .glamsterdam ≤ fork)
     (noBoost : store.proposerBoostRoot = Vector.replicate 32 0) :
-    store.shouldApplyProposerBoost config gloas = .ok false := by
-  simp [shouldApplyProposerBoost, noBoost, pure, Except.pure]
+    store.shouldApplyProposerBoost config gloas = .ok false :=
+  (shouldApplyProposerBoost_eq_ok_iff gloas).mpr (.inl ⟨noBoost, rfl⟩)
 
 /-- The boost applies when the parent is older than the slot before the boosted block. -/
 theorem shouldApplyProposerBoost_of_old_parent {block parent : BeaconBlock preset fork}
@@ -317,13 +528,9 @@ theorem shouldApplyProposerBoost_of_old_parent {block parent : BeaconBlock prese
     (found : store.blocks[store.proposerBoostRoot]? = some block)
     (parentFound : store.blocks[block.parentRoot]? = some parent)
     (old : parent.slot.toNat + 1 < block.slot.toNat) :
-    store.shouldApplyProposerBoost config gloas = .ok true := by
-  have fits : parent.slot.toNat + 1 < 2 ^ 64 := Nat.lt_trans old block.slot.toNat_lt
-  have older : parent.slot + 1 < block.slot := by
-    rw [UInt64.lt_iff_toNat_lt, nextSlot_toNat fits]
-    exact old
-  simp [shouldApplyProposerBoost, boosted, Store.block, found, parentFound, nextSlot_ok fits,
-    older, bind, Except.bind, pure, Except.pure]
+    store.shouldApplyProposerBoost config gloas = .ok true :=
+  (shouldApplyProposerBoost_eq_ok_iff gloas).mpr <| .inr ⟨boosted, block, parent, found,
+    parentFound, Nat.lt_trans old block.slot.toNat_lt, .inl ⟨old, rfl⟩⟩
 
 /-- The boost applies when the parent of the boosted block is not weak.
 
@@ -334,12 +541,9 @@ theorem shouldApplyProposerBoost_of_not_weak {block parent : BeaconBlock preset 
     (parentFound : store.blocks[block.parentRoot]? = some parent)
     (recent : block.slot.toNat ≤ parent.slot.toNat + 1) (fits : parent.slot.toNat + 1 < 2 ^ 64)
     (notWeak : store.isHeadWeak config block.parentRoot = .ok false) :
-    store.shouldApplyProposerBoost config gloas = .ok true := by
-  have notOlder : ¬ parent.slot + 1 < block.slot := by
-    rw [UInt64.lt_iff_toNat_lt, nextSlot_toNat fits]
-    omega
-  simp [shouldApplyProposerBoost, boosted, Store.block, found, parentFound, nextSlot_ok fits,
-    notOlder, notWeak, bind, Except.bind, pure, Except.pure]
+    store.shouldApplyProposerBoost config gloas = .ok true :=
+  (shouldApplyProposerBoost_eq_ok_iff gloas).mpr <| .inr ⟨boosted, block, parent, found,
+    parentFound, fits, .inr ⟨recent, .inl ⟨notWeak, rfl⟩⟩⟩
 
 /-- A weighed node is the node, its weight and its tiebreaker. -/
 theorem weighNode_ok_iff {node : ForkChoiceNode} {weighed : WeightedNode} :
@@ -520,14 +724,17 @@ theorem getNodeChildren_empty_ok {node : ForkChoiceNode} {nodes : List ForkChoic
     exact ⟨children, childrenOk⟩
   · simp [throw, throwThe, MonadExceptOf.throw] at below
 
-/-- Before Gloas, the walk from a known pending node ends at a node that descends from it.
-
-The walk from the end node back to the slot of the start reaches the start. -/
-theorem getAncestor_getHeadFrom (before : fork < .glamsterdam) {nodes : List ForkChoiceNode}
+/-- A successful walk retains its start and successful child reads along the returned chain. -/
+private theorem getHeadFrom_chain_reads (before : fork < .glamsterdam)
+    {nodes : List ForkChoiceNode}
     {start head : ForkChoiceNode} (walk : store.getHeadFrom config tally nodes start = .ok head)
     (pending : start.payloadStatus = .pending) {startBlock : BeaconBlock preset fork}
     (found : store.blocks[start.root]? = some startBlock) :
-    store.getAncestor head startBlock.slot = .ok start := by
+    store.getAncestor head startBlock.slot = .ok start ∧
+      ∀ {target : Root} {targetSlot : Slot},
+        startBlock.slot ≤ targetSlot →
+        store.getAncestor head targetSlot = .ok ⟨target, .pending⟩ →
+        ∃ result, store.heaviestChild config tally nodes ⟨target, .pending⟩ = .ok result := by
   induction start using getHeadFrom.induct store generalizing startBlock with
   | _ start ih =>
     rw [getHeadFrom] at walk
@@ -538,7 +745,10 @@ theorem getAncestor_getHeadFrom (before : fork < .glamsterdam) {nodes : List For
       | none =>
         simp [chosen, bind, Except.bind, pure, Except.pure] at walk
         subst walk
-        exact getAncestor_of_le found (UInt64.le_refl _)
+        refine ⟨getAncestor_of_le found (UInt64.le_refl _), ?_⟩
+        intro target targetSlot below path
+        rw [getAncestor_of_le found below] at path
+        exact ⟨none, (Except.ok.inj path) ▸ chosen⟩
       | some child =>
         simp only [chosen, bind, Except.bind] at walk
         split at walk
@@ -558,12 +768,128 @@ theorem getAncestor_getHeadFrom (before : fork < .glamsterdam) {nodes : List For
             have := startBlock.slot.toNat_lt
             rw [UInt64.lt_iff_toNat_lt]
             omega
-          have upper := ih child lower walk childPending childFound
-          rw [getAncestor_trans (UInt64.le_of_lt higher) upper,
-            getAncestor_step childFound (UInt64.not_le.mpr higher) (parent ▸ found) higher,
-            parentPayloadStatus_of_lt before, parent, ← pending,
-            getAncestor_of_le found (UInt64.le_refl _)]
+          obtain ⟨upper, reads⟩ := ih child lower walk childPending childFound
+          constructor
+          · rw [getAncestor_trans (UInt64.le_of_lt higher) upper,
+              getAncestor_parent_of_slot_lt childFound (parent ▸ found) higher,
+              parentPayloadStatus_of_lt before, parent, ← pending]
+          · intro target targetSlot below path
+            by_cases childBelow : childBlock.slot ≤ targetSlot
+            · exact reads childBelow path
+            · rw [getAncestor_trans (UInt64.le_of_lt (UInt64.not_le.mp childBelow)) upper,
+                getAncestor_step childFound childBelow (parent ▸ found) higher,
+                parentPayloadStatus_of_lt before, parent] at path
+              have startNode : (⟨start.root, .pending⟩ : ForkChoiceNode) = start := by
+                cases start
+                simp_all
+              rw [startNode, getAncestor_of_le found below] at path
+              exact ⟨some child, (Except.ok.inj path) ▸ chosen⟩
         · cases walk
+
+/-- Before Gloas, the walk from a known pending node ends at a node that descends from it.
+
+The walk from the end node back to the slot of the start reaches the start. -/
+theorem getAncestor_getHeadFrom (before : fork < .glamsterdam) {nodes : List ForkChoiceNode}
+    {start head : ForkChoiceNode} (walk : store.getHeadFrom config tally nodes start = .ok head)
+    (pending : start.payloadStatus = .pending) {startBlock : BeaconBlock preset fork}
+    (found : store.blocks[start.root]? = some startBlock) :
+    store.getAncestor head startBlock.slot = .ok start :=
+  (getHeadFrom_chain_reads before walk pending found).1
+
+/-- A successful head walk reads children at each held ancestor above its start. -/
+theorem heaviestChild_ok_of_getHeadFrom (before : fork < .glamsterdam)
+    {nodes : List ForkChoiceNode} {start head : ForkChoiceNode}
+    (walk : store.getHeadFrom config tally nodes start = .ok head)
+    (pending : start.payloadStatus = .pending) {startBlock : BeaconBlock preset fork}
+    (found : store.blocks[start.root]? = some startBlock)
+    {targetSlot : Slot} (below : startBlock.slot ≤ targetSlot) {target : Root}
+    (path : store.getAncestor head targetSlot = .ok ⟨target, .pending⟩) :
+    ∃ result, store.heaviestChild config tally nodes ⟨target, .pending⟩ = .ok result :=
+  (getHeadFrom_chain_reads before walk pending found).2 below path
+
+/-- A viable child of a visited parent has a successful justified-state score read. -/
+theorem getAttestationScore_ok_of_getHead (before : fork < .glamsterdam)
+    {state : BeaconState preset fork} {nodes : List ForkChoiceNode} {head : ForkChoiceNode}
+    {root : Root} {block parent justified : BeaconBlock preset fork}
+    (known : store.blocks[root]? = some block)
+    (parentKnown : store.blocks[block.parentRoot]? = some parent)
+    (justifiedKnown : store.blocks[store.justifiedCheckpoint.root]? = some justified)
+    (below : justified.slot ≤ parent.slot)
+    (stateOk : store.checkpointState store.justifiedCheckpoint = .ok state)
+    (tree : store.getFilteredNodeTree config = .ok nodes)
+    (viable : (⟨root, .pending⟩ : ForkChoiceNode) ∈ nodes)
+    (parentAbove : store.isAncestor head ⟨block.parentRoot, .pending⟩ = .ok true)
+    (headOk : store.getHead config = .ok head) :
+    ∃ score, store.getAttestationScore ⟨root, .pending⟩ state = .ok score := by
+  have notGloas : ¬ .glamsterdam ≤ fork := Nat.not_le_of_lt before
+  simp only [getHead, notGloas, false_and, ↓reduceIte, tree, bind, Except.bind] at headOk
+  have parentPath : store.getAncestor head parent.slot = .ok ⟨block.parentRoot, .pending⟩ := by
+    simp only [isAncestor, block_ok_iff.mpr parentKnown, notGloas, ↓reduceIte,
+      bind, Except.bind] at parentAbove
+    cases walk : store.getAncestor head parent.slot with
+    | error error => simp [walk] at parentAbove
+    | ok found =>
+      simp only [walk, pure, Except.pure, Except.ok.injEq, beq_iff_eq] at parentAbove
+      exact congrArg Except.ok parentAbove
+  obtain ⟨result, read⟩ := heaviestChild_ok_of_getHeadFrom before headOk rfl justifiedKnown below
+    parentPath
+  obtain ⟨children, weighted, childrenOk, weightedOk, _⟩ := heaviestChild_eq read
+  have member : (⟨root, .pending⟩ : ForkChoiceNode) ∈ children.filter (· ∈ nodes) := by
+    apply List.mem_filter.mpr
+    exact ⟨(mem_getNodeChildren before childrenOk).mpr ⟨rfl, block, known, rfl⟩,
+      by simpa using viable⟩
+  obtain ⟨weighed, _, weightOk⟩ := exists_mem_of_mapM_ok weightedOk member
+  have weightOk := (weighNode_ok_iff.mp weightOk).2.1
+  simp only [getWeight, notGloas, ↓reduceIte, justifiedTally_of_state stateOk,
+    bind, Except.bind, pure, Except.pure, Bool.false_eq_true] at weightOk
+  cases scoreOk : store.scoreFromTally (store.tallyVotes state) ⟨root, .pending⟩ with
+  | error error => simp [scoreOk] at weightOk
+  | ok score => exact ⟨score, scoreOk⟩
+
+/-- Before Gloas, a head with a viable node besides the justified block has read its state.
+
+It gives a receiver's justified state without assuming the read. -/
+theorem checkpointState_justified_of_getHead (before : fork < .glamsterdam)
+    {nodes : List ForkChoiceNode} {head node : ForkChoiceNode}
+    (tree : store.getFilteredNodeTree config = .ok nodes)
+    (found : store.getHead config = .ok head) (member : node ∈ nodes)
+    (other : node ≠ ⟨store.justifiedCheckpoint.root, .pending⟩) :
+    ∃ state, store.checkpointState store.justifiedCheckpoint = .ok state := by
+  have notGloas : ¬ .glamsterdam ≤ fork := Nat.not_le_of_lt before
+  have walk : store.filterNodeTree config ⟨store.justifiedCheckpoint.root, .pending⟩ =
+      .ok nodes := tree
+  simp only [getHead, notGloas, false_and, ↓reduceIte, tree, bind, Except.bind] at found
+  -- The first step of the walk weighs the children of the justified block among the nodes.
+  rw [getHeadFrom] at found
+  obtain ⟨result, chosen⟩ : ∃ result, store.heaviestChild config store.justifiedTally nodes
+      ⟨store.justifiedCheckpoint.root, .pending⟩ = .ok result := by
+    cases step : store.heaviestChild config store.justifiedTally nodes
+        ⟨store.justifiedCheckpoint.root, .pending⟩ with
+    | error e => simp [step, bind, Except.bind] at found
+    | ok result => exact ⟨result, rfl⟩
+  obtain ⟨children, weighted, childrenOk, weightedOk, -⟩ := heaviestChild_eq chosen
+  -- Without children, the viable nodes would be at most the justified block itself.
+  have nonempty : children ≠ [] := by
+    rintro rfl
+    rw [filterNodeTree, bind_ok_iff] at walk
+    obtain ⟨empty, same, walk⟩ := walk
+    rw [childrenOk, Except.ok.injEq] at same
+    subst same
+    simp only [List.isEmpty_nil, ↓reduceIte, bind_ok_iff, pure, Except.pure,
+      Except.ok.injEq] at walk
+    obtain ⟨isViable, -, rfl⟩ := walk
+    cases isViable <;> simp_all
+  obtain ⟨child, childMem, childIn⟩ := filterNodeTree_child walk _
+    (filterNodeTree_self walk (List.ne_nil_of_mem member)) childrenOk nonempty
+  obtain ⟨weighed, _, weighedOk⟩ := exists_mem_of_mapM_ok weightedOk
+    (List.mem_filter.mpr ⟨childMem, by simpa using childIn⟩)
+  -- Weighing the child forces the tally of the justified state.
+  have weightOk := (weighNode_ok_iff.mp weighedOk).2.1
+  cases stateOk : store.checkpointState store.justifiedCheckpoint with
+  | ok state => exact ⟨state, rfl⟩
+  | error e =>
+    simp [getWeight, notGloas, justifiedTally, stateOk, bind, Except.bind, pure, Except.pure]
+      at weightOk
 
 /-- A node whose viable subtree can be computed is a known block.
 
@@ -603,8 +929,7 @@ theorem isAncestor_getHead_of_lt_gloas (before : fork < .glamsterdam) {head : Fo
     obtain ⟨justifiedBlock, justifiedFound⟩ := filterNodeTree_known tree
     simp only [tree, bind, Except.bind, later, false_and, ↓reduceIte] at found
     have walked := getAncestor_getHeadFrom before found rfl justifiedFound
-    simp [isAncestor, block_ok_iff.mpr justifiedFound, walked, later, bind, Except.bind, pure,
-      Except.pure]
+    exact isAncestor_of_getAncestor walked
 
 /-- From Gloas, let the walk from a known node end at some node.
 
@@ -666,9 +991,8 @@ theorem getAncestor_getHeadFrom_of_gloas (gloas : .glamsterdam ≤ fork)
             obtain ⟨ancestor, upper, rootEq, -⟩ := ih source lower walk childFound
             have step : store.getAncestor head startBlock.slot = .ok start := by
               rw [getAncestor_trans (UInt64.le_of_lt higher) upper,
-                getAncestor_step (rootEq ▸ childFound) (UInt64.not_le.mpr higher)
-                  (parent ▸ found) higher,
-                built, parent, getAncestor_of_le found (UInt64.le_refl _)]
+                getAncestor_parent_of_slot_lt (rootEq ▸ childFound) (parent ▸ found) higher,
+                built, parent]
             exact ⟨start, step, rfl, .inl rfl⟩
         · cases walk
 
@@ -759,6 +1083,69 @@ theorem getHead_ne_pending {head : ForkChoiceNode} (gloas : .glamsterdam ≤ for
       obtain ⟨child, childMem, childIn⟩ :=
         filterNodeTree_child tree head headIn childrenOk someChild
       exact leaf child childMem childIn
+
+/-- From Gloas, a walk returns a full node only with its payload verified.
+
+The start must have its payload verified, if it is full. -/
+private theorem getHeadFrom_full_verified (gloas : .glamsterdam ≤ fork)
+    {nodes : List ForkChoiceNode} :
+    ∀ {start head : ForkChoiceNode},
+      (start.payloadStatus = .full → store.isPayloadVerified gloas start.root = true) →
+      store.getHeadFrom config tally nodes start = .ok head →
+      head.payloadStatus = .full → store.isPayloadVerified gloas head.root = true := by
+  intro start
+  induction start using Store.getHeadFrom.induct store with
+  | _ start ih =>
+  intro head startVerified walk full
+  rw [Store.getHeadFrom] at walk
+  cases found : store.heaviestChild config tally nodes start with
+  | error e => simp [found, bind, Except.bind] at walk
+  | ok result =>
+  cases result with
+  | none =>
+    simp [found, bind, Except.bind, pure, Except.pure] at walk
+    exact walk ▸ startVerified (walk ▸ full)
+  | some child =>
+  simp only [found, bind, Except.bind] at walk
+  split at walk
+  case isFalse => cases walk
+  refine ih child ‹_› (fun childFull => ?_) walk full
+  -- A full child is the full node of a pending start, which the store has only once verified.
+  obtain ⟨children, weighted, childrenOk, weightedOk, choice⟩ := Store.heaviestChild_eq found
+  obtain ⟨key, mem, -⟩ := chooseHeaviest_some choice
+  obtain ⟨source, member, pair⟩ := mapM_ok_mem weightedOk _ mem
+  obtain ⟨rfl, -⟩ := Store.weighNode_ok_iff.mp pair
+  have inChildren := (List.mem_filter.mp member).1
+  by_cases pending : start.payloadStatus = .pending
+  · rw [Store.getNodeChildren_of_pending gloas pending, Except.ok.injEq] at childrenOk
+    subst childrenOk
+    simp only [List.mem_cons] at inChildren
+    rcases inChildren with same | rest
+    · rw [same] at childFull
+      cases childFull
+    · split at rest
+      · rename_i verified
+        rw [List.mem_singleton.mp rest]
+        exact verified
+      · cases rest
+  · have := ((Store.mem_getNodeChildren_of_gloas gloas pending childrenOk).mp inChildren).1
+    rw [childFull] at this
+    cases this
+
+/-- From Gloas, a full head of a store is a node whose payload the store has verified. -/
+theorem isPayloadVerified_of_getHead (gloas : .glamsterdam ≤ fork) {head : ForkChoiceNode}
+    (found : store.getHead config = .ok head) (full : head.payloadStatus = .full) :
+    store.isPayloadVerified gloas head.root = true := by
+  unfold Store.getHead at found
+  cases tree : store.getFilteredNodeTree config with
+  | error e => simp [tree, bind, Except.bind] at found
+  | ok nodes =>
+  simp only [tree, bind, Except.bind] at found
+  split at found
+  · simp only [pure, Except.pure, Except.ok.injEq] at found
+    subst found
+    cases full
+  · exact getHeadFrom_full_verified gloas (fun pending => by cases pending) found full
 
 /-- From Gloas the empty and the full node of a block from the previous slot are a decision. -/
 theorem isPreviousSlotPayloadDecision_of_previous {root : Root} {status : PayloadStatus}

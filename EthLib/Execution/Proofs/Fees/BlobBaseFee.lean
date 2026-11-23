@@ -9,6 +9,7 @@ public import EthLib.Base.Proofs.Fork
 
 - The loop of `fake_exponential` stops before its bound.
 - The base fee per blob gas is monotone in the excess, and at least 1.
+- Under each mainnet schedule, it is below `2^256` exactly below a given excess.
 - At every fork, the excess rises by at most `GAS_PER_BLOB * (max - target)` per block.
 - Under every blob schedule, the excess grows with the blob gas of the parent.
 - A chain that sets no blob schedule of its own, as mainnet and Hoodi, has the forks' schedules.
@@ -259,6 +260,61 @@ theorem le_getBaseFeePerBlobGas (schedule : BlobSchedule) (excessBlobGas : Nat) 
   rw [← getBaseFeePerBlobGas_zero schedule]
   exact getBaseFeePerBlobGas_mono schedule (Nat.zero_le _)
 
+/-! ## The fee within 256 bits -/
+
+/-- An excess at which the fee first reaches a bound splits every excess in two.
+
+The fee is below the bound exactly below that excess, since it is monotone. -/
+theorem getBaseFeePerBlobGas_lt_iff_of_threshold {schedule : BlobSchedule}
+    {bound threshold : Nat} (below : getBaseFeePerBlobGas schedule (threshold - 1) < bound)
+    (reach : bound ≤ getBaseFeePerBlobGas schedule threshold) (excessBlobGas : Nat) :
+    getBaseFeePerBlobGas schedule excessBlobGas < bound ↔ excessBlobGas < threshold := by
+  constructor
+  · -- From the threshold up, the fee is at least its value there.
+    intro h
+    refine Nat.lt_of_not_le fun hle => ?_
+    have := getBaseFeePerBlobGas_mono schedule hle
+    omega
+  · -- Below the threshold, the fee is at most its value one step below.
+    intro h
+    exact Nat.lt_of_le_of_lt (getBaseFeePerBlobGas_mono schedule (by omega)) below
+
+/-- The least excess blob gas at which the mainnet fee of a fork reaches `2^256`, from Dencun.
+
+Each value is about 177.4457 times the update fraction, since `ln 2^256` is about 177.4457.
+
+From that excess on, BLOBBASEFEE aborts the execution, since no word holds the fee. -/
+def blobBaseFeeOverflowExcess (fork : Fork) : Since .dencun fork Nat := fun _ =>
+  if fork ≥ .bpo2 then 2073394371
+  else if fork ≥ .bpo1 then 1480995878
+  else if fork ≥ .pectra then 888597562
+  else 592398316
+
+/-- Under the mainnet schedule of a fork, the fee is below `2^256` exactly below its threshold.
+
+So the threshold is exact: the fee one excess below it fits in 256 bits, and its own does not. -/
+theorem getBaseFeePerBlobGas_blobSchedule_lt_iff {fork : Fork} (h : .dencun ≤ fork)
+    (excessBlobGas : Nat) :
+    getBaseFeePerBlobGas (blobSchedule fork h) excessBlobGas < 2 ^ 256 ↔
+      excessBlobGas < blobBaseFeeOverflowExcess fork h := by
+  -- The kernel evaluates the fee on both sides of each threshold, in about 500 steps of the loop.
+  have key (schedule : BlobSchedule) (threshold : Nat)
+      (below : getBaseFeePerBlobGas schedule (threshold - 1) < 2 ^ 256)
+      (reach : 2 ^ 256 ≤ getBaseFeePerBlobGas schedule threshold) :=
+    getBaseFeePerBlobGas_lt_iff_of_threshold below reach excessBlobGas
+  unfold blobSchedule blobBaseFeeOverflowExcess
+  by_cases h2 : fork ≥ .bpo2
+  · simp only [h2, ↓reduceIte]
+    exact key _ _ (by decide +kernel) (by decide +kernel)
+  by_cases h1 : fork ≥ .bpo1
+  · simp only [h2, h1, ↓reduceIte]
+    exact key _ _ (by decide +kernel) (by decide +kernel)
+  by_cases hp : fork ≥ .pectra
+  · simp only [h2, h1, hp, ↓reduceIte]
+    exact key _ _ (by decide +kernel) (by decide +kernel)
+  simp only [h2, h1, hp, ↓reduceIte]
+  exact key _ _ (by decide +kernel) (by decide +kernel)
+
 /-! ## The excess blob gas -/
 
 /-- The reserve condition of EIP-7918: a blob costs less than `BLOB_BASE_COST` execution gas. -/
@@ -272,7 +328,7 @@ variable {fork : Fork} {schedule : BlobSchedule}
 /-- Below the target, the excess is 0 at every fork, whatever the reserve price. -/
 theorem calcExcessBlobGas_of_lt {parentExcessBlobGas parentBlobGasUsed : Nat}
     (parentBaseFeePerGas : Nat)
-    (h : parentExcessBlobGas + parentBlobGasUsed < GAS_PER_BLOB * schedule.target) :
+    (h : parentExcessBlobGas + parentBlobGasUsed < GAS_PER_BLOB * schedule.target.toNat) :
     calcExcessBlobGas fork schedule parentExcessBlobGas parentBlobGasUsed parentBaseFeePerGas
       = 0 := by
   simp only [calcExcessBlobGas, h, ↓reduceIte]
@@ -285,7 +341,7 @@ That is the rule before Fusaka, and the rule from Fusaka at or above the reserve
 theorem calcExcessBlobGas_eq_sub {parentExcessBlobGas parentBlobGasUsed parentBaseFeePerGas : Nat}
     (h : ¬(fork ≥ .fusaka ∧ BelowReserve schedule parentExcessBlobGas parentBaseFeePerGas)) :
     calcExcessBlobGas fork schedule parentExcessBlobGas parentBlobGasUsed parentBaseFeePerGas
-      = parentExcessBlobGas + parentBlobGasUsed - GAS_PER_BLOB * schedule.target := by
+      = parentExcessBlobGas + parentBlobGasUsed - GAS_PER_BLOB * schedule.target.toNat := by
   unfold BelowReserve at h
   simp only [calcExcessBlobGas, h, ↓reduceIte]
   -- Below the target both sides are 0, and from the target up they are the same subtraction.
@@ -296,7 +352,7 @@ theorem calcExcessBlobGas_of_lt_fusaka
     {parentExcessBlobGas parentBlobGasUsed : Nat} (parentBaseFeePerGas : Nat)
     (hFork : fork < .fusaka) :
     calcExcessBlobGas fork schedule parentExcessBlobGas parentBlobGasUsed parentBaseFeePerGas
-      = parentExcessBlobGas + parentBlobGasUsed - GAS_PER_BLOB * schedule.target :=
+      = parentExcessBlobGas + parentBlobGasUsed - GAS_PER_BLOB * schedule.target.toNat :=
   calcExcessBlobGas_eq_sub fun h => absurd h.1 (Nat.not_le_of_lt hFork)
 
 /-- From Fusaka, below the reserve price and from the target, the excess grows more slowly.
@@ -304,18 +360,18 @@ theorem calcExcessBlobGas_of_lt_fusaka
 It grows by `parentBlobGasUsed * (max - target) / max`. -/
 theorem calcExcessBlobGas_of_below
     {parentExcessBlobGas parentBlobGasUsed parentBaseFeePerGas : Nat} (hFork : fork ≥ .fusaka)
-    (ht : GAS_PER_BLOB * schedule.target ≤ parentExcessBlobGas + parentBlobGasUsed)
+    (ht : GAS_PER_BLOB * schedule.target.toNat ≤ parentExcessBlobGas + parentBlobGasUsed)
     (h : BelowReserve schedule parentExcessBlobGas parentBaseFeePerGas) :
     calcExcessBlobGas fork schedule parentExcessBlobGas parentBlobGasUsed parentBaseFeePerGas
-      = parentExcessBlobGas
-        + parentBlobGasUsed * (schedule.max - schedule.target) / schedule.max := by
+      = parentExcessBlobGas +
+        parentBlobGasUsed * (schedule.max.toNat - schedule.target.toNat) / schedule.max.toNat := by
   unfold BelowReserve at h
   simp only [calcExcessBlobGas, Nat.not_lt.mpr ht, hFork, h, and_self, ↓reduceIte]
 
 /-- From Fusaka, below the reserve price and at the target or above, the excess does not fall. -/
 theorem le_calcExcessBlobGas_of_below
     {parentExcessBlobGas parentBlobGasUsed parentBaseFeePerGas : Nat} (hFork : fork ≥ .fusaka)
-    (ht : GAS_PER_BLOB * schedule.target ≤ parentExcessBlobGas + parentBlobGasUsed)
+    (ht : GAS_PER_BLOB * schedule.target.toNat ≤ parentExcessBlobGas + parentBlobGasUsed)
     (h : BelowReserve schedule parentExcessBlobGas parentBaseFeePerGas) :
     parentExcessBlobGas ≤
       calcExcessBlobGas fork schedule parentExcessBlobGas parentBlobGasUsed
@@ -325,23 +381,25 @@ theorem le_calcExcessBlobGas_of_below
 
 /-- A parent within its maximum raises the excess by at most `GAS_PER_BLOB * (max - target)`. -/
 theorem calcExcessBlobGas_le (parentExcessBlobGas parentBaseFeePerGas : Nat)
-    {parentBlobGasUsed : Nat} (h : parentBlobGasUsed ≤ GAS_PER_BLOB * schedule.max) :
+    {parentBlobGasUsed : Nat} (h : parentBlobGasUsed ≤ GAS_PER_BLOB * schedule.max.toNat) :
     calcExcessBlobGas fork schedule parentExcessBlobGas parentBlobGasUsed parentBaseFeePerGas
-      ≤ parentExcessBlobGas + GAS_PER_BLOB * (schedule.max - schedule.target) := by
+      ≤ parentExcessBlobGas + GAS_PER_BLOB * (schedule.max.toNat - schedule.target.toNat) := by
   by_cases hReserve :
       fork ≥ .fusaka ∧ BelowReserve schedule parentExcessBlobGas parentBaseFeePerGas
   · rcases Nat.lt_or_ge (parentExcessBlobGas + parentBlobGasUsed)
-        (GAS_PER_BLOB * schedule.target) with hlt | hge
+        (GAS_PER_BLOB * schedule.target.toNat) with hlt | hge
     · rw [calcExcessBlobGas_of_lt _ hlt]
       exact Nat.zero_le _
     · rw [calcExcessBlobGas_of_below hReserve.1 hge hReserve.2]
       apply Nat.add_le_add_left
       -- The parent's blob gas is at most `GAS_PER_BLOB * max`, and the `max` cancels.
-      calc parentBlobGasUsed * (schedule.max - schedule.target) / schedule.max
-          ≤ GAS_PER_BLOB * schedule.max * (schedule.max - schedule.target) / schedule.max :=
+      calc parentBlobGasUsed * (schedule.max.toNat - schedule.target.toNat) / schedule.max.toNat
+          ≤ GAS_PER_BLOB * schedule.max.toNat * (schedule.max.toNat - schedule.target.toNat) /
+              schedule.max.toNat :=
             Nat.div_le_div_right (Nat.mul_le_mul_right _ h)
-        _ = GAS_PER_BLOB * (schedule.max - schedule.target) := by
-            rw [Nat.mul_right_comm, Nat.mul_div_cancel _ schedule.max_pos]
+        _ = GAS_PER_BLOB * (schedule.max.toNat - schedule.target.toNat) := by
+            rw [Nat.mul_right_comm,
+              Nat.mul_div_cancel _ (UInt64.lt_iff_toNat_lt.mp schedule.max_pos)]
   · -- `GAS_PER_BLOB * (max - target)` is `GAS_PER_BLOB * max - GAS_PER_BLOB * target`.
     rw [calcExcessBlobGas_eq_sub hReserve, Nat.mul_sub]
     omega
@@ -357,7 +415,7 @@ theorem calcExcessBlobGas_mono_used (parentExcessBlobGas parentBaseFeePerGas : N
   by_cases hReserve :
       fork ≥ .fusaka ∧ BelowReserve schedule parentExcessBlobGas parentBaseFeePerGas
   · rcases Nat.lt_or_ge (parentExcessBlobGas + parentBlobGasUsed)
-        (GAS_PER_BLOB * schedule.target) with hlt | hge
+        (GAS_PER_BLOB * schedule.target.toNat) with hlt | hge
     · rw [calcExcessBlobGas_of_lt _ hlt]
       exact Nat.zero_le _
     · rw [calcExcessBlobGas_of_below hReserve.1 hge hReserve.2,

@@ -1,7 +1,6 @@
 module
 
 public import EthLib.Cryptography.Proofs.Bls.G1Order
-public import EthLib.Cryptography.Proofs.IdLoops
 
 /-!
 # Proofs: the Pippenger multi-scalar multiplication computes `Σ [s_i] P_i`
@@ -17,8 +16,6 @@ The proof has two layers.
 @[expose] public section
 
 namespace EthLib.Cryptography.Bls.G1
-
-open EthLib.Cryptography.IdLoops
 
 set_option maxRecDepth 4000
 
@@ -124,7 +121,7 @@ private theorem msmMaxBits_bound {n : Nat} (vals : Vector Nat n) :
   rw [msmMaxBits_eq_foldl]
   exact maxBitsF_bound vals (List.finRange n) 0 ⟨j, hj⟩ (List.mem_finRange _)
 
-/-- The base-`2⁸` digit decomposition that drives the window recomposition.
+/-- The base-`2^8` digit decomposition that drives the window recomposition.
 
 Shifting eight fewer bits is `256·(shift) + window`. -/
 private theorem shift_window (s a : Nat) :
@@ -386,7 +383,7 @@ private theorem foldl_msmWindowStep {n nW : Nat} (pts : Vector G1 n)
 
 /-- The window-recomposition invariant.
 
-After `t` windows, the accumulator holds `Σ_j (sⱼ >>> ((nW − t)·8)) · Pⱼ`. -/
+After `t` windows, the accumulator holds `Σ_j ⌊sⱼ / 2^((nW − t)·8)⌋ · Pⱼ`. -/
 private theorem msmAcc_spec {n : Nat} (pts : Vector G1 n) (vals : Vector Nat n)
     (nW : Nat) (hval : ∀ j (hj : j < n), Valid pts[j])
     (hbound : ∀ j (hj : j < n), vals[j] < 2 ^ (nW * 8)) :

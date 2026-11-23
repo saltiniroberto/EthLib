@@ -4,6 +4,7 @@ public import EthLib.Consensus.LightClient.Upgrade
 public import EthLib.Consensus.Proofs.LightClient.Containers
 public import EthLib.Consensus.Proofs.LightClient.FullNode
 public import EthLib.Serialization.Proofs.Ssz.Type.ValueEquality
+import EthLib.Base.Proofs.Bytes
 
 /-!
 # Proofs: the upgrade of light client data to a later fork
@@ -38,14 +39,8 @@ variable {preset : Preset} {fork : Fork}
 /-- An Electra header with the SSZ value of the empty one has the beacon header of the empty one. -/
 private theorem beacon_of_same {header : LightClientHeader preset .pectra}
     (same : sameSszValue header (LightClientHeader.empty preset .pectra) = true) :
-    header.beacon = (LightClientHeader.empty preset .pectra).beacon := by
-  have values := beq_iff_eq.mp same
-  simp only [SszType.toValue, SszFields.toValues, Value.seq.injEq, List.cons.injEq] at values
-  obtain ⟨⟨slot, proposer, parent, state, body, -⟩, -⟩ := values
-  simp only [Value.uint.injEq, Value.bytes.injEq, UInt64.toNat_inj, Vector.toArray_inj]
-    at slot proposer parent state body
-  cases beacon : header.beacon
-  simp_all [LightClientHeader.empty]
+    header.beacon = (LightClientHeader.empty preset .pectra).beacon :=
+  LightClientHeader.beacon_eq_of_sameSszValue same
 
 /-- The Gloas header of an Electra header keeps the beacon header. -/
 theorem LightClientHeader.toGloas_beacon {config : Config} {post : Fork}
@@ -78,23 +73,20 @@ private theorem mapM_toChunk_eq_map :
     obtain ⟨chunk, converted, tail, restBuilt, done⟩ := built
     simp only [pure, Except.pure, Except.ok.injEq] at done
     subst done
-    have same : node = chunk.toArray := by
-      unfold toChunk at converted
-      split at converted
-      · cases converted
-        rfl
-      · cases converted
+    have same : node = chunk.toArray := toChunk_ok_iff.mp converted
     rw [List.map_cons, same, mapM_toChunk_eq_map restBuilt]
 
 /-- A branch vector holds the list it was made from. -/
-private theorem branchVector_toList {depth : Nat} {branch : List Bytes32}
+theorem branchVector_toList {depth : Nat} {branch : List Bytes32}
     {vector : Vector Bytes32 depth} (made : branchVector depth branch = .ok vector) :
     vector.toList = branch := by
   unfold branchVector at made
-  split at made
-  · cases made
-    simp
-  · cases made
+  cases read : Base.exactArray depth branch.toArray (Serialization.Ssz.Err.count depth) with
+  | error e => simp [read, Except.mapError] at made
+  | ok v =>
+    simp only [read, Except.mapError, Except.ok.injEq] at made
+    subst made
+    exact congrArg Array.toList (Base.exactArray_eq_ok_iff.mp read)
 
 /-- An accepted branch is as long as the depth of its index. -/
 private theorem verifyMerkleProof_length {leaf root : Bytes} {branch : List Bytes} {index : Nat}

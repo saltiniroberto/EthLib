@@ -99,6 +99,7 @@ def MAX_NONCE : Nat := 2 ^ 64 - 1
 
 From Tangerine Whistle, it is all but one 64th of that gas, and before, all of it. -/
 def createMessageGas (fork : Fork) (gasLeft : Nat) : Nat :=
+  -- `L(mu_g)`, all but one 64th, by EIP-150; before, `mu_g` itself.
   if fork ≥ .tangerineWhistle then maxMessageCallGas gasLeft else gasLeft
 
 /-- The price of a creation at fork `fork`, before memory, init code and the hash of CREATE2.
@@ -144,9 +145,14 @@ On failure it pushes 0, and the output of the child becomes the return data.
 It then gets back the `newAccount` state gas that it paid, since no account was created. -/
 def resumeCreate (fork : Fork) (caller : Evm fork Meter) (newAccount : Nat) (address : Address)
     (child : Evm fork Meter) : Except EvmError (Evm fork Meter) := do
+  -- On success, the creation pushes the address of the new account, and the return data is empty.
+  --
+  -- On failure, it pushes 0, and the output of the child becomes the return data.
   let (word, returnData) :=
     if child.error.isNone then (address.toU256, ByteArray.empty) else (0, child.output)
+  -- The caller takes the gas left, the substate and the state of the child.
   let evm := incorporateChild fork caller child
+  -- On failure, the state gas of the new account comes back, since no account was created.
   let evm := if child.error.isNone then evm else refillStateGas evm newAccount
   let evm ← pushWord { evm with returnData } word
   return advance evm
@@ -168,27 +174,50 @@ It reads the sender first, then the new address once the checks pass, by EIP-792
 The read of the new address stays even when the creation then lacks gas. -/
 def launchCreate (evm : Evm fork Meter) (value : U256) (initCode : ByteArray)
     (salt : Option U256) : Except EvmError (StepResult fork Meter) :=
+  -- The return data becomes empty.
   let evm := { evm with returnData := .empty }
+  -- The account of the sender, the current target.
   let current := evm.message.currentTarget
   let evm := recordAccountRead evm current
   let sender := evm.state.getAccount current
+  -- The creation pushes 0 and sends no message when one of three conditions holds.
+  --
+  -- The balance of the sender is below the value.
+  --
+  -- The nonce of the sender is `2^64 - 1`, by EIP-2681.
+  --
+  -- The depth of the message would exceed 1024.
   if sender.balance < value ∨ sender.nonce = MAX_NONCE ∨
       evm.message.depth + 1 > STACK_DEPTH_LIMIT then
     .next <$> skipCall evm 0 0
   else do
+    -- The new address, by the Yellow Paper for CREATE and by EIP-1014 for CREATE2.
     let address ← creationAddress current sender.nonce salt initCode
+    -- The new address joins the accessed addresses, by EIP-2929.
     let evm := recordAccountRead (accessAddress evm address).2 address
     keepReads evm .next do
+      -- From Glamsterdam, a new address that is not alive pays the state gas of a new account.
       let newAccount := createNewAccountStateGas fork evm.state address
+      -- EIP-8037 charges that state gas here.
       let evm ← chargeStateGas evm newAccount
+      -- From Tangerine Whistle, the message gets all but one 64th of the gas left, by EIP-150.
       let gas := createMessageGas fork (GasMeter.gasLeft evm.gas)
       let evm ← chargeGas evm gas
+      -- An address with code or a nonzero nonce gets no message, by EIP-684, and 0 is pushed.
+      --
+      -- The nonce of the sender grows by one in that case too.
+      --
+      -- An address with storage gets no message either, by EIP-7610.
+      --
+      -- The nonce grows on both branches, so it grows once here, before the branch.
       let deployable := evm.state.accountDeployable address
       let state ← (evm.state.incrementNonce fork current).mapError .state
       let evm := { evm with state }
       if deployable then
+        -- The message takes the whole state gas reservoir of the frame.
         let reservoir := GasMeter.reservoir evm.gas
         let evm := { evm with gas := GasMeter.drain evm.gas }
+        -- The child frame runs the init code at the new address.
         let message : Message fork :=
           { blockEnv := evm.message.blockEnv
             txEnv := evm.message.txEnv
@@ -207,6 +236,11 @@ def launchCreate (evm : Evm fork Meter) (value : U256) (initCode : ByteArray)
             disablePrecompiles := false }
         .ok (.child evm message (resumeCreate fork evm newAccount address))
       else do
+        -- A collision keeps the grant used and pushes 0.
+        --
+        -- EIP-8037: on an address collision, the state gas of the new account is refilled.
+        --
+        -- With storage alone a target is a collision here, by EIP-7610, and it was charged.
         let evm ← pushWord (refillStateGas evm newAccount) 0
         return .next (advance evm)
 
@@ -217,7 +251,11 @@ From Shanghai, init code longer than the limit fails.
 It fails in a static frame. -/
 def genericCreate (evm : Evm fork Meter) (value : U256) (initCode : ByteArray)
     (salt : Option U256) : Except EvmError (StepResult fork Meter) :=
+  -- EIP-3860 rule 3, from Shanghai: init code over `MAX_INITCODE_SIZE` aborts the instruction.
+  --
+  -- It aborts as if it runs out of gas.
   if fork ≥ .shapella ∧ maxInitCodeSize fork < initCode.size then .error .outOfGas
+  -- Before Glamsterdam, the static check of EIP-214 comes here.
   else if evm.message.isStatic then .error .writeInStaticContext
   else launchCreate evm value initCode salt
 
@@ -228,14 +266,24 @@ It pays its price and the growth of memory, then reads the init code from memory
 From Glamsterdam, it fails in a static frame before it pops its operands. -/
 def createStep (create2 : Bool) (evm : Evm fork Meter) :
     Except EvmError (StepResult fork Meter) := do
+  -- From Glamsterdam, a creation in a static frame fails, before the pops.
   if fork ≥ .glamsterdam ∧ evm.message.isStatic then throw .writeInStaticContext
+  -- The stack gives the value, the start and the size of the init code, and the salt of CREATE2.
   let (value, evm) ← popWord evm
   let (start, evm) ← popWord evm
   let (size, evm) ← popWord evm
   let (salt, evm) ← popSalt create2 evm
+  -- CREATE2 pays the hash cost, `G_keccak256word` per word of init code, by EIP-1014.
   let hashCost := if create2 then OPCODE_KECCAK256_PER_WORD * wordCount size.toNat else 0
+  -- From Shanghai, EIP-3860 charges `G_initcodeword` per word of init code.
+  --
+  -- EIP-3860 rule 4 charges it before the computation of the new address.
   let initCost := if fork ≥ .shapella then initCodeCost size.toNat else 0
+  -- The price of the creation, the hash, the init code and the growth of memory, in one charge.
+  --
+  -- Memory grows before the check of the init code limit; an abort there ends the frame either way.
   let evm ← chargeGasAndMemory evm (createBaseCost fork + hashCost + initCost) [(start, size)]
+  -- The init code is the bytes of memory at that start and size.
   genericCreate evm value (memoryReadBytes evm.memory start.toNat size.toNat) salt
 
 /-- The instruction of a creation opcode at fork `fork`.
@@ -243,6 +291,7 @@ def createStep (create2 : Bool) (evm : Evm fork Meter) :
 Other opcodes give none, and so does CREATE2 before Constantinople. -/
 def createInstruction (fork : Fork) :
     Op → Option (Evm fork Meter → Except EvmError (StepResult fork Meter))
+  -- `0xf0` CREATE, and `0xf5` CREATE2 from Constantinople by EIP-1014.
   | .create => some (createStep false)
   | .create2 => if .constantinople ≤ fork then some (createStep true) else none
   | _ => none

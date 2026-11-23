@@ -1,9 +1,11 @@
 module
 
 public import EthLib.Cryptography.Proofs.Secp256r1.Field
+public import EthLib.Cryptography.Proofs.Secp256r1.Montgomery
 public import EthLib.Cryptography.Proofs.Secp256r1.Curve
 public import EthLib.Cryptography.Proofs.Secp256r1.Order
 public import EthLib.Cryptography.Proofs.Secp256r1.Ecdsa
+public import EthLib.Cryptography.Proofs.Secp256r1.Sign
 public import EthLib.Cryptography.Proofs.Secp256r1.Errors
 
 /-!

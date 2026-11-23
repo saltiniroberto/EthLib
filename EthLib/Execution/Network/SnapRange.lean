@@ -10,25 +10,25 @@ When an AccountRange or StorageRanges answer of a snap peer is valid.
 
 The source is [`caps/snap.md`][snap] of the devp2p specifications.
 
-[snap]: https://github.com/ethereum/devp2p/blob/88f1c80800d622cc3a542a2125bbe33cc18c9f9c/caps/snap.md
+[snap]: https://github.com/ethereum/devp2p/blob/277ceb399c15df86efb17d51eb58200c26879784/caps/snap.md
 
 Each range must pass the range check of the trie against its proof.
 
-A range with no proof must be the whole trie, as "GetStorageRanges (0x02)" says.
+A range with no proof must be the whole trie, as the section GetStorageRanges (0x02) says.
 
-No signal says that a range reaches the end of its trie, as "GetAccountRange (0x00)" says.
+No signal says that a range reaches the end of its trie, as the section GetAccountRange (0x00) says.
 
 The proof shows it instead.
 
 A peer without the state of the root sends an empty reply, as the two requests say.
 
-A peer without the storage of a requested account does the same, as "GetStorageRanges (0x02)" says.
+A peer without the storage of a requested account does the same, as that section also says.
 
 The checks read no entry and no proof as that reply, never as an empty range.
 
 The checks do not read the limit hash.
 
-A peer may answer past it, as "GetAccountRange (0x00)" says.
+A peer may answer past it, as the section GetAccountRange (0x00) says.
 -/
 
 @[expose] public section
@@ -37,28 +37,43 @@ namespace EthLib.Execution.Network
 
 open EthLib.Base
 open EthLib.Execution.Trie
+open EthLib.Serialization.Rlp (Item)
 
 /-- Why an AccountRange or StorageRanges answer is rejected. -/
 inductive SnapRangeError where
   /-- A range fails the range check of its trie. -/
   | range (error : RangeError)
-  /-- An account body is not the slim form of an account, byte for byte. -/
-  | slimAccount
-  /-- A StorageRanges answer holds more ranges than the request names accounts. -/
-  | tooManyRanges
-  deriving Repr, DecidableEq
+  /-- The body of the account with hash `hash` is not the slim form of an account itself. -/
+  | slimAccount (hash : Hash32)
+  /-- A StorageRanges answer proves `ranges` ranges, more than the `accounts` its request names.
+
+  A proof with no range counts as one range. -/
+  | tooManyRanges (ranges accounts : Nat)
+  deriving DecidableEq
+
+/-- The form of the error in Lean syntax, with each value named and the hash in hex. -/
+def SnapRangeError.reprPrec : SnapRangeError → Nat → Std.Format
+  | .range error, p =>
+    constructorFormat "EthLib.Execution.Network.SnapRangeError.range" [reprArg error] p
+  | .slimAccount hash, p =>
+    constructorFormat "EthLib.Execution.Network.SnapRangeError.slimAccount" [namedArg "hash" hash] p
+  | .tooManyRanges ranges accounts, p =>
+    constructorFormat "EthLib.Execution.Network.SnapRangeError.tooManyRanges"
+      [namedArg "ranges" ranges, namedArg "accounts" accounts] p
+
+instance : Repr SnapRangeError := ⟨SnapRangeError.reprPrec⟩
 
 /-- The stable code of an error.
 
 A failed range check keeps the code of its own error, from 201 on.
 
-The two other codes follow the codes of a snap message error, so the two kinds never meet.
+The two other codes, 3 and 4, are not codes of a snap message error, so the two kinds never meet.
 
 A new constructor takes a new code, so that each code keeps its meaning. -/
 def SnapRangeError.code : SnapRangeError → UInt32
   | .range error => error.code
-  | .slimAccount => 3
-  | .tooManyRanges => 4
+  | .slimAccount _ => 3
+  | .tooManyRanges .. => 4
 
 /-- What a valid AccountRange or StorageRanges answer says. -/
 inductive RangeAnswer where
@@ -81,12 +96,15 @@ Each account is a hash of an address and the account in slim form.
 The account must be the slim form itself, and its value in the trie is its full form.
 
 No account and no proof is the empty reply of a peer without the state. -/
-def verifyAccountRange (root start : Hash32) (accounts : List RangeEntry)
+def verifyAccountRange (root start : Hash32) (accounts : List (RangeEntry Item))
     (proof : List ByteArray) : Except SnapRangeError RangeAnswer := do
+  -- GetAccountRange: a peer without the state of the root answers with no account and no proof.
   if accounts.isEmpty && proof.isEmpty then return .noState
+  -- Each slim body as its full value in the state trie.
   let entries ← accounts.mapM fun entry => do
-    let some value := fullAccount entry.data | throw .slimAccount
+    let some value := fullAccount entry.data | throw (.slimAccount entry.hash)
     return (entry.hash, value)
+  -- AccountRange: the accounts from the starting hash, proved there and at the last account.
   let more ← (verifyRange Cryptography.Hash.Keccak.keccak256 root start entries proof).mapError
     .range
   return .ofMore more
@@ -103,7 +121,7 @@ The caller passes it on 32 bytes, and an empty one as the zero hash.
 
 Each range but the last must be the whole storage of its account, so it takes no proof.
 
-The proof is that of the last range, as "GetStorageRanges (0x02)" says.
+The proof is that of the last range, as the section GetStorageRanges (0x02) says.
 
 That section starts at the starting hash for one account, and asks for whole ranges for several.
 
@@ -114,14 +132,18 @@ No range and no proof is the empty reply of a peer without the state.
 A proof with no range shows that the first account holds no slot from the start on.
 
 Otherwise the answer is that of the last range. -/
-def verifyStorageRanges (roots : List Hash32) (start : Hash32) (slots : List (List RangeEntry))
-    (proof : List ByteArray) : Except SnapRangeError RangeAnswer := do
+def verifyStorageRanges (roots : List Hash32) (start : Hash32)
+    (slots : List (List (RangeEntry ByteArray))) (proof : List ByteArray) :
+    Except SnapRangeError RangeAnswer := do
+  -- GetStorageRanges: a peer without the state of the root or of a requested account sends neither.
   if slots.isEmpty && proof.isEmpty then return .noState
   -- A proof with no range proves an empty range of the first account.
   let slots := if slots.isEmpty then [[]] else slots
-  if roots.length < slots.length then throw .tooManyRanges
+  -- No more ranges than requested accounts.
+  if roots.length < slots.length then throw (.tooManyRanges slots.length roots.length)
+  -- EthLib's reading: the starting hash serves one account; with several, each range starts at 0.
   let first := if roots.length = 1 then start else Vector.replicate 32 0
-  let check (root : Hash32) (range : List RangeEntry) (proof : List ByteArray) :=
+  let check (root : Hash32) (range : List (RangeEntry ByteArray)) (proof : List ByteArray) :=
     (verifyRange Cryptography.Hash.Keccak.keccak256 root first
       (range.map fun entry => (entry.hash, entry.data)) proof).mapError .range
   let ranges := roots.zip slots
@@ -129,6 +151,7 @@ def verifyStorageRanges (roots : List Hash32) (start : Hash32) (slots : List (Li
   for (root, range) in ranges.dropLast do
     discard <| check root range []
   match ranges.getLast? with
+  -- The proof belongs to the last range.
   | some (root, range) => return .ofMore (← check root range proof)
   -- The answer holds a range, so this case never occurs.
   | none => return .noState

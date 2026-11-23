@@ -1,6 +1,8 @@
 module
 
+public import EthLib.Consensus.Proofs.ForkDigest
 public import EthLib.Consensus.ReqResp.Validity
+import Mathlib.Data.List.SplitBy
 
 /-!
 # `Consensus.Proofs.ReqResp.Validity`
@@ -12,11 +14,24 @@ What the validity of a response says about its blocks or sidecars.
 - When the step is 1, each block names the one before it as its parent, so the blocks form a chain.
 - A valid response to a request for blocks by root has at most as many blocks as requested roots.
 - The root of each of its blocks is a requested root.
+- A valid response to a request for blocks by head has at most the count of blocks.
+- Its first block has the requested root, and each block is the parent of the one before it.
+- Its slots decrease along the whole list.
+- A valid response to a request for light client updates by range has at most 128 updates.
+- Their periods lie in the requested periods, and each is the period after the one before it.
+- So the period of each update is that of the first update plus its index.
+- The digest of each update is the fork digest of the epoch of its attested header, from Altair.
+- On a chain whose digests name their forks, that digest names the fork of that epoch.
+- A valid response to a request for a light client bootstrap has at most one bootstrap.
+- Its root is the requested root, and its digest is the fork digest of the epoch of its header.
+- That epoch is from Altair.
+- On a chain whose digests name their forks, that digest names the fork of that epoch.
 - A valid response to a request for sidecars by range lies in the requested slots.
 - Along the whole list, its sidecars increase in slot, then in index within one block.
 - Two of its sidecars at the same slot name the same block.
 - For blobs, the indices of the sidecars of one block are 0, 1, 2 and so on.
 - For columns, each index is a requested column.
+- For columns, each block it serves has every requested column.
 - A valid response to a request for sidecars by root has at most as many sidecars as requested.
 - Each of its sidecars is one that the request names.
 - A valid response to a request for payload envelopes by range has increasing slots.
@@ -72,12 +87,6 @@ theorem pairwise_of_allAdjacent {α : Type} {r : α → α → Bool} {s : α →
       · exact step _ _ adjacent.1
       · exact trans _ _ _ (step _ _ adjacent.1) (List.rel_of_pairwise_cons tail mem)
 
-/-- A slot lies in a range exactly when it is at least the start and below the start plus count. -/
-theorem slotInRange_iff (startSlot : Slot) (count : UInt64) (slot : Slot) :
-    slotInRange startSlot count slot = true ↔
-      startSlot.toNat ≤ slot.toNat ∧ slot.toNat < startSlot.toNat + count.toNat := by
-  simp [slotInRange, UInt64.le_iff_toNat_le]
-
 /-- The slots of a list increase from each block to the next exactly when the check passes. -/
 theorem slotsAscending_iff (blocks : List ResponseBlock) :
     ResponseBlock.slotsAscending blocks = true ↔
@@ -111,8 +120,8 @@ theorem isValidBlocksByRangeResponse_iff (config : Config) (fork : Base.Fork)
         ∀ i (h : i + 1 < blocks.length), blocks[i + 1].parentRoot = blocks[i].root) := by
   simp only [isValidBlocksByRangeResponse, BeaconBlocksByRangeRequest.containsSlot,
     Bool.and_eq_true, Bool.or_eq_true, bne_iff_ne, ne_eq, decide_eq_true_eq, List.all_eq_true,
-    slotsAscending_iff, parentsLinked_iff, slotInRange_iff, and_assoc,
-    Decidable.imp_iff_not_or]
+    slotsAscending_iff, parentsLinked_iff, and_assoc, Decidable.imp_iff_not_or]
+  simp only [InCountRange]
 
 /-- A valid response to a request for blocks by range with step 1 is a chain in the requested slots.
 
@@ -137,6 +146,192 @@ theorem isValidBlocksByRootResponse_iff {config : Config} {fork : Base.Fork}
     isValidBlocksByRootResponse request blocks = true ↔
       blocks.length ≤ request.data.size ∧ ∀ block ∈ blocks, block.root ∈ request.data := by
   simp [isValidBlocksByRootResponse, List.all_eq_true]
+
+/-- The rules that a valid response to a request for blocks by head meets, and no others. -/
+theorem isValidBlocksByHeadResponse_iff (config : Config) (request : BeaconBlocksByHeadRequest)
+    (blocks : List ResponseBlock) :
+    isValidBlocksByHeadResponse config request blocks = true ↔
+      blocks.length ≤ request.count.toNat ∧
+      blocks.length ≤ config.MAX_REQUEST_BLOCKS_DENEB.toNat ∧
+      (∀ h : 0 < blocks.length, blocks[0].root = request.beaconRoot) ∧
+      (∀ i (h : i + 1 < blocks.length),
+        blocks[i + 1].slot < blocks[i].slot ∧ blocks[i].parentRoot = blocks[i + 1].root) := by
+  simp only [isValidBlocksByHeadResponse, ResponseBlock.ancestryLinked, Bool.and_eq_true,
+    decide_eq_true_eq, allAdjacent_iff, beq_iff_eq, and_assoc]
+  cases blocks with
+  | nil => simp
+  | cons first rest => simp
+
+/-- In a valid response to a request for blocks by head, slots decrease along the whole list.
+
+So no two of its blocks have the same slot. -/
+theorem pairwise_of_isValidBlocksByHeadResponse {config : Config}
+    {request : BeaconBlocksByHeadRequest} {blocks : List ResponseBlock}
+    (valid : isValidBlocksByHeadResponse config request blocks = true) :
+    blocks.Pairwise (fun a b => b.slot < a.slot) := by
+  simp only [isValidBlocksByHeadResponse, ResponseBlock.ancestryLinked, Bool.and_eq_true] at valid
+  exact pairwise_of_allAdjacent (s := fun (a b : ResponseBlock) => b.slot < a.slot)
+    (fun _ _ h => of_decide_eq_true (Bool.and_eq_true _ _ ▸ h).1)
+    (fun _ _ _ ab bc => UInt64.lt_trans bc ab) valid.2
+
+/-- A computation gives a digest exactly when its option holds that digest. -/
+private theorem toOption_eq_some_iff {digest : ForkDigest} (computed : Except Err ForkDigest) :
+    computed.toOption = some digest ↔ computed = .ok digest := by
+  cases computed <;> simp [Except.toOption]
+
+/-- The rules that a valid response for light client updates by range meets, and no others. -/
+theorem isValidLightClientUpdatesByRangeResponse_iff (preset : Preset) (config : Config)
+    (genesisValidatorsRoot : Root) (request : LightClientUpdatesByRangeRequest)
+    (updates : List ResponseUpdate) :
+    isValidLightClientUpdatesByRangeResponse preset config genesisValidatorsRoot request updates =
+        true ↔
+      updates.length ≤ request.count.toNat ∧ updates.length ≤ 128 ∧
+      (∀ update ∈ updates,
+        (request.startPeriod.toNat ≤
+            (computeSyncCommitteePeriodAtSlot preset update.attestedSlot).toNat ∧
+          (computeSyncCommitteePeriodAtSlot preset update.attestedSlot).toNat <
+            request.startPeriod.toNat + request.count.toNat) ∧
+        Base.Fork.altair ≤ config.forkAtEpoch (computeEpochAtSlot preset update.attestedSlot) ∧
+        computeForkDigest config genesisValidatorsRoot
+          (computeEpochAtSlot preset update.attestedSlot) = .ok update.digest) ∧
+      (∀ i (h : i + 1 < updates.length),
+        (computeSyncCommitteePeriodAtSlot preset updates[i + 1].attestedSlot).toNat =
+          (computeSyncCommitteePeriodAtSlot preset updates[i].attestedSlot).toNat + 1) := by
+  have limit : MAX_REQUEST_LIGHT_CLIENT_UPDATES.toNat = 128 := rfl
+  simp only [isValidLightClientUpdatesByRangeResponse, ResponseUpdate.digestMatches,
+    lightClientDigestMatches, toOption_eq_some_iff, lightClientUpdatesLimit, Bool.and_eq_true,
+    decide_eq_true_eq, List.all_eq_true, allAdjacent_iff, beq_iff_eq, Nat.le_min]
+  simp only [ResponseUpdate.period, InCountRange, limit, and_assoc]
+  constructor <;> exact fun h => ⟨h.2.1, h.1, h.2.2.1, h.2.2.2⟩
+
+/-- When each update has the period after that of the update before it, periods have no gap.
+
+The period of each update is the period of the first update plus the index of the update. -/
+private theorem period_eq_of_consecutive {preset : Preset} {updates : List ResponseUpdate}
+    (next : ∀ i (h : i + 1 < updates.length),
+      (computeSyncCommitteePeriodAtSlot preset updates[i + 1].attestedSlot).toNat =
+        (computeSyncCommitteePeriodAtSlot preset updates[i].attestedSlot).toNat + 1)
+    (i : Nat) (h : i < updates.length) :
+    (computeSyncCommitteePeriodAtSlot preset updates[i].attestedSlot).toNat =
+      (computeSyncCommitteePeriodAtSlot preset (updates[0]'(by omega)).attestedSlot).toNat + i := by
+  induction i with
+  | zero => rfl
+  | succ i ih => rw [next i h, ih (by omega)]; omega
+
+/-- In a valid response for light client updates by range, periods have no gap.
+
+The period of each update is the period of the first update plus the index of the update. -/
+theorem period_eq_of_isValidLightClientUpdatesByRangeResponse {preset : Preset}
+    {config : Config} {genesisValidatorsRoot : Root} {request : LightClientUpdatesByRangeRequest}
+    {updates : List ResponseUpdate}
+    (valid : isValidLightClientUpdatesByRangeResponse preset config genesisValidatorsRoot request
+      updates = true)
+    (i : Nat) (h : i < updates.length) :
+    (computeSyncCommitteePeriodAtSlot preset updates[i].attestedSlot).toNat =
+      (computeSyncCommitteePeriodAtSlot preset (updates[0]'(by omega)).attestedSlot).toNat + i :=
+  period_eq_of_consecutive
+    ((isValidLightClientUpdatesByRangeResponse_iff preset config genesisValidatorsRoot request
+      updates).mp valid).2.2.2 i h
+
+/-- The check of light client updates by range needs no bound of its length by the count.
+
+Periods in the range with no gap number at most the count, so the other rules imply that bound.
+
+So the response is valid exactly when it meets the other rules of the check. -/
+theorem isValidLightClientUpdatesByRangeResponse_iff_without_count (preset : Preset)
+    (config : Config) (genesisValidatorsRoot : Root) (request : LightClientUpdatesByRangeRequest)
+    (updates : List ResponseUpdate) :
+    isValidLightClientUpdatesByRangeResponse preset config genesisValidatorsRoot request updates =
+        true ↔
+      updates.length ≤ 128 ∧
+      (∀ update ∈ updates,
+        (request.startPeriod.toNat ≤
+            (computeSyncCommitteePeriodAtSlot preset update.attestedSlot).toNat ∧
+          (computeSyncCommitteePeriodAtSlot preset update.attestedSlot).toNat <
+            request.startPeriod.toNat + request.count.toNat) ∧
+        Base.Fork.altair ≤ config.forkAtEpoch (computeEpochAtSlot preset update.attestedSlot) ∧
+        computeForkDigest config genesisValidatorsRoot
+          (computeEpochAtSlot preset update.attestedSlot) = .ok update.digest) ∧
+      (∀ i (h : i + 1 < updates.length),
+        (computeSyncCommitteePeriodAtSlot preset updates[i + 1].attestedSlot).toNat =
+          (computeSyncCommitteePeriodAtSlot preset updates[i].attestedSlot).toNat + 1) := by
+  rw [isValidLightClientUpdatesByRangeResponse_iff]
+  refine ⟨fun ⟨_, rest⟩ => rest, fun ⟨limit, each, next⟩ => ⟨?_, limit, each, next⟩⟩
+  -- The first update starts at or after the start, and the last ends before the end of the range.
+  rcases Nat.eq_zero_or_pos updates.length with empty | nonempty
+  · omega
+  have first := (each _ (List.getElem_mem (h := nonempty))).1.1
+  have last := (each _ (List.getElem_mem (h := Nat.sub_lt nonempty Nat.one_pos))).1.2
+  rw [period_eq_of_consecutive next _ (Nat.sub_lt nonempty Nat.one_pos)] at last
+  omega
+
+/-- In a valid response for light client updates by range, periods increase along the whole list.
+
+So no two of its updates have the same period. -/
+theorem pairwise_of_isValidLightClientUpdatesByRangeResponse {preset : Preset} {config : Config}
+    {genesisValidatorsRoot : Root} {request : LightClientUpdatesByRangeRequest}
+    {updates : List ResponseUpdate}
+    (valid : isValidLightClientUpdatesByRangeResponse preset config genesisValidatorsRoot request
+      updates = true) :
+    updates.Pairwise (fun a b => computeSyncCommitteePeriodAtSlot preset a.attestedSlot <
+      computeSyncCommitteePeriodAtSlot preset b.attestedSlot) := by
+  simp only [isValidLightClientUpdatesByRangeResponse, Bool.and_eq_true] at valid
+  exact pairwise_of_allAdjacent (s := fun (a b : ResponseUpdate) =>
+      computeSyncCommitteePeriodAtSlot preset a.attestedSlot <
+        computeSyncCommitteePeriodAtSlot preset b.attestedSlot)
+    (fun _ _ h => UInt64.lt_iff_toNat_lt.mpr (by
+      have := beq_iff_eq.mp h
+      simp only [ResponseUpdate.period] at this
+      omega))
+    (fun _ _ _ => UInt64.lt_trans) valid.2
+
+/-- On a chain whose digests name their forks, each digest of a valid response names its fork.
+
+That fork is the fork of the epoch of the attested header of the update.
+
+So a receiver that reads the fork from the digest decodes each update with that fork. -/
+theorem forkOfDigest_of_isValidLightClientUpdatesByRangeResponse {preset : Preset}
+    {config : Config} {genesisValidatorsRoot : Root} {request : LightClientUpdatesByRangeRequest}
+    {updates : List ResponseUpdate}
+    (identify : digestsIdentify config genesisValidatorsRoot = true)
+    (valid : isValidLightClientUpdatesByRangeResponse preset config genesisValidatorsRoot request
+      updates = true)
+    {update : ResponseUpdate} (member : update ∈ updates) :
+    (forkOfDigest config genesisValidatorsRoot update.digest).map config.forkAtEpoch =
+      some (config.forkAtEpoch (computeEpochAtSlot preset update.attestedSlot)) :=
+  forkOfDigest_recovers identify
+    (((isValidLightClientUpdatesByRangeResponse_iff preset config genesisValidatorsRoot request
+      updates).mp valid).2.2.1 update member).2.2
+
+/-- The rules that a valid response for a light client bootstrap meets, and no others. -/
+theorem isValidLightClientBootstrapResponse_iff (preset : Preset) (config : Config)
+    (genesisValidatorsRoot : Root) (request : Root) (bootstraps : List ResponseBootstrap) :
+    isValidLightClientBootstrapResponse preset config genesisValidatorsRoot request bootstraps =
+        true ↔
+      bootstraps.length ≤ 1 ∧
+      ∀ bootstrap ∈ bootstraps, bootstrap.root = request ∧
+        Base.Fork.altair ≤ config.forkAtEpoch (computeEpochAtSlot preset bootstrap.slot) ∧
+        computeForkDigest config genesisValidatorsRoot (computeEpochAtSlot preset bootstrap.slot) =
+          .ok bootstrap.digest := by
+  simp only [isValidLightClientBootstrapResponse, lightClientDigestMatches, toOption_eq_some_iff,
+    Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true, beq_iff_eq]
+
+/-- On a chain whose digests name their forks, the digest of a valid bootstrap names its fork.
+
+That fork is the fork of the epoch of the header of the bootstrap.
+
+So a receiver that reads the fork from the digest decodes the bootstrap with that fork. -/
+theorem forkOfDigest_of_isValidLightClientBootstrapResponse {preset : Preset} {config : Config}
+    {genesisValidatorsRoot : Root} {request : Root} {bootstraps : List ResponseBootstrap}
+    (identify : digestsIdentify config genesisValidatorsRoot = true)
+    (valid : isValidLightClientBootstrapResponse preset config genesisValidatorsRoot request
+      bootstraps = true)
+    {bootstrap : ResponseBootstrap} (member : bootstrap ∈ bootstraps) :
+    (forkOfDigest config genesisValidatorsRoot bootstrap.digest).map config.forkAtEpoch =
+      some (config.forkAtEpoch (computeEpochAtSlot preset bootstrap.slot)) :=
+  forkOfDigest_recovers identify
+    (((isValidLightClientBootstrapResponse_iff preset config genesisValidatorsRoot request
+      bootstraps).mp valid).2 bootstrap member).2.2
 
 /-- A blob sidecar may follow another when it is the next blob of its block or opens a later one.
 
@@ -184,6 +379,18 @@ theorem blockRoot_eq_of_pairwise_before {sidecars : List ResponseSidecar}
   · exact absurd slot (UInt64.ne_of_lt lower)
   · exact ⟨root, index⟩
 
+/-- When each sidecar of a list comes before the later ones, any two at one slot name one block. -/
+private theorem blockRoot_eq_of_mem {sidecars : List ResponseSidecar}
+    (ordered : sidecars.Pairwise ResponseSidecar.Before) {a b : ResponseSidecar}
+    (memA : a ∈ sidecars) (memB : b ∈ sidecars) (slot : a.slot = b.slot) :
+    a.blockRoot = b.blockRoot := by
+  obtain ⟨i, hi, rfl⟩ := List.mem_iff_getElem.mp memA
+  obtain ⟨j, hj, rfl⟩ := List.mem_iff_getElem.mp memB
+  rcases Nat.lt_trichotomy i j with lt | rfl | gt
+  · exact (blockRoot_eq_of_pairwise_before ordered lt hj slot).1
+  · rfl
+  · exact (blockRoot_eq_of_pairwise_before ordered gt hi slot.symm).1.symm
+
 /-- The rules that a valid response to a request for blob sidecars by range meets, and no others. -/
 theorem isValidBlobSidecarsByRangeResponse_iff (config : Config) (fork : Base.Fork)
     (request : BlobSidecarsByRangeRequest) (sidecars : List ResponseSidecar) :
@@ -201,7 +408,8 @@ theorem isValidBlobSidecarsByRangeResponse_iff (config : Config) (fork : Base.Fo
           sidecars[i + 1].index.toNat = sidecars[i].index.toNat + 1) ∨
         (sidecars[i].slot < sidecars[i + 1].slot ∧ sidecars[i + 1].index = 0)) := by
   simp only [isValidBlobSidecarsByRangeResponse, Bool.and_eq_true, decide_eq_true_eq,
-    List.all_eq_true, slotInRange_iff, allAdjacent_iff, nextBlob_iff, and_assoc]
+    List.all_eq_true, allAdjacent_iff, nextBlob_iff, and_assoc]
+  simp only [InCountRange, and_assoc]
   cases sidecars with
   | nil => simp
   | cons first rest => simp
@@ -239,8 +447,9 @@ theorem isValidDataColumnSidecarsByRangeResponse_iff (preset : Preset) (config :
       (∀ block ∈ ResponseSidecar.groupBySlot sidecars, ∀ column ∈ request.columns.data,
         ∃ sidecar ∈ block, sidecar.index = column) := by
   simp only [isValidDataColumnSidecarsByRangeResponse, Bool.and_eq_true, decide_eq_true_eq,
-    List.all_eq_true, slotInRange_iff, allAdjacent_iff, nextColumn_iff, Array.contains_iff_mem,
+    List.all_eq_true, allAdjacent_iff, nextColumn_iff, Array.contains_iff_mem,
     Array.all_eq_true', List.any_eq_true, beq_iff_eq, and_assoc]
+  simp only [InCountRange, and_assoc]
 
 /-- In a valid response to a request for column sidecars by range, each sidecar precedes later ones.
 -/
@@ -253,6 +462,44 @@ theorem pairwise_of_isValidDataColumnSidecarsByRangeResponse {preset : Preset} {
   rcases (nextColumn_iff a b).mp next with ⟨slot, root, index⟩ | slot
   · exact Or.inr ⟨slot, root.symm, index⟩
   · exact Or.inl slot
+
+/-- Two sidecars in one group of a response grouped by slot have one slot. -/
+private theorem slot_eq_of_mem_groupBySlot {sidecars block : List ResponseSidecar}
+    (group : block ∈ ResponseSidecar.groupBySlot sidecars) {a b : ResponseSidecar}
+    (memA : a ∈ block) (memB : b ∈ block) : a.slot = b.slot := by
+  cases block with
+  | nil => simp at memA
+  | cons first rest =>
+    have same := (List.isChain_of_mem_splitBy group).induction (fun s => s.slot = first.slot) _
+      (fun _ _ step slot => (beq_iff_eq.mp step).symm.trans slot) (fun _ => rfl)
+    rw [same a memA, same b memB]
+
+/-- A valid response to a request for column sidecars by range serves whole blocks.
+
+Each block it serves has every requested column. -/
+theorem exists_column_of_isValidDataColumnSidecarsByRangeResponse {preset : Preset}
+    {config : Config} {request : DataColumnSidecarsByRangeRequest preset}
+    {sidecars : List ResponseSidecar}
+    (valid : isValidDataColumnSidecarsByRangeResponse preset config request sidecars = true)
+    {served : ResponseSidecar} (mem : served ∈ sidecars) {column : DataAvailability.ColumnIndex}
+    (requested : column ∈ request.columns.data) :
+    ∃ sidecar ∈ sidecars, sidecar.slot = served.slot ∧ sidecar.blockRoot = served.blockRoot ∧
+      sidecar.index = column := by
+  have flat : (ResponseSidecar.groupBySlot sidecars).flatten = sidecars :=
+    List.flatten_splitBy _ sidecars
+  obtain ⟨-, -, -, -, complete⟩ :=
+    (isValidDataColumnSidecarsByRangeResponse_iff preset config request sidecars).mp valid
+  have inGroups : served ∈ (ResponseSidecar.groupBySlot sidecars).flatten := by
+    rw [flat]
+    exact mem
+  obtain ⟨block, group, inBlock⟩ := List.mem_flatten.mp inGroups
+  obtain ⟨sidecar, found, index⟩ := complete block group column requested
+  have member : sidecar ∈ sidecars := by
+    rw [← flat]
+    exact List.mem_flatten.mpr ⟨block, group, found⟩
+  have slot := slot_eq_of_mem_groupBySlot group found inBlock
+  exact ⟨sidecar, member, slot, blockRoot_eq_of_mem
+    (pairwise_of_isValidDataColumnSidecarsByRangeResponse valid) member mem slot, index⟩
 
 /-- The rules that a valid response to a request for blob sidecars by root meets, and no others. -/
 theorem isValidBlobSidecarsByRootResponse_iff {config : Config} {fork : Base.Fork}
@@ -298,8 +545,8 @@ theorem isValidExecutionPayloadEnvelopesByRangeResponse_iff (config : Config) (f
         envelopes[i].slot < envelopes[i + 1].slot ∧
           envelopes[i + 1].parentHash = envelopes[i].blockHash) := by
   simp only [isValidExecutionPayloadEnvelopesByRangeResponse, Bool.and_eq_true,
-    decide_eq_true_eq, List.all_eq_true, slotInRange_iff, allAdjacent_iff,
-    nextEnvelope_iff, and_assoc]
+    decide_eq_true_eq, List.all_eq_true, allAdjacent_iff, nextEnvelope_iff, and_assoc]
+  simp only [InCountRange]
 
 /-- In a valid response for payload envelopes by range, slots increase along the whole list. -/
 theorem pairwise_of_isValidExecutionPayloadEnvelopesByRangeResponse {config : Config}

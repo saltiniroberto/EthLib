@@ -54,10 +54,10 @@
   "A compressed `G2` point, decoded, checked in the subgroup, and compressed again."
 
 #define DOC_bls_expand_message_xmd \
-  "Expand `msg` into `lenInBytes` pseudo-random bytes via XMD with SHA-256."
+  "The message expansion of [RFC 9380 §5.3.1][xmd], with SHA-256 as `H`."
 
 #define DOC_bls_hash_to_g2 \
-  "Hash a message + DST to a G2 point on BLS12-381."
+  "The hash to curve of [RFC 9380 §3][h2c], for the suite `BLS12381G2_XMD:SHA-256_SSWU_RO_`."
 
 #define DOC_bls_pairing \
   "The pairing `e(P, Q)` of a compressed `G1` point and a compressed `G2` point."
@@ -123,10 +123,10 @@
   "SHA-256 of a byte string shorter than 2^61 bytes, the bound of FIPS 180-4 §1."
 
 #define DOC_keccak256 \
-  "Keccak-256 of a byte string: `Keccak[512](M, 256)` of FIPS 202 §5.2."
+  "Keccak-256 of a byte string, `KECCAK[512](N, 256)` of FIPS 202 §5.2."
 
 #define DOC_keccak512 \
-  "Keccak-512 of a byte string: `Keccak[1024](M, 512)` of FIPS 202 §5.2."
+  "Keccak-512 of a byte string, `KECCAK[1024](N, 512)` of FIPS 202 §5.2:"
 
 #define DOC_ethash_cache_size \
   "The bytes in the cache of the epoch of a block: `c_size` of the Yellow Paper, J.2."
@@ -209,6 +209,12 @@
 #define DOC_hkdf_sha256 \
   "HKDF, RFC 5869 §2: extract, then expand."
 
+#define DOC_tls13_hkdf_label \
+  "The HkdfLabel of RFC 9846 §7.1, for a label without its `tls13 ` prefix."
+
+#define DOC_tls13_expand_label \
+  "Expand a SHA-256 secret with a TLS 1.3 label and context, RFC 9846 §7.1."
+
 #define DOC_concat_kdf_sha256 \
   "The first `length` bytes of `K(1) | K(2) | ...`, SP 800-56C Rev. 2 §4.1."
 
@@ -265,6 +271,9 @@
 
 #define DOC_keystore_decrypt \
   "Decrypt an ERC-2335 JSON keystore and return its secret octets."
+
+#define DOC_keystore_encrypt \
+  "Write an ERC-2335 JSON keystore of a secret, from its key derivation and metadata."
 
 #define DOC_secp256k1_verify \
   "Whether `(r, s)` is a valid signature on `hash` under the public key `q`, by SEC 1 v2 §4.1.4."
@@ -330,10 +339,10 @@
   "The sequence number of a record."
 
 #define DOC_enr_verify_v4 \
-  "Whether a record is a valid \"v4\" record: its signature verifies under its public key."
+  "Whether a record is a valid v4 record: its signature verifies under its public key."
 
 #define DOC_enr_node_id \
-  "The node ID of a \"v4\" record: the Keccak-256 hash of `x` then `y` of its public key."
+  "The node ID of a v4 record: the Keccak-256 hash of `x` then `y` of its public key."
 
 #define DOC_enr_sign_v4 \
   "The bytes of a record, signed again with a private key by the \"v4\" scheme."
@@ -346,6 +355,9 @@
 
 #define DOC_enr_eth_fork_id \
   "The fork identifier of the \"eth\" entry of a record, as its hash and its next fork."
+
+#define DOC_enr_endpoints \
+  "The IPv4 and IPv6 endpoints of a record, each `None` when its address is absent."
 
 #define DOC_discv5_log_distance \
   "The logarithmic distance: the number of bits of the distance, and 0 for equal IDs."
@@ -379,6 +391,21 @@
 
 #define DOC_discv5_reencode_message \
   "The plaintext of the decoded message, written again by the encoder."
+
+#define DOC_discv5_answers_request \
+  "Whether a message plaintext answers a request plaintext."
+
+#define DOC_discv5_talk_response \
+  "The plaintext of the TALKRESP of a node that knows no protocol, for a TALKREQ plaintext."
+
+#define DOC_discv5_nodes_match \
+  "Whether records match the distances of a FINDNODE, from the node ID of its recipient."
+
+#define DOC_discv5_node_step \
+  "A node's state after a packet from an endpoint, and the packets it sends back."
+
+#define DOC_discv5_node_send \
+  "A node's state after it sends a request to a peer, and the packet it sends."
 
 #define DOC_discv5_make_whoareyou \
   "Node B's WHOAREYOU packet for node A, and its challenge data."
@@ -419,14 +446,239 @@
 #define DOC_consensus_ssz_static \
   "The root of the value that the bytes encode, and the bytes of that value, as a pair."
 
+#define DOC_consensus_api_json \
+  "The JSON of the API for the value that SSZ bytes encode."
+
+#define DOC_consensus_api_ssz \
+  "The SSZ bytes of the value that a JSON document of the API holds."
+
+#define DOC_consensus_api_spec \
+  "The spec map of a preset and a configuration, as a `dict`."
+
+#define DOC_consensus_api_fork_schedule \
+  "The fork schedule of a configuration, as a `list` of `dict`."
+
+#define DOC_consensus_api_deposit_contract \
+  "The deposit contract of a configuration, as a `dict`."
+
+#define DOC_consensus_api_genesis \
+  "The genesis that a genesis state gives, as a `dict`."
+
+#define DOC_consensus_api_state_query \
+  "The JSON response to a query on a state, as a `dict`."
+
+#define DOC_consensus_api_state_query_ssz \
+  "The SSZ body of the response to a query on a state, as `bytes`."
+
+#define DOC_consensus_api_validator_status \
+  "The status of a validator with a balance at an epoch, and the name of its group."
+
+#define DOC_consensus_api_builder_status \
+  "The status of the builder at an index of a state, as its name."
+
+#define DOC_consensus_api_registry_query \
+  "The JSON response to a query on the registries of a state, as a `dict`."
+
+#define DOC_consensus_api_validator_balances_ssz \
+  "The SSZ body of the balances answer, as `bytes`."
+
+#define DOC_consensus_api_block_query \
+  "The JSON response to a query on a signed block, as a `dict`."
+
+#define DOC_consensus_api_blobs \
+  "The JSON response of the blobs endpoint, as a `dict`."
+
+#define DOC_consensus_api_blobs_ssz \
+  "The SSZ body of the blobs answer, as `bytes`."
+
+#define DOC_consensus_api_block_query_ssz \
+  "The SSZ body of the answer to a query on a signed block, as `bytes`."
+
+#define DOC_consensus_api_header \
+  "The JSON response of the header endpoint for a signed block, as a `dict`."
+
+#define DOC_consensus_api_headers \
+  "The JSON response of the headers endpoint, as a `dict`."
+
+#define DOC_consensus_api_columns \
+  "The JSON response of the columns endpoint, as a `dict`."
+
+#define DOC_consensus_api_columns_ssz \
+  "The SSZ body of the columns answer, as `bytes`."
+
+#define DOC_consensus_api_payload_envelope \
+  "The JSON response of the envelope endpoint, as a `dict`."
+
+#define DOC_consensus_api_payload_envelope_ssz \
+  "The SSZ body of the envelope answer, as `bytes`."
+
+#define DOC_consensus_api_cached_envelope \
+  "The JSON response of the endpoint that gives a proposer its envelope, as a `dict`."
+
+#define DOC_consensus_api_cached_envelope_ssz \
+  "The SSZ body of the endpoint that gives a proposer its envelope, as `bytes`."
+
+#define DOC_consensus_api_light_client_bootstrap \
+  "The JSON response of the bootstrap endpoint, as a `dict`."
+
+#define DOC_consensus_api_light_client_bootstrap_ssz \
+  "The SSZ body of the bootstrap answer, as `bytes`."
+
+#define DOC_consensus_api_light_client_updates \
+  "The JSON response of the updates endpoint, as a `list` of `dict`."
+
+#define DOC_consensus_api_light_client_updates_ssz \
+  "The SSZ body of the updates answer, as `bytes`."
+
+#define DOC_consensus_api_light_client_decode_updates \
+  "The fork name and the SSZ bytes of each update of the SSZ body of an updates answer."
+
+#define DOC_consensus_api_light_client_latest \
+  "The JSON response of the finality or the optimistic update endpoint, as a `dict`."
+
+#define DOC_consensus_api_attestation_data \
+  "The JSON response of the attestation data endpoint, as a `dict`."
+
+#define DOC_consensus_api_payload_attestation_data \
+  "The JSON response of the payload attestation data endpoint, as a `dict`, or None for 204."
+
+#define DOC_consensus_api_fork_choice \
+  "The JSON response of the fork choice endpoint, as a `dict`."
+
+#define DOC_consensus_api_chain_heads \
+  "The JSON response of the heads endpoint, as a `dict`."
+
+#define DOC_consensus_api_chain_events \
+  "The events of the fork choice between two stores of a case."
+
+#define DOC_consensus_api_fast_confirmation_event \
+  "The event of the last run of the fast confirmation rule in a case that passed."
+
+#define DOC_consensus_api_aggregate_attestation \
+  "The JSON response of the aggregate endpoint, as a `dict`."
+
+#define DOC_consensus_api_sync_committee_contribution \
+  "The JSON response of the contribution endpoint, as a `dict`."
+
+#define DOC_consensus_api_attestation_rewards \
+  "The JSON response of the attestation rewards endpoint, as a `dict`."
+
+#define DOC_consensus_api_block_rewards \
+  "The JSON response of the block rewards endpoint, as a `dict`."
+
+#define DOC_consensus_api_consensus_block_value \
+  "The consensus value of a signed block, in Wei."
+
+#define DOC_consensus_api_prefer_local_v3 \
+  "From Bellatrix to Fulu: whether the node returns its local payload rather than the builder's."
+
+#define DOC_consensus_api_capped_bid_value \
+  "The value of a bid, in Gwei: its value plus its execution payment, counted up to its cap."
+
+#define DOC_consensus_api_bid_accepted \
+  "Whether the terms of a bid accept it."
+
+#define DOC_consensus_api_select_payload \
+  "From Gloas: the bid that the node commits to, or none for its local payload."
+
+#define DOC_consensus_api_builder_config_terms \
+  "From Gloas, the terms that the SSZ bytes of a builder configuration give."
+
+#define DOC_consensus_api_sync_committee_rewards \
+  "The JSON response of the sync committee rewards endpoint, as a `dict`."
+
+#define DOC_consensus_api_duties \
+  "The JSON response of a duties endpoint, as a `dict`."
+
+#define DOC_consensus_api_committees \
+  "The JSON response of the committees endpoint, as a `dict`."
+
+#define DOC_consensus_api_sync_committees \
+  "The JSON response of the sync committees endpoint, as a `dict`."
+
+#define DOC_consensus_api_ptc \
+  "The JSON response of the PTC endpoint, as a `dict`."
+
+#define DOC_consensus_api_ptc_ssz \
+  "The SSZ body of the PTC answer, as `bytes`."
+
+#define DOC_consensus_api_resolve \
+  "The answer to each query, against the store after the steps of a fork choice case."
+
+#define DOC_consensus_builder_api_json \
+  "The JSON body of a response of the Builder API: the version of the fork and the data."
+
+#define DOC_consensus_builder_api_ssz \
+  "The SSZ bytes of the value that a JSON body of the Builder API holds."
+
 #define DOC_consensus_is_valid_builder_signature \
   "Whether the signature of a signed message of the Builder API verifies."
+
+#define DOC_consensus_process_registration \
+  "None when a builder keeps a signed registration, or the name of the rule that refuses it."
+
+#define DOC_consensus_is_eligible_for_bid \
+  "Whether a builder serves a request for a bid."
+
+#define DOC_consensus_process_bid \
+  "None when a proposer accepts a signed bid, or the name of the rule that refuses it."
+
+#define DOC_consensus_is_eligible_for_bid_gloas \
+  "From Gloas: whether a builder serves a request for a bid."
+
+#define DOC_consensus_validate_bid \
+  "From Gloas: None when a proposer accepts a fetched bid, or the name of the rule that refuses it."
+
+#define DOC_consensus_unblind_signed_blinded_block \
+  "The root and the bytes of the signed block that a signed blinded block and a payload give."
+
+#define DOC_consensus_submit_blinded_block_status \
+  "The status of a request that submits a signed blinded block: 200 or 202 when valid, else 400."
 
 #define DOC_consensus_verify_builder_request_auth_signature \
   "Whether a proposer key signed a Gloas request authentication given in SSZ."
 
+#define DOC_consensus_builder_request_auth_failures \
+  "From Gloas: the failed checks of a request for a bid, by name, in order."
+
+#define DOC_consensus_builder_preferences_failures \
+  "From Gloas: the failed checks of a request that submits preferences, by name, in order."
+
+#define DOC_consensus_default_auth_data \
+  "The default data that a proposer and a builder agree, from the builder's URL."
+
+#define DOC_consensus_relay_submission_bid \
+  "The SSZ bytes of the bid that a relay serves from a submission, under a key."
+
+#define DOC_consensus_relay_validators \
+  "At Fulu only: the list of validators that a relay serves, as a `list` of `dict`."
+
+#define DOC_consensus_relay_validator_registration \
+  "The answer of a relay to a request for the registration of a key, with its status and body."
+
+#define DOC_consensus_relay_delivered_payload \
+  "A delivered payload, read from its JSON and written back as a `dict`."
+
+#define DOC_consensus_relay_received_bid \
+  "A received bid, read from its JSON and written back as a `dict`."
+
+#define DOC_consensus_relay_delivered_keeps \
+  "Whether the filters of a query of delivered payloads keep the payload of a JSON object."
+
+#define DOC_consensus_relay_received_keeps \
+  "Whether the filters of a query of received bids keep the bid of a JSON object."
+
+#define DOC_consensus_relay_sort_delivered \
+  "Delivered payloads sorted by value in the given order, as a `list` of `dict`."
+
 #define DOC_consensus_builder_bid_value \
   "The value of a builder's bid from its two payments and the proposer's execution payment cap."
+
+#define DOC_consensus_consensus_version \
+  "The name of the consensus version of a fork, or none before Phase 0 and at Hegotá."
+
+#define DOC_consensus_consensus_version_fork \
+  "The name of the first fork of a consensus version, read from its exact name."
 
 #define DOC_consensus_merkle_proof \
   "The node at a generalized index of the value that the bytes encode, and its branch, as a pair."
@@ -549,7 +801,19 @@
   "An interchange file as the format writes it again, from its JSON text."
 
 #define DOC_consensus_import_slashing_interchange \
-  "The record of a signer that keeps every message, after it imports a file, as JSON text."
+  "The record after importing a file of its chain with the minimal strategy, as JSON text."
+
+#define DOC_consensus_read_signing_request \
+  "A request of the Remote-signing API, read and written again as the signer reads it."
+
+#define DOC_consensus_signing_request_root \
+  "The root that a remote signer signs for a request of the Remote-signing API."
+
+#define DOC_consensus_remote_signer_sign \
+  "The answer of the sign endpoint of a remote signer, with the rule of EIP-3076."
+
+#define DOC_consensus_remote_signer_public_keys \
+  "The answer of the public keys endpoint of a remote signer: its public keys as hex."
 
 #define DOC_consensus_check_block_signing \
   "Whether a key may sign a block of a slot with a signing root, given a record."
@@ -562,6 +826,12 @@
 
 #define DOC_consensus_record_attestation_signing \
   "The record after a key signs a vote, as JSON text."
+
+#define DOC_consensus_keymanager_json \
+  "A value of a schema of the Keymanager API, read from its JSON and written back."
+
+#define DOC_consensus_keymanager_run \
+  "The responses of calls made one after another on a validator client, then its state."
 
 #define DOC_consensus_is_execution_block \
   "From Bellatrix: whether a block carries a payload other than the empty one."
@@ -621,10 +891,16 @@
   "The state that the upgrade to a fork makes of a state of the fork before, as SSZ bytes."
 
 #define DOC_consensus_fork_choice \
-  "The outcome of each step of a fork choice case, from an anchor state and an anchor block."
+  "The handler outcomes of each step of a fork choice case, from an anchor state and block."
 
 #define DOC_consensus_gossip_validation \
   "Validate the messages of a topic in turn, against the store of an anchor and later blocks."
+
+#define DOC_consensus_api_post \
+  "Answer the requests to pool and publish endpoints in turn."
+
+#define DOC_consensus_api_gossip_event \
+  "The event that an object gives if gossip accepts it, by the name of its gossip topic."
 
 #define DOC_consensus_light_client_sync \
   "The headers of a sync, step by step, from a bootstrap for a trusted block root."
@@ -659,14 +935,26 @@
 #define DOC_consensus_compute_fork_digest \
   "The fork digest at an epoch, on the chain with the given root of the genesis validators."
 
-#define DOC_pq_keys_ssz \
-  "The root of the value that the bytes encode, and the bytes of that value, as a pair."
+#define DOC_consensus_enr_fork_id \
+  "The `eth2` value that a node writes at an epoch, as its digest, next version and next epoch."
 
-#define DOC_pq_keys_possession_signing_root \
-  "The root that a proof of possession signs, on the chain with the given genesis validators."
+#define DOC_consensus_next_fork_digest \
+  "The `nfd` value that a node writes at an epoch: the digest of the next fork."
 
-#define DOC_pq_keys_is_valid_possession_proof \
-  "Whether a proof of possession of a leanXMSS key for a BLS key is valid, with Keccak-256."
+#define DOC_consensus_bootnode_fork_id \
+  "The `eth2` value of a bootnode record made before genesis, as its three fields."
+
+#define DOC_consensus_enr_record \
+  "A signed \"v4\" record of a consensus node at an epoch, with its consensus entries."
+
+#define DOC_consensus_digest_epochs \
+  "The epochs at which the fork digest can change, in increasing order and without repeats."
+
+#define DOC_consensus_fork_of_digest \
+  "The first epoch with the given digest, among those at which it can change, with its fork."
+
+#define DOC_consensus_digests_identify \
+  "Whether the digest of each epoch at which it can change reads back the fork at that epoch."
 
 #define DOC_consensus_verify_data_column_sidecar \
   "Whether a sidecar, given as bytes, has a valid shape."
@@ -848,6 +1136,15 @@
 #define DOC_ssz_hash_tree_root \
   "The 32-byte hash tree root of a value of a type, both given in their tagged form."
 
+#define DOC_ssz_generalized_index \
+  "The generalized index of the node that a path selects in the tree of a type."
+
+#define DOC_ssz_merkle_proof \
+  "The branch that proves the node at a generalized index of a value against its root."
+
+#define DOC_ssz_merkleize_chunks \
+  "The root of 32-byte chunks, in a tree padded to a power of two."
+
 #define DOC_rlpx_ecies_encrypt \
   "The ciphertext `R || iv || c || d` of `m` to the public key `recipient`."
 
@@ -860,6 +1157,12 @@
 #define DOC_devp2p_encode_message \
   "The frame data of the message in the uncompressed frame data `plain`."
 
+#define DOC_devp2p_route \
+  "The shared capability that holds a message ID, given both lists of capabilities."
+
+#define DOC_devp2p_session \
+  "The outcomes of the frames a session receives in turn, from before the peer's Hello."
+
 #define DOC_discv4_decode \
   "The hash, the sender's key and the content of the packet in the bytes `packet`."
 
@@ -868,6 +1171,30 @@
 
 #define DOC_discv4_record_signed_by \
   "Whether the RLP record `record` of an ENRResponse is signed by the public key `sender`."
+
+#define DOC_discv4_receive \
+  "What a node knows of the sender of a packet after it receives it, and what it sends back."
+
+#define DOC_discv4_accept_enr_response \
+  "Whether an ENRResponse packet answers an ENRRequest packet that the node sent."
+
+#define DOC_dnsdisc_parse_entry \
+  "The type and the fields of an entry text, as a `dict`."
+
+#define DOC_dnsdisc_subdomain \
+  "The subdomain of an entry text: the base32 of the first 16 bytes of its Keccak-256 hash."
+
+#define DOC_dnsdisc_verify_root \
+  "Whether a root text is signed by a compressed public key of 33 bytes."
+
+#define DOC_dnsdisc_resolve \
+  "The node list at a domain, under a compressed public key, with a table as the DNS."
+
+#define DOC_dnsdisc_sign_root \
+  "The text of a root of two hashes of 16 bytes and a sequence number, signed with a private key."
+
+#define DOC_dnsdisc_parse_url \
+  "The compressed public key and the domain of a URL `enrtree://<key>@<domain>`."
 
 #define DOC_fork_id \
   "The fork identifier of a node with a schedule at a head: its hash and its next fork."
@@ -896,11 +1223,17 @@
 #define DOC_eth_check_pooled \
   "Whether `response` is PooledTransactions that answers the GetPooledTransactions `request`."
 
+#define DOC_eth_session \
+  "The outcomes of the eth messages that a session sends and receives in turn."
+
 #define DOC_eth_wire_hash \
-  "The hash of a transaction as it crosses the wire."
+  "The hash of a transaction as it crosses the wire, from its item and the bytes it was read from."
 
 #define DOC_eth_receipts_match \
   "Whether the receipts of a block, as a version sends them, match the receipts root of its header."
+
+#define DOC_eth_check_body \
+  "Whether the body `body` of a BlockBodies answer belongs to the header `header` at a fork."
 
 #define DOC_eth_access_lists_answer \
   "Whether `response` answers a GetBlockAccessLists `request`, given each block's access list hash."
@@ -917,8 +1250,11 @@
 #define DOC_snap_access_lists_answer \
   "Whether `response` answers a GetBlockAccessLists `request`, given each block's access list hash."
 
+#define DOC_snap_trie_nodes_answer \
+  "Whether the snap/1 TrieNodes data `response` answers the GetTrieNodes data `request`."
+
 #define DOC_snap_full_account \
-  "The full RLP form of an account in slim form."
+  "The full RLP form of an account, from the RLP encoding of its slim form."
 
 #define DOC_snap_verify_account_range \
   "Check the accounts of an AccountRange answer, from a root and a start of 32 bytes each."
@@ -962,11 +1298,101 @@
 #define DOC_uvarint_decode \
   "The value of the unsigned varint at the start of the bytes, and the bytes after it."
 
+#define DOC_quic_initial_secrets \
+  "Derive the client and server Initial secrets for QUIC v1, RFC 9001 §5.2."
+
+#define DOC_quic_packet_keys \
+  "Derive the payload key, IV and header-protection key, in that order, RFC 9001 §5.1."
+
+#define DOC_quic_tls_client_start \
+  "Start a client certificate handshake under an explicit policy, RFC 9846 §4.2.2."
+
+#define DOC_quic_tls_server_start \
+  "Start a server certificate handshake under an explicit policy."
+
+#define DOC_quic_tls_client_step \
+  "Process one complete server message and check the intended peer ID at authentication."
+
+#define DOC_quic_tls_server_step \
+  "Process one complete client message and require libp2p client authentication."
+
+#define DOC_quic_tls_key_schedule \
+  "Return the early, handshake, main, two handshake traffic and two application traffic secrets."
+
+#define DOC_quic_tls_derive_secret \
+  "Derive a SHA-256 secret from encoded handshake messages, RFC 9846 §7.1."
+
+#define DOC_quic_tls_finished \
+  "Compute the Finished `verify_data` over the transcript that precedes it, RFC 9846 §4.5.3."
+
+#define DOC_quic_tls_message_encode \
+  "Encode one handshake message with its header and the caller's hash length, RFC 9846 §4."
+
+#define DOC_quic_tls_message_decode \
+  "Decode one complete message and return its fields and trailing bytes, RFC 9846 §4."
+
+#define DOC_quic_tls_payload_encode \
+  "Encode a structured extension payload without selecting an algorithm or protocol."
+
+#define DOC_quic_tls_payload_decode \
+  "Decode an extension in the payload form that its message context requires."
+
+#define DOC_quic_tls_transcript \
+  "Return the SHA-256 transcript of complete handshake messages and its hash, RFC 9846 §4.1."
+
+#define DOC_quic_tls_certificate_verify_input \
+  "Build the CertificateVerify signed content from a SHA-256 transcript hash, RFC 9846 §4.5.2."
+
+#define DOC_quic_protect \
+  "Protect a QUIC v1 header and payload using a SHA-256 traffic secret, RFC 9001 §§5.1 to 5.4."
+
+#define DOC_quic_unprotect \
+  "Authenticate one isolated QUIC v1 packet, RFC 9001 §§5.3 to 5.4."
+
+#define DOC_quic_retry_tag \
+  "Compute a QUIC v1 Retry tag from the original destination ID and untagged Retry, RFC 9001 §5.8."
+
+#define DOC_quic_varint_encode \
+  "Encode a value below `2^62` with its shortest QUIC representation, RFC 9000 §16."
+
+#define DOC_quic_varint_decode \
+  "Read a QUIC integer and return its value and the trailing bytes, RFC 9000 §16."
+
+#define DOC_quic_header_encode \
+  "Encode a QUIC header, with checked lengths and packet-number bounds (RFC 9000 §17)."
+
+#define DOC_quic_header_decode \
+  "Read an authenticated header and return its fields and remaining bytes (RFC 9000 §17)."
+
+#define DOC_quic_frame_encode \
+  "Encode one well-formed QUIC frame (RFC 9000 §19)."
+
+#define DOC_quic_frame_decode \
+  "Read one frame allowed in the given packet type (RFC 9000 §12.4)."
+
+#define DOC_quic_packet_number_width \
+  "Select the shortest packet-number length bits, zero through three, under RFC 9000 §17.1."
+
+#define DOC_quic_packet_number_encode \
+  "Write the low packet-number bytes (RFC 9000 §17.1)."
+
+#define DOC_quic_packet_number_decode \
+  "Reconstruct a packet number from its low bytes (RFC 9000 Appendix A.3)."
+
 #define DOC_multistream_encode \
   "The bytes of one multistream-select message: its length, its bytes, then a newline."
 
 #define DOC_multistream_decode \
   "The multistream-select message at the start of the bytes, and the bytes after it."
+
+#define DOC_multistream_listen \
+  "What a listener does with the bytes it receives, from its start."
+
+#define DOC_multistream_dial \
+  "What a dialer does with the bytes it receives, from its start."
+
+#define DOC_libp2p_upgrade \
+  "The security protocol and the multiplexer of a TCP connection between consensus nodes."
 
 #define DOC_mplex_encode \
   "The bytes of a valid mplex frame."
@@ -974,11 +1400,29 @@
 #define DOC_mplex_decode \
   "The mplex frame at the start of the bytes, and the bytes after it."
 
+#define DOC_mplex_session \
+  "The streams of one side after the frames it receives and sends, from an empty table."
+
 #define DOC_yamux_encode \
   "The bytes of a valid yamux frame."
 
 #define DOC_yamux_decode \
   "The yamux frame at the start of the bytes, and the bytes after it."
+
+#define DOC_yamux_session \
+  "One side of a yamux session after the frames it receives and sends, from no stream."
+
+#define DOC_tls_certificate_read \
+  "The certificate's signed bytes, SPKI, validity and extensions."
+
+#define DOC_tls_certificate_authenticate \
+  "The authenticated peer ID of a chain of exactly one certificate."
+
+#define DOC_tls_certificate_authenticate_peer \
+  "The peer ID of one authenticated certificate, checked against the intended peer ID."
+
+#define DOC_tls_certificate_verify_p256 \
+  "Verify DER ECDSA/SHA-256 under an uncompressed P-256 SubjectPublicKeyInfo."
 
 #define DOC_libp2p_public_key \
   "The public-key protobuf of a 32-byte big-endian secp256k1 secret in [1, n)."
@@ -1000,6 +1444,24 @@
 
 #define DOC_gossip_rpc_encode \
   "The bytes of an RPC."
+
+#define DOC_gossip_parameters \
+  "The gossipsub parameters, given the slot duration in milliseconds and the slots per epoch."
+
+#define DOC_gossip_receive_rpc \
+  "What the router does with one RPC, with its client choices given as tables."
+
+#define DOC_gossip_join \
+  "The router after this node joins a topic, and the GRAFTs it sends."
+
+#define DOC_gossip_leave \
+  "The router after this node leaves a topic, and the PRUNEs it sends."
+
+#define DOC_gossip_publish \
+  "The router after this node publishes a message, and where the message goes."
+
+#define DOC_gossip_heartbeat \
+  "The router after one heartbeat, and the control messages it sends."
 
 #define DOC_receipt_reencode \
   "The bytes of a receipt, decoded at the fork and encoded again with its transaction type."
@@ -1028,11 +1490,17 @@
 #define DOC_tx_check_in_block \
   "Check that a transaction may enter its block at `fork`, on the chain `chainId`."
 
+#define DOC_tx_admit_to_pool \
+  "Check that a node may keep a transaction from a peer, at `fork` on the chain `chainId`."
+
 #define DOC_tx_settle \
   "Settle the gas of a transaction that passes the gas, nonce and fee rules."
 
 #define DOC_tx_run \
   "Run one transaction on a state, in a block with no transaction before."
+
+#define DOC_tx_trace_eip3155 \
+  "The trace of one transaction in the lines of EIP-3155: one per step, then the summary."
 
 #define DOC_tx_network_check \
   "Check the network form of a blob transaction at the named fork."
@@ -1097,6 +1565,12 @@
 #define DOC_active_fork \
   "The name of the active fork of a configured chain at a block, or `None` when none is active."
 
+#define DOC_execution_blob_schedule \
+  "The blob schedule of a chain at a block, from a base configuration and a configuration file."
+
+#define DOC_write_execution_config \
+  "The fork times and blob schedules of a configuration, as the `dict` of a configuration file."
+
 #define DOC_engine_new_payload \
   "The payload status of an `engine_newPayload` request, without the parent's state."
 
@@ -1113,7 +1587,7 @@
   "Build a payload on a chain, from attributes, the builder's choices and transactions."
 
 #define DOC_engine_forkchoice_updated \
-  "The response to an `engine_forkchoiceUpdated` request, against a tree of payloads."
+  "The response to an `engine_forkchoiceUpdated` request, against a tree of known blocks."
 
 #define DOC_engine_get_blobs \
   "The answer to an `engine_getBlobs` request, from a blob pool."
@@ -1124,14 +1598,77 @@
 #define DOC_engine_get_payload_bodies \
   "The answer to a payload bodies request, from a store of bodies."
 
+#define DOC_engine_new_payload_routes \
+  "The payload request of the beacon chain through the method and through its execution layer."
+
+#define DOC_engine_read_payload_status \
+  "A payload status read from its JSON, as `json.loads` gives it."
+
+#define DOC_engine_read_forkchoice_response \
+  "A forkchoice response read from its JSON, as `json.loads` gives it."
+
+#define DOC_engine_read_get_payload_result \
+  "The result of an `engine_getPayload` method at a fork, read from its JSON and written back."
+
+#define DOC_engine_read_payload_bodies_result \
+  "The result of an `engine_getPayloadBodiesByHash` or `ByRange` method, read and written back."
+
+#define DOC_engine_read_get_blobs_result \
+  "The result of an `engine_getBlobs` method, read from its JSON and written back."
+
+#define DOC_engine_exchange_transition_configuration \
+  "The answer to an `engine_exchangeTransitionConfigurationV1` request, from a configuration."
+
+#define DOC_engine_run_node \
+  "The responses to a script of Engine API requests, from a node that knows one block."
+
+#define DOC_engine_get_inclusion_list \
+  "The answer to an `engine_getInclusionListV1` request, from the candidates of the node."
+
+#define DOC_engine_exchange_capabilities \
+  "The answer to an `engine_exchangeCapabilities` request: the methods that EthLib defines."
+
+#define DOC_engine_get_client_version \
+  "The answer to an `engine_getClientVersionV1` request, from a version object."
+
+#define DOC_engine_error_object \
+  "The error object of the Engine API error with a code: its negative code, message and data."
+
+#define DOC_engine_rewrite_params \
+  "The parameters of an Engine API request, read by the decoder and written by the writer."
+
 #define DOC_engine_prepare_execution_payload \
   "From Bellatrix to Fulu: the forkchoice update of a proposer, as the value of its JSON."
 
 #define DOC_engine_prepare_execution_payload_gloas \
   "From Gloas: the forkchoice update of a proposer, as the value of its JSON."
 
+#define DOC_engine_payload_attributes_event \
+  "From Bellatrix to Fulu: the event of the payload attributes of a proposer."
+
+#define DOC_engine_payload_attributes_event_gloas \
+  "Gloas: the event of the payload attributes of a proposer."
+
 #define DOC_engine_finalized_execution_block_hash \
   "From Bellatrix: the 32 bytes of the finalized block hash of a store."
+
+#define DOC_rpc_read_param \
+  "Read a parameter of the execution JSON-RPC API under the schema of the given name."
+
+#define DOC_rpc_error_groups \
+  "The groups of error codes of the execution JSON-RPC API, in the order of the source."
+
+#define DOC_rpc_pruned_history_unavailable \
+  "The code of history that the node pruned, with its message."
+
+#define DOC_rpc_serve \
+  "Answer requests of the execution JSON-RPC API from the chain that the arguments build."
+
+#define DOC_rpc_encode_block_access_list \
+  "Encode a block access-list JSON value as its EIP-7928 RLP bytes."
+
+#define DOC_rpc_apply_overrides \
+  "The state root after the account overrides of one block of `eth_simulateV1`."
 
 #define DOC_pyvalue_echo \
   "The value that Python passes, back to Python, with each failure tuple read as a failure."

@@ -8,15 +8,17 @@ public import EthLib.Networking.Proofs.Devp2p.ForkId
 
 Each message reads back from its RLP item on the versions that use its form.
 
+A Status reads from no other item.
+
 The decoder of eth/68 rejects the Status of eth/69.
 
 The decoder of each later version rejects the Status of eth/68.
 
-A node accepts a Status that carries its own version, its own fork identifier and a valid range.
+A node accepts a Status that carries its own version and fork identifier and a range in order.
 
 It accepts a Status exactly when the version matches and the fork identifier passes.
 
-From eth/69 the range must also be valid.
+From eth/69 the range must also not start after it ends, so a range of one block passes.
 
 At every version, the network ID and the genesis hash play no part.
 -/
@@ -69,6 +71,51 @@ theorem ofItem_of_eth68 {version : EthVersion} (hv : version ≠ .eth68) (v n td
     ofItem version (eth68 v n td h g id).toItem = .error (.wrongFieldCount 7 6) := by
   simp [ofItem, toItem, hv, Item.fields, Item.toItems, bind, Except.bind]
 
+/-- A Status reads exactly from its own RLP item, on a version that uses its form.
+
+eth/68 reads only the six fields of its form, and every later version only the seven of its own. -/
+theorem ofItem_eq_ok_iff {version : EthVersion} {item : Item} {s : Status} :
+    ofItem version item = .ok s ↔
+      item = s.toItem ∧ match s with
+        | .eth68 .. => version = .eth68
+        | .eth69 .. => version ≠ .eth68 := by
+  constructor
+  · intro h
+    unfold ofItem at h
+    split at h
+    · rename_i hv
+      obtain ⟨items, rfl, hlen, hrest⟩ := Item.fields_bind_eq_ok.mp h
+      rcases items with _ | ⟨a, _ | ⟨b, _ | ⟨c, _ | ⟨d, _ | ⟨e, _ | ⟨f, _ | ⟨_, _⟩⟩⟩⟩⟩⟩⟩ <;>
+        simp at hlen
+      obtain ⟨x₁, rfl, h₁⟩ := Item.field_bind_eq_ok.mp hrest
+      obtain ⟨x₂, rfl, h₂⟩ := Item.field_bind_eq_ok.mp h₁
+      obtain ⟨x₃, rfl, h₃⟩ := Item.field_bind_eq_ok.mp h₂
+      obtain ⟨x₄, rfl, h₄⟩ := Item.field_bind_eq_ok.mp h₃
+      obtain ⟨x₅, rfl, h₅⟩ := Item.field_bind_eq_ok.mp h₄
+      obtain ⟨x₆, rfl, h₆⟩ := Item.field_bind_eq_ok.mp h₅
+      cases h₆
+      exact ⟨rfl, hv⟩
+    · rename_i hv
+      obtain ⟨items, rfl, hlen, hrest⟩ := Item.fields_bind_eq_ok.mp h
+      rcases items with
+        _ | ⟨a, _ | ⟨b, _ | ⟨c, _ | ⟨d, _ | ⟨e, _ | ⟨f, _ | ⟨g, _ | ⟨_, _⟩⟩⟩⟩⟩⟩⟩⟩ <;>
+        simp at hlen
+      obtain ⟨x₁, rfl, h₁⟩ := Item.field_bind_eq_ok.mp hrest
+      obtain ⟨x₂, rfl, h₂⟩ := Item.field_bind_eq_ok.mp h₁
+      obtain ⟨x₃, rfl, h₃⟩ := Item.field_bind_eq_ok.mp h₂
+      obtain ⟨x₄, rfl, h₄⟩ := Item.field_bind_eq_ok.mp h₃
+      obtain ⟨x₅, rfl, h₅⟩ := Item.field_bind_eq_ok.mp h₄
+      obtain ⟨x₆, rfl, h₆⟩ := Item.field_bind_eq_ok.mp h₅
+      obtain ⟨x₇, rfl, h₇⟩ := Item.field_bind_eq_ok.mp h₆
+      cases h₇
+      exact ⟨rfl, hv⟩
+  · rintro ⟨rfl, hs⟩
+    cases s with
+    | eth68 v n td h g id =>
+      subst hs
+      exact ofItem_eth68 v n td h g id
+    | eth69 v n g id r => exact ofItem_eth69 hs v n g id r
+
 end Status
 
 /-- Two errors with one code come from one constructor. -/
@@ -80,23 +127,25 @@ theorem StatusError.code_injective (e₁ e₂ : StatusError) (h : e₁.code = e�
 /--
 A node accepts a Status from eth/69 on that carries three things.
 
-They are the negotiated version, the node's own fork identifier and a valid range.
+They are the negotiated version, the node's own fork identifier and a range in order.
+
+A range is in order when it does not start after it ends.
 
 The forks of the node must fit rule 1a, and its head must be a real block.
 -/
 theorem checkStatus_own {version : EthVersion} {s : Schedule} {number timestamp : Nat}
     (hs : s.Separated) (hn : number ≤ TIMESTAMP_THRESHOLD) (networkId : Nat) (genesis : Hash32)
-    {r : BlockRange} (hr : r.Valid) :
+    {r : BlockRange} (hr : r.earliest ≤ r.latest) :
     checkStatus version s number timestamp
       (.eth69 version.number networkId genesis (s.forkId number timestamp) r) = .ok () := by
   simp [checkStatus, Status.version, Status.forkId, s.validate_forkId_self number timestamp hs hn,
-    hr, Except.mapError, bind, Except.bind, pure, Except.pure]
+    BlockRange.Valid, hr, Except.mapError, bind, Except.bind, pure, Except.pure]
 
 /-- A node accepts a Status exactly when three conditions hold.
 
 The Status carries the version of the node, and its fork identifier passes the check of the node.
 
-From eth/69, the announced range does not start after it ends.
+From eth/69, the announced range does not start after it ends, so a range of one block passes.
 
 The conditions do not read the network ID or the genesis hash. -/
 theorem checkStatus_eq_ok_iff {version : EthVersion} {s : Schedule} {number timestamp : Nat}
@@ -105,7 +154,7 @@ theorem checkStatus_eq_ok_iff {version : EthVersion} {s : Schedule} {number time
       status.version = version.number ∧ s.validate number timestamp status.forkId = .ok () ∧
         match status with
         | .eth68 .. => True
-        | .eth69 _ _ _ _ r => r.Valid := by
+        | .eth69 _ _ _ _ r => r.earliest ≤ r.latest := by
   unfold checkStatus
   by_cases hv : status.version = version.number
   · cases hf : s.validate number timestamp status.forkId with
@@ -114,9 +163,9 @@ theorem checkStatus_eq_ok_iff {version : EthVersion} {s : Schedule} {number time
       cases status with
       | eth68 => simp [hv, Except.mapError, bind, Except.bind, pure, Except.pure]
       | eth69 _ _ _ _ r =>
-        by_cases hr : r.Valid <;>
-          simp [hv, hr, Except.mapError, bind, Except.bind, pure, Except.pure, throw,
-            throwThe, MonadExceptOf.throw]
+        by_cases hr : r.earliest ≤ r.latest <;>
+          simp [BlockRange.Valid, hv, hr, Except.mapError, bind, Except.bind, pure, Except.pure,
+            throw, throwThe, MonadExceptOf.throw]
   · simp [hv, throw, throwThe, MonadExceptOf.throw, bind, Except.bind]
 
 end EthLib.Execution.Network

@@ -37,6 +37,28 @@ Recovery follows the [FFT method for Reed-Solomon erasure recovery][rs-fft].
 The trusted setup is the output of the KZG ceremony.
 `TrustedSetupData.lean` records the file it comes from and its sha256.
 
+## The normative text
+
+EIP-4844 and EIP-7594 do not state the KZG functions themselves.
+Each links an external text at a pinned commit: EIP-4844 one commit for blobs, and EIP-7594 another for cells.
+Other Ethereum specifications that need these functions point to `ethereum/cryptography-specs`.
+GitHub redirects that name to this repository, and no link names a commit or a release.
+
+No one has settled which text is normative for KZG.
+Three texts could be:
+
+1. The text that the Final EIPs link, at their pinned commits.
+2. The same text with the amendments in force when each fork activated.
+3. This module.
+
+This page describes the module and does not choose.
+
+The text that EIP-4844 links differs from this module in at least one rule.
+At the commit that EIP-4844 pins, that text decodes field elements as little-endian integers.
+It also gives the contents of the trusted setup as "TBD".
+Later amendments changed the text to big-endian, and this module decodes big-endian.
+The precompile of EIP-4844 also reads `z` and `y` as big-endian values.
+
 ## Operations
 
 These ten operations are public:
@@ -86,11 +108,13 @@ The C exports read untyped bytes into these types, and reject a wrong length the
 | `verify_cell_kzg_proof_batch` | 32 |
 | `verify_kzg_proof` | 122 |
 
-They match the consensus-specs `v1.7.0-alpha.12` general vectors and the `ethereum/c-kzg-4844` cases byte for byte.
-Their expected values come from the Python specification, not from EthLib.
+They match the cases of `ethereum/c-kzg-4844` byte for byte, and `tests/sources.toml` pins its commit.
+They also match the KZG cases of the general archive of consensus test vectors that `tests/sources.toml` pins.
+None of the cases comes from EthLib.
 `tests/cryptography/kzg/SHA256SUMS` pins each one, and CI checks the pins.
 
-[`tests/cryptography/README.md`](../../../tests/cryptography/README.md) explains the pins and the check against the upstream archive.
+[`tests/cryptography/README.md`](../../../tests/cryptography/README.md) gives the origin of each case.
+It also explains the pins and the check against the upstream archive.
 
 ## What is proved
 

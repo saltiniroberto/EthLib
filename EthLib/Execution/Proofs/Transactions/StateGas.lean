@@ -1,5 +1,6 @@
 module
 
+public import EthLib.Execution.Proofs.Transactions.Unfold
 public import EthLib.Execution.Proofs.Evm.Call.MeterRules
 public import EthLib.Execution.Proofs.Transactions.Process
 public import EthLib.Execution.Proofs.Transactions.Validity
@@ -83,7 +84,7 @@ private theorem processMessageCall_gas {chainId : Nat} {message : Message fork}
     (message.reservoir : Int) ≤ output.reservoir + output.stateGasUsed ∧
       (output.gasLeft + output.reservoir : Int) + output.stateGasUsed ≤
         message.gas + message.reservoir := by
-  unfold processMessageCall at h
+  rw [processMessageCall_unfold] at h
   split at h
   · split at h
     · cases h
@@ -179,7 +180,7 @@ theorem processTransaction_blockGas_execution_le_of_glamsterdam {env : BlockEnvi
   have hres := processMessageCall_reservoir_le hOutput
   dsimp only at hres
   rw [hBlock]
-  simp only [executionCapacity, hGlam, ↓reduceIte]
+  simp only [executionCapacity, hGlam, Bool.false_eq_true, ↓reduceIte]
   rw [← hIntrinsic] at hI
   simp only [GasCosts.TX_MAX_GAS_LIMIT] at hMax hexec ⊢
   omega
@@ -191,6 +192,48 @@ theorem processTransaction_blockGas_state_le_of_glamsterdam {env : BlockEnvironm
     out.blockGas.state ≤ tx.gas.toNat := by
   obtain ⟨_, _, message, output, -, -, hMessage, hOutput, -, hBlock⟩ :=
     processTransaction_gasUsed_of_glamsterdam hGlam (processTransaction_lt_hegota h) h
+  have hsum := allocateGas_add fork tx included.intrinsicGas
+  have hmg := gas_transactionMessage hMessage
+  have hheld := processMessageCall_spent_le hOutput
+  dsimp only at hheld
+  rw [hmg] at hheld
+  rw [hBlock]
+  dsimp only
+  omega
+
+/-- From Glamsterdam, a transaction adds at most the gas it used before its refund as state gas.
+
+That gas used is the gas limit minus the execution gas left and the reservoir left.
+
+So subtracting the state gas from it, for the execution gas of the block, never floors at zero.
+
+A net state gas below zero counts as 0, so the bound holds for it too.
+
+Another theorem proves that the gas left and the reservoir left never exceed the gas limit.
+
+The run named here is the transaction's: its target, its paid state, its message and its call. -/
+theorem processTransaction_stateGas_le_of_glamsterdam {env : BlockEnvironment fork}
+    {block : State.BlockState} {included : Included} {tx : Transaction} {out : TransactionOutput}
+    (hGlam : .glamsterdam ≤ fork) (h : processTransaction env block included tx = .ok out) :
+    let gas := allocateGas fork tx included.intrinsicGas
+    ∃ target bought message output,
+      messageTarget included.sender
+          ((State.TransactionState.ofBlock block).getAccount included.sender).nonce tx =
+        .ok target ∧
+      buyGas env (State.TransactionState.ofBlock block) included.sender tx = .ok bought ∧
+      transactionMessage env ⟨included.sender, included.gasPrice, fun _ => tx.blobHashes, some⟩
+          bought included.sender target gas.execution tx = .ok message ∧
+      processMessageCall (Meter := StateGasMeter) env.chainId.toNat
+          { message with reservoir := gas.reservoir } bought
+          (startSubstate fork env.coinbase included.sender target tx) tx.authorizations
+          (paidWrites included.sender target tx) = .ok output ∧
+      out.blockGas.state = output.stateGasUsed.toNat ∧
+      out.blockGas.state ≤ tx.gas.toNat - (output.gasLeft + output.reservoir) := by
+  obtain ⟨target, bought, message, output, hTarget, hBought, hMessage, hOutput, -, hBlock⟩ :=
+    processTransaction_gasUsed_of_glamsterdam hGlam (processTransaction_lt_hegota h) h
+  refine ⟨target, bought, message, output, hTarget, hBought, hMessage, hOutput, ?_, ?_⟩
+  · rw [hBlock]
+  -- The run leaves at most what it is given, the gas limit less the intrinsic gas.
   have hsum := allocateGas_add fork tx included.intrinsicGas
   have hmg := gas_transactionMessage hMessage
   have hheld := processMessageCall_spent_le hOutput

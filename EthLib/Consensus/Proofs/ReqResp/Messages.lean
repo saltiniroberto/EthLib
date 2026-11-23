@@ -1,5 +1,6 @@
 module
 
+public import EthLib.Base.Proofs.Uint64
 public import EthLib.Consensus.ReqResp.Messages
 public import EthLib.Networking.Proofs.Gossip.Topic
 public import EthLib.Serialization.Proofs.Ssz.Typed.Collections
@@ -15,8 +16,10 @@ Properties of the request and response messages of the consensus layer.
 - Each protocol ID parses back to its protocol and its version.
 - So no two protocol IDs of a fork are one string.
 - A protocol ID of a fork is a protocol ID of every later fork.
+- The metadata of a version is that of the first fork from Phase 0 that has the version.
 - The status, the metadata and the container requests are lawful SSZ containers at every fork.
 - A goodbye code is recovered from the reason it names.
+- The fewest epochs over which a node serves blocks, when it exists, never wraps.
 -/
 
 @[expose] public section
@@ -118,6 +121,36 @@ theorem toString_injective {fork : Fork} {a b : ProtocolId} (left : a ∈ protoc
   rw [same, parse?_protocolIds right] at this
   exact (Option.some.inj this).symm
 
+/-- The metadata of a version is that of the first fork from Phase 0 whose metadata protocol has it.
+
+So version 1 carries the metadata of Phase 0, version 2 that of Altair, and version 3 that of Fulu.
+-/
+theorem metadataFork_eq_some_iff {version : Nat} {fork : Fork} :
+    metadataFork version = some fork ↔
+      .phase0 ≤ fork ∧ version ∈ ReqRespProtocol.metadata.versions fork ∧
+        ∀ other, .phase0 ≤ other → version ∈ ReqRespProtocol.metadata.versions other →
+          fork ≤ other := by
+  constructor
+  · intro named
+    match version, named with
+    | 1, named | 2, named | 3, named =>
+      simp only [metadataFork, Option.some.injEq] at named
+      subst named
+      refine ⟨by decide, by decide, fun other => ?_⟩
+      cases other <;> decide
+  · rintro ⟨started, member, first⟩
+    have phase0 := first .phase0 (by decide)
+    have altair := first .altair (by decide)
+    have fulu := first .fusaka (by decide)
+    have listed : version = 1 ∨ version = 2 ∨ version = 3 := by
+      simp only [ReqRespProtocol.versions] at member
+      split at member
+      · simp at member
+        omega
+      · split at member <;> simp at member <;> omega
+    rcases listed with rfl | rfl | rfl <;> cases fork <;>
+      revert started member phase0 altair fulu <;> decide
+
 /-- A goodbye code is recovered from the reason it names. -/
 theorem GoodbyeReason.toCode_ofCode (code : UInt64) :
     (GoodbyeReason.ofCode code).toCode = code := by
@@ -184,5 +217,43 @@ instance : LawfulSszType ExecutionPayloadEnvelopesByRangeRequest :=
 instance {preset : Preset} [NeZero preset.INCLUSION_LIST_COMMITTEE_SIZE.toNat] :
     LawfulSszType (InclusionListsByIndicesRequest preset) :=
   .container ⟨rfl, by simp, by decide⟩ (fun _ => rfl) (fun _ => rfl)
+
+/--
+The fewest epochs over which a node serves blocks, when the checked arithmetic succeeds.
+
+It is then the same formula on natural numbers, so no sum or product wrapped.
+-/
+theorem computeMinEpochsForBlockRequests_toNat {config : Config} {fork : Fork} {epochs : Epoch}
+    (h : config.computeMinEpochsForBlockRequests fork = .ok epochs) :
+    epochs.toNat = config.MIN_VALIDATOR_WITHDRAWABILITY_DELAY.toNat +
+      if .glamsterdam ≤ fork then
+        3 * config.CHURN_LIMIT_QUOTIENT_GLOAS.toNat *
+              config.CONSOLIDATION_CHURN_LIMIT_QUOTIENT.toNat /
+            (2 * config.CONSOLIDATION_CHURN_LIMIT_QUOTIENT.toNat +
+              3 * config.CHURN_LIMIT_QUOTIENT_GLOAS.toNat) / 2
+      else config.CHURN_LIMIT_QUOTIENT.toNat / 2 := by
+  unfold Config.computeMinEpochsForBlockRequests at h
+  split at h
+  · rename_i gloas
+    simp only [gloas, ↓reduceIte]
+    -- Each step succeeded, so each gives its value on natural numbers.
+    obtain ⟨exitWeight, h1, h⟩ := bind_ok_iff.mp h
+    obtain ⟨numerator, h2, h⟩ := bind_ok_iff.mp h
+    obtain ⟨consolidationWeight, h3, h⟩ := bind_ok_iff.mp h
+    obtain ⟨denominator, h4, h⟩ := bind_ok_iff.mp h
+    obtain ⟨quotient, h5, h⟩ := bind_ok_iff.mp h
+    obtain ⟨-, e1⟩ := Uint64.mulChecked_ok_iff.mp h1
+    obtain ⟨-, e2⟩ := Uint64.mulChecked_ok_iff.mp h2
+    obtain ⟨-, e3⟩ := Uint64.mulChecked_ok_iff.mp h3
+    obtain ⟨-, e4⟩ := Uint64.addChecked_ok_iff.mp h4
+    obtain ⟨-, e5⟩ := Uint64.divChecked_ok_iff.mp h5
+    obtain ⟨-, e6⟩ := Uint64.addChecked_ok_iff.mp h
+    rw [e6, UInt64.toNat_div, e5, e4, e3, e2, e1]
+    simp
+  · rename_i gloas
+    simp only [gloas, ↓reduceIte]
+    obtain ⟨-, e⟩ := Uint64.addChecked_ok_iff.mp h
+    rw [e, UInt64.toNat_div]
+    simp
 
 end EthLib.Consensus.Proofs.ReqResp.Messages

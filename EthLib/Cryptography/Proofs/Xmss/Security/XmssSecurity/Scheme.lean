@@ -1,7 +1,7 @@
 module
 
 public import EthLib.Cryptography.Proofs.Xmss.Security.XmssSecurity.Types
-public import EthLib.Cryptography.Proofs.Xmss.Unforgeability.Convert
+public import EthLib.Cryptography.Proofs.Xmss.Security.XmssSecurity.Convert
 public import EthLib.Cryptography.Proofs.HashSig
 
 /-!
@@ -85,7 +85,7 @@ open EthLib.Cryptography.Xmss.Unforgeability (queryH ofParam ofLeafIndex ofTopIn
 def encodingHash (parameter : PublicParameter) (leafIndex : LeafIndex)
     (message : Message) (randomness : Randomness) : m Digest :=
   toDigest <$> EthLib.Cryptography.Xmss.messageDigest queryH (ofParam parameter) .bottom
-    (ofLeafIndex leafIndex) (EthLib.Cryptography.Xmss.packBytes (ofMessage message))
+    (ofLeafIndex leafIndex) (ofMessage message).toArray
     (ofRandomizer randomness)
 
 /-- One chain step, under `tweak_chain(idx, i, step + 1)`: EthLib's bottom chain step. -/
@@ -105,31 +105,31 @@ def layerLeaves : EthLib.Cryptography.Xmss.Layer → Nat
   | .bottom => lifetime
   | .top => topLifetime
 
-/-- The node at position `(level, j)` of a layer's tree, from its two children.
+/-- The node at a position of a layer's tree, from its two children.
 
 Its level is the parent's, from 1 to 16, and its index is reduced modulo the layer's leaves.
 
 There it is EthLib's node hash, and elsewhere it is 0. -/
 def nodeAt (parameter : PublicParameter) (layer : EthLib.Cryptography.Xmss.Layer) :
-    (level j : Nat) → (left right : Digest) → m Digest
-  | level + 1, j, left, right =>
+    (p : EthLib.Cryptography.Merkle.Position) → (left right : Digest) → m Digest
+  | ⟨level + 1, j⟩, left, right =>
       if level < treeHeight then
         toDigest <$> EthLib.Cryptography.Xmss.nodeHash queryH (ofParam parameter) layer
-          (level + 1) (j % layerLeaves layer) (ofDigest left) (ofDigest right)
+          ⟨level + 1, j % layerLeaves layer⟩ (ofDigest left) (ofDigest right)
       else
         pure 0
-  | 0, _, _, _ => pure 0
+  | ⟨0, _⟩, _, _ => pure 0
 
 /-- `X_{level+1,node}` from its two children: EthLib's bottom node hash. -/
 def nodeHash (parameter : PublicParameter) (level : MerkleLevel) (node : MerkleNode)
     (left right : Digest) : m Digest :=
-  nodeAt parameter .bottom (level.val + 1) node.val left right
+  nodeAt parameter .bottom ⟨level.val + 1, node.val⟩ left right
 
 /-- The top layer's message digest of a bottom root: EthLib's top message digest. -/
 def topEncodingHash (parameter : PublicParameter) (key : TopIndex)
     (root : Digest) (randomness : Randomness) : m Digest :=
   toDigest <$> EthLib.Cryptography.Xmss.messageDigest queryH (ofParam parameter) .top
-    (ofTopIndex key) (EthLib.Cryptography.Xmss.packBytes (ofDigest root)) (ofRandomizer randomness)
+    (ofTopIndex key) (ofDigest root).toArray (ofRandomizer randomness)
 
 /-- One top chain step: EthLib's top chain step. -/
 def topChainHash (parameter : PublicParameter) (key : TopIndex) (chain : ChainIndex)
@@ -146,7 +146,7 @@ def topLeafHash (parameter : PublicParameter) (key : TopIndex)
 /-- A top node from its two children: EthLib's top node hash. -/
 def topNodeHash (parameter : PublicParameter) (level : MerkleLevel) (node : TopNode)
     (left right : Digest) : m Digest :=
-  nodeAt parameter .top (level.val + 1) node.val left right
+  nodeAt parameter .top ⟨level.val + 1, node.val⟩ left right
 
 end
 
@@ -198,7 +198,7 @@ def verifyTop (publicKey : PublicKey) (key : TopIndex) (root : Digest) (part : L
   let some topRoot ← EthLib.Cryptography.Xmss.layerRoot
       EthLib.Cryptography.Xmss.Unforgeability.queryH
       (EthLib.Cryptography.Xmss.Unforgeability.ofParam publicKey.parameter) .top key.val
-      (EthLib.Cryptography.Xmss.packBytes (EthLib.Cryptography.Xmss.Unforgeability.ofDigest root))
+      (EthLib.Cryptography.Xmss.Unforgeability.ofDigest root).toArray
       (EthLib.Cryptography.Xmss.Unforgeability.ofLayerSig part)
     | return false
   return decide (topRoot = EthLib.Cryptography.Xmss.Unforgeability.ofDigest publicKey.root)
@@ -253,7 +253,7 @@ def childNode (node : MerkleNode) (right : Bool) : MerkleNode :=
 def treeNode (parameter : PublicParameter) (secret : LeafIndex → ChainIndex → Digest)
     (levels : Nat) (node : MerkleNode) : m Digest :=
   EthLib.Cryptography.Merkle.node (nodeAt parameter .bottom)
-    (fun j => leafAt parameter secret (merkleNodeOfNat j)) levels node.val
+    (fun j => leafAt parameter secret (merkleNodeOfNat j)) ⟨levels, node.val⟩
 
 /-- The root of bottom tree `b`: node `b` of level `h`. -/
 def bottomRootNode (key : TopIndex) : MerkleNode :=
@@ -286,7 +286,7 @@ def topChildNode (node : TopNode) (right : Bool) : TopNode :=
 def topTreeNode (parameter : PublicParameter) (topSecret : TopIndex → ChainIndex → Digest)
     (levels : Nat) (node : TopNode) : m Digest :=
   EthLib.Cryptography.Merkle.node (nodeAt parameter .top)
-    (fun j => topLeafAt parameter topSecret (topNodeOfNat j)) levels node.val
+    (fun j => topLeafAt parameter topSecret (topNodeOfNat j)) ⟨levels, node.val⟩
 
 
 /-- The public root is node `0` of the top tree's level `h`. -/

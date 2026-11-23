@@ -36,7 +36,6 @@ The type universe covers unsigned integers, booleans, byte sequences, bitfields,
 Legacy positional unions, including their nullable first option, are not implemented.
 
 The reference is the Python implementation in [`ethereum/ssz-specs`](https://github.com/ethereum/ssz-specs), which serves as the official specification, together with [EIP-7495](https://eips.ethereum.org/EIPS/eip-7495), [EIP-7916](https://eips.ethereum.org/EIPS/eip-7916), and [EIP-8016](https://eips.ethereum.org/EIPS/eip-8016).
-The prose it replaced is the [last SSZ text in consensus-specs](https://github.com/ethereum/consensus-specs/blob/802485ec74a6986542bd53bf153189623aab440c/ssz/simple-serialize.md).
 
 A type is described by a *declaration*, and the data it holds by a *value*; the two are separate pieces of data.
 A declaration that comes from outside must be checked with `Desc.wellFormed` before it is used, because the low-level operations do not repeat that check at every recursive step.
@@ -89,7 +88,7 @@ By [admissibility](../Proofs/Ssz/Codec/DecodeFits.lean), successful decoding pro
 [Encoding sizes](../Proofs/Ssz/Codec/Size.lean) characterizes successful serialization of admissible values by structural byte counts and the four-byte offset bounds, and the encoding has exactly the predicted size.
 An admissible value can fail to serialize only through an offset overflow.
 
-For [defaults](../Proofs/Ssz/Type/DefaultLaws.lean), every successfully constructed default fits its declaration.
+For [defaults](../Proofs/Ssz/Codec/DefaultLaws.lean), every successfully constructed default fits its declaration.
 The executable admissibility check agrees with the logical predicate for well-formed declarations.
 
 [Byte aliases](../Proofs/Ssz/Codec/Aliases.lean) shows that byte arrays and sequences of eight-bit integers encode, decode, and root alike, refusals included.

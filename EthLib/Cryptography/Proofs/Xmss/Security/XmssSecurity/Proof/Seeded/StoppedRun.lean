@@ -2,12 +2,15 @@ module
 
 public import VCVio.OracleComp.EvalDist.Sum
 public import EthLib.Cryptography.Proofs.Xmss.Security.XmssSecurity.Proof.RandomizedStatement
+public import EthLib.Cryptography.Proofs.HashSig.ProgrammedTable
 
 @[expose] public section
 
 open OracleComp OracleSpec
 
 namespace XmssSecurity.Seeded
+
+export EthLib.Cryptography.HashSig (run'_query_bind)
 
 set_option backward.isDefEq.respectTransparency false
 
@@ -43,14 +46,6 @@ theorem stopBefore_query_bind {α : Type} (bad : OracleWorld.Domain → Prop)
         let answer ← liftM (OracleWorld.query input)
         stopBefore bad (next answer)) := rfl
 
-theorem run'_query_bind {α : Type} (input : OracleWorld.Domain)
-    (next : OracleWorld.Range input → OracleComp OracleWorld α)
-    (cache : QueryCache HashSpec) :
-    (simulateQ romImpl (liftM (OracleWorld.query input) >>= next)).run' cache =
-      ((romImpl input).run cache >>= fun result =>
-        (simulateQ romImpl (next result.1)).run' result.2) := by
-  simp only [simulateQ_bind, simulateQ_spec_query, StateT.run'_eq, StateT.run_bind, map_bind]
-
 theorem probEvent_stopBefore_le {α : Type} (bad : OracleWorld.Domain → Prop)
     [DecidablePred bad] (computation : OracleComp OracleWorld α)
     (cache : QueryCache HashSpec) (event : α → Prop) :
@@ -64,7 +59,7 @@ theorem probEvent_stopBefore_le {α : Type} (bad : OracleWorld.Domain → Prop)
       split
       · simp
       · simp only [run'_query_bind, OracleComp.prEvent_bind_eq_tsum]
-        exact ENNReal.tsum_le_tsum fun result => mul_le_mul' le_rfl (ih result.1 result.2)
+        exact tsum_le_tsum fun result => mul_le_mul' le_rfl (ih result.1 result.2)
 
 theorem probEvent_le_stopBefore_add_failure {α : Type} (bad : OracleWorld.Domain → Prop)
     [DecidablePred bad] (computation : OracleComp OracleWorld α)
@@ -80,8 +75,8 @@ theorem probEvent_le_stopBefore_add_failure {α : Type} (bad : OracleWorld.Domai
       split
       · simp
       · simp only [run'_query_bind, OracleComp.prEvent_bind_eq_tsum, OracleComp.prEvent_bind_eq_tsum,
-          ← ENNReal.tsum_add]
-        exact ENNReal.tsum_le_tsum fun result =>
+          ← tsum_add]
+        exact tsum_le_tsum fun result =>
           (mul_le_mul' le_rfl (ih result.1 result.2)).trans_eq (mul_add ..)
 
 end XmssSecurity.Seeded

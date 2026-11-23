@@ -1,7 +1,7 @@
 module
 
 public import EthLib.Base.Bytes
-public import EthLib.Base.Exports.Proofs.PyValue
+public import EthLib.Base.Exports.PyValue
 public import EthLib.Execution.Evm.Call.ContractAddress
 public import EthLib.Execution.Evm.Gas.Memory
 public import EthLib.Execution.Evm.Op
@@ -9,6 +9,7 @@ public import EthLib.Execution.Evm.Instructions.StackN
 public import EthLib.Execution.Evm.Instructions.Arithmetic
 public import EthLib.Execution.Evm.Instructions.Bitwise
 public import EthLib.Execution.Evm.Instructions.Comparison
+public import EthLib.Serialization.Exports.Rlp
 
 /-!
 # `Exports.Evm`
@@ -36,15 +37,15 @@ A sender or a salt of the wrong length fails with a code above every code of an 
 
 namespace EthLib.Execution.Evm.Exports
 
-open EthLib.Base (Address U256 bytesToNat readBytes)
-open EthLib.Exports (Result PyValue pyExport)
+open EthLib.Base (Address U256 bytesToNat)
+open EthLib.Exports (ExportError Result PyValue pyExport rejectArgument toResult)
 
 /-- Why an export rejects an argument: the argument has the wrong length. -/
 inductive ArgumentError where
-  /-- A sender is not an address of 20 bytes. -/
-  | senderLength
-  /-- A salt of CREATE2 is not a word of 32 bytes. -/
-  | saltLength
+  /-- A sender has `size` bytes, not the 20 bytes of an address. -/
+  | senderLength (size : Nat)
+  /-- A salt of CREATE2 has `size` bytes, not the 32 bytes of a word. -/
+  | saltLength (size : Nat)
   deriving Repr, DecidableEq
 
 /-- The stable code of an error, one per constructor, for the C exports.
@@ -55,13 +56,18 @@ A new constructor takes a new code, so that each code keeps its meaning.
 
 Codes 101 and 102 stay unused, so that no code takes a second meaning. -/
 def ArgumentError.code : ArgumentError → UInt32
-  | .senderLength => 103
-  | .saltLength => 104
+  | .senderLength _ => 103
+  | .saltLength _ => 104
 
 /-- The message of an error, as the bindings raise it. -/
 def ArgumentError.message : ArgumentError → String
-  | .senderLength => "the sender must be 20 bytes"
-  | .saltLength => "the salt must be 32 bytes"
+  | .senderLength size => s!"the sender must be 20 bytes, not {size}"
+  | .saltLength size => s!"the salt must be 32 bytes, not {size}"
+
+/-- An argument of the wrong length reaches Python with its code and its message. -/
+instance : ExportError ArgumentError where
+  code := ArgumentError.code
+  message := ArgumentError.message
 
 /-- The code and the message of an error, as an export returns them. -/
 def ArgumentError.toResult (e : ArgumentError) : UInt32 × String :=
@@ -72,8 +78,8 @@ def wordOf (bytes : ByteArray) : U256 :=
   BitVec.ofNat 256 (bytesToNat bytes.toList)
 
 /-- The word of exactly 32 big-endian bytes, or the given error for any other length. -/
-def readWord (error : ArgumentError) (bytes : ByteArray) : Result U256 :=
-  if bytes.size = 32 then .ok (wordOf bytes) else .error error.toResult
+def readWord (error : Nat → ArgumentError) (bytes : ByteArray) : Result U256 :=
+  if bytes.size = 32 then .ok (wordOf bytes) else toResult none (.error (error bytes.size))
 
 /-- The word that the instruction of an opcode pushes, for operands from the top of the stack.
 
@@ -118,11 +124,11 @@ An opcode outside the table fails with code 0, since no Lean error type covers i
 def wordOpOf (args : UInt8 × List U256) : Result U256 := do
   let (opcode, operands) := args
   -- The count comes first, so too many operands fail even with an opcode outside the table.
-  if operands.length > 3 then throw (0, "an instruction takes at most 3 operands")
+  if operands.length > 3 then rejectArgument none "an instruction takes at most 3 operands"
   let operand (i : Nat) := operands.getD i 0
   match (Op.decode opcode).bind fun op => wordOp op (operand 0) (operand 1) (operand 2) with
   | some w => .ok w
-  | none => .error (0, s!"opcode {opcode} does not push a word of its operands alone")
+  | none => rejectArgument none s!"opcode {opcode} does not push a word of its operands alone"
 
 /-- The word that the instruction of an opcode pushes, for at most three operands.
 
@@ -148,7 +154,7 @@ def immediateDepthsExport (opcode immediate : UInt8) : Result ByteArray :=
     | _ => none
   match depths with
   | some ds => .ok ⟨(ds.map Nat.toUInt8).toArray⟩
-  | none => .error (0, s!"byte {immediate} encodes no depth of opcode {opcode}")
+  | none => rejectArgument none s!"byte {immediate} encodes no depth of opcode {opcode}"
 
 /-- The price of a memory of a given size in bytes. -/
 @[export eth_evm_memory_gas_cost]
@@ -172,8 +178,7 @@ def extendMemoryExport (args : PyValue) : Result PyValue :=
 
 /-- The address of exactly 20 bytes, or the error for any other length. -/
 def readAddress (bytes : ByteArray) : Result Address :=
-  if h : bytes.size = 20 then .ok (readBytes bytes 0 20 (by omega))
-  else .error ArgumentError.senderLength.toResult
+  toResult none (Base.exactBytes 20 bytes ArgumentError.senderLength)
 
 /-- The address of the contract that a sender makes with CREATE at a nonce.
 
@@ -181,8 +186,7 @@ The sender is an address of 20 bytes. -/
 def createAddressOf (args : ByteArray × Nat) : Result ByteArray := do
   let (sender, nonce) := args
   let sender ← readAddress sender
-  (createAddress sender nonce).map (fun a => ⟨a.toArray⟩)
-    |>.mapError fun e => (e.code, s!"create preimage rejected: {reprStr e}")
+  toResult "create preimage rejected" ((createAddress sender nonce).map fun a => ⟨a.toArray⟩)
 
 /-- The address of the contract that a sender makes with CREATE at a nonce.
 

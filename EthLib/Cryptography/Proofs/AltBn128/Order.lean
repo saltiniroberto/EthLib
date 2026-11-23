@@ -18,7 +18,7 @@ At most `2 p + 1 < 3 q` points exist, so the count is `q` or `2 q`.
 
 A count of `2 q` needs a point `(x, 0)` with `x^3 = -3`.
 
-Euler's criterion rules it out: `(-3)^((p - 1) / 3) != 1`, since `p = 1 mod 3`.
+Euler's criterion rules it out: `(-3)^((p - 1) / 3)` is not 1, since `p = 1 mod 3`.
 -/
 
 @[expose] public section
@@ -119,7 +119,7 @@ theorem cube_ne_neg_three (x : ZMod Fp.modulus) : x * x * x ≠ -3 := by
       show 3 * ((Fp.modulus - 1) / 3) = Fp.modulus - 1 by decide]
     exact ZMod.pow_card_sub_one_eq_one hx
   -- The kernel computes that power, and it is not `1`.
-  rw [PowMod.natCast_pow_eq_one_iff _ 256 _ _ (by decide)] at hpow
+  rw [PowMod.natCast_pow_eq_one_iff] at hpow
   exact absurd hpow (by decide)
 
 /-- No point has order 2. -/

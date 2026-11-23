@@ -25,36 +25,29 @@ open Constants
 
 /-! ## Encoding -/
 
-/-- Encode a public key as 32 bytes.
-
-```text
-    [ root: 16 | public parameter: 16 ]
-```
--/
+/-- Encode a public key as 32 bytes: the 16-byte root, then the 16-byte public parameter. -/
 def encodePublicKey (pk : PublicKey) : ByteArray :=
-  packBytes pk.root ++ packBytes pk.publicParam
+  packBytes pk.root.bytes ++ packBytes pk.publicParam.bytes
 
 /-- Encode one layer's signature as 1200 bytes.
 
-```text
-    [ randomizer: 16 | 58 chain values: 928 | 16 siblings: 256 ]
-```
+The bytes are the randomizer (16), the 58 chain values (928), then the 16 siblings (256).
 
 - Chain values are in chain order.
 - Siblings run from the leaf up to the root.
 -/
 def encodeLayerSignature (sig : LayerSignature) : ByteArray :=
-  packBytes sig.randomizer ++ packDigests sig.chainValues ++ packDigests sig.path
+  -- `rho | y_0 | ... | y_{v-1} | pi_0 | ... | pi_{h-1}`, `16 (1 + v + h) = 1200` bytes.
+  packBytes sig.randomizer.bytes ++ packDigests sig.chainValues ++ packDigests sig.path
 
 /-- Encode a signature as 2404 bytes.
 
-```text
-    [ leaf index: 4 | bottom layer: 1200 | top layer: 1200 ]
-```
+The bytes are the leaf index (4), the bottom layer (1200), then the top layer (1200).
 
 The leaf index is a little-endian 32-bit word.
 -/
 def encodeSignature (sig : Signature) : ByteArray :=
+  -- `LE_32(idx)`, the bottom layer's signature, then the top layer's: `4 + 1200 + 1200`.
   packBytes (uintToBytes LEAF_INDEX_SIZE sig.leafIndex.toNat)
     ++ encodeLayerSignature sig.bottom ++ encodeLayerSignature sig.top
 
@@ -65,25 +58,22 @@ def encodeSignature (sig : Signature) : ByteArray :=
 Length is the only check: every 32-byte string is a public key.
 -/
 def decodePublicKey (bytes : ByteArray) : Except XmssError PublicKey :=
-  if h : bytes.size = PUB_KEY_SIZE then
+  if bytes.size = PUB_KEY_SIZE then
     -- The two fields sit at offsets 0 and 16.
-    .ok { root := readBytes bytes 0 DIGEST_LEN (by simp only [h, PUB_KEY_SIZE]; omega)
-          publicParam := readBytes bytes DIGEST_LEN PUBLIC_PARAM_LEN
-            (by simp only [h, PUB_KEY_SIZE]; omega) }
+    .ok { root := Hash.Keccak.Lanes2.read bytes 0
+          publicParam := Hash.Keccak.Lanes2.read bytes DIGEST_LEN }
   else
     .error (.badPublicKeySize bytes.size)
 
-/-- Read one layer's signature from the 1200 bytes at an offset. -/
+/-- Read one layer's signature from the 1200 bytes at an offset, which the buffer holds.
+
+The caller proves that the buffer holds them; past its end, the bytes would read as zero. -/
 def decodeLayerSignature (bytes : ByteArray) (offset : Nat)
-    (h : offset + LAYER_SIG_SIZE ≤ bytes.size) : LayerSignature where
+    (_h : offset + LAYER_SIG_SIZE ≤ bytes.size) : LayerSignature where
   -- The randomizer, then the chain values at 16, then the siblings at 944.
-  randomizer := readBytes bytes offset RANDOMIZER_LEN
-    (by simp only [LAYER_SIG_SIZE] at h; omega)
-  chainValues := splitDigests (readBytes bytes (offset + RANDOMIZER_LEN) (V * DIGEST_LEN)
-    (by simp only [LAYER_SIG_SIZE] at h; omega))
-  path := splitDigests
-    (readBytes bytes (offset + RANDOMIZER_LEN + V * DIGEST_LEN) (LAYER_HEIGHT * DIGEST_LEN)
-      (by simp only [LAYER_SIG_SIZE] at h; omega))
+  randomizer := Hash.Keccak.Lanes2.read bytes offset
+  chainValues := splitDigests V bytes (offset + RANDOMIZER_LEN)
+  path := splitDigests LAYER_HEIGHT bytes (offset + RANDOMIZER_LEN + V * DIGEST_LEN)
 
 /-- Read the leaf index from the first 4 bytes of a buffer, as a little-endian word. -/
 def decodeLeafIndex (bytes : ByteArray) (h : LEAF_INDEX_SIZE ≤ bytes.size) : LeafIndex :=

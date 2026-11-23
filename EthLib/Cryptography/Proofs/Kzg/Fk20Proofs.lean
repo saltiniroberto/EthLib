@@ -50,10 +50,6 @@ open EthLib.Cryptography.Kzg.Constants
 open EthLib.Cryptography.Kzg.BitReversal
 open scoped EthLib.Cryptography.Bls.Fr
 
-private theorem fr_pow_zero (a : Fr) : a ^ 0 = 1 := pow_zero a
-private theorem fr_pow_succ (a : Fr) (n : Nat) : a ^ (n + 1) = a ^ n * a := pow_succ a n
-private theorem fr_pow_add (a : Fr) (m n : Nat) : a ^ (m + n) = a ^ m * a ^ n := pow_add a m n
-private theorem fr_pow_mul (a : Fr) (m n : Nat) : a ^ (m * n) = (a ^ m) ^ n := pow_mul a m n
 private theorem fr_mul_pow (a b : Fr) (n : Nat) : (a * b) ^ n = a ^ n * b ^ n := mul_pow a b n
 private theorem fr_one_pow (n : Nat) : (1 : Fr) ^ n = 1 := one_pow n
 private theorem fr_mul_one (a : Fr) : a * 1 = a := mul_one a
@@ -90,7 +86,7 @@ theorem compress_eq_of_toPoint_eq {p₁ p₂ : G1}
   have hrep : q₁ = q₂ := by
     have hpt : G1.toPoint q₁ = G1.toPoint q₂ := hpt₁.trans (heq.trans hpt₂.symm)
     -- Decompression returns either `zero` or a point `(x, y, 1)`.
-    have hshape (b : ByteArray) (q : G1) (hu : G1.uncompress b = .ok q) :
+    have hshape (b : Vector UInt8 48) (q : G1) (hu : G1.uncompress b = .ok q) :
         q = G1.zero ∨ (q.z = Bls.Fp.one ∧ ¬ q.isInfinity = true) := by
       obtain rfl | ⟨x, y, -, -, rfl⟩ := G1.uncompress_eq_zero_or hu
       · exact Or.inl rfl
@@ -151,7 +147,7 @@ theorem compressG1_eq_of_toPoint_eq {p₁ p₂ : G1}
     (hv₁ : G1.Valid p₁) (hv₂ : G1.Valid p₂)
     (heq : G1.toPoint p₁ = G1.toPoint p₂) :
     compressG1 p₁ = compressG1 p₂ :=
-  Vector.toArray_inj.mp (congrArg ByteArray.data (compress_eq_of_toPoint_eq hv₁ hv₂ heq))
+  compress_eq_of_toPoint_eq hv₁ hv₂ heq
 
 /-! ## Cell coset vanishing polynomial: `Z_k(X) = X^64 - c_k` -/
 
@@ -188,7 +184,7 @@ theorem evalPolyAt_binomialVanishing {n : Nat} (hn : 0 < n) (c x : Fr) :
     rw [getElem!_binomialVanishing (m + 1) c (k + 1) (by omega),
       ite_eq_right (by omega), ite_eq_right (by omega)]
     exact fr_zero_mul _
-  rw [hmid, fr_zero_add, fr_pow_zero, fr_mul_one,
+  rw [hmid, fr_zero_add, pow_zero, fr_mul_one,
     show (Fr.one : Fr) = 1 from rfl, fr_one_mul]
   exact (add_comm (-c) (x ^ (m + 1))).trans (sub_eq_add_neg (x ^ (m + 1)) c).symm
 
@@ -214,8 +210,8 @@ theorem cosetShift_pow_cell (cellIndex : CellIndex) (hci : cellIndex < CELLS_PER
       getElem!_pos (computeRootsOfUnity FIELD_ELEMENTS_PER_EXT_BLOB) _
         (by rw [size_computeRootsOfUnity]; exact Nat.lt_trans (reverseBits_lt_two_pow cellIndex 7) (by decide)),
       getElem_computeRootsOfUnity]
-  rw [hdom, ← fr_pow_mul, Nat.mul_comm (reverseBits cellIndex CELLS_PER_EXT_BLOB),
-    fr_pow_mul, domainRoot_extended_pow_cell,
+  rw [hdom, ← pow_mul, Nat.mul_comm (reverseBits cellIndex CELLS_PER_EXT_BLOB),
+    pow_mul, domainRoot_extended_pow_cell,
     getElem!_pos (computeRootsOfUnity CELLS_PER_EXT_BLOB) _
       (by rw [size_computeRootsOfUnity]; exact reverseBits_lt_two_pow cellIndex 7),
     getElem_computeRootsOfUnity]
@@ -307,7 +303,7 @@ theorem vanishingPolynomialcoeff_cosetForCell
       getElem!_cosetForCell_eq_shift_mul_root hcoset k hk64, fr_mul_pow]
     have hroot : (domainRoot FIELD_ELEMENTS_PER_CELL ^ reverseBits k FIELD_ELEMENTS_PER_CELL) ^
         FIELD_ELEMENTS_PER_CELL = 1 := by
-      rw [← fr_pow_mul, Nat.mul_comm, fr_pow_mul, hprim64, fr_one_pow]
+      rw [← pow_mul, Nat.mul_comm, pow_mul, hprim64, fr_one_pow]
     rw [hroot, fr_mul_one]
     exact fr_sub_self _
 
@@ -381,8 +377,8 @@ private theorem coeff_toeplitzQuotient_mul_binomial (f : PolynomialCoeff) {n : N
     have hbin_poly :
         coefficientPolynomial (binomialVanishing n c) =
           Polynomial.X ^ n - Polynomial.C c := by
-      apply Polynomial.ext
-      intro k
+      apply AddMonoidAlgebra.ext
+      ext1 k
       rw [coeff_coefficientPolynomial, Polynomial.coeff_sub,
         Polynomial.coeff_X_pow, Polynomial.coeff_C]
       by_cases hk : k < n + 1
@@ -400,8 +396,8 @@ private theorem coeff_toeplitzQuotient_mul_binomial (f : PolynomialCoeff) {n : N
         exact (fr_sub_zero 0).symm
     rw [hbin_poly]
     -- Check coefficient by coefficient for every degree `j`.
-    apply Polynomial.ext
-    intro j
+    apply AddMonoidAlgebra.ext
+    ext1 j
     set q := toeplitzQuotient f n c
     rw [Polynomial.coeff_add, coeff_coefficientPolynomial f, coeff_coefficientPolynomial remArr,
       mul_sub, Polynomial.coeff_sub, Polynomial.coeff_mul_X_pow',
@@ -429,7 +425,7 @@ private theorem coeff_toeplitzQuotient_mul_binomial (f : PolynomialCoeff) {n : N
           shift_lt_shifts hn (t := j - n) (e := 0) (by omega)
         obtain ⟨m, hm⟩ : ∃ m, (f.size + n - 1) / n - 1 = m + 1 :=
           ⟨(f.size + n - 1) / n - 1 - 1, by omega⟩
-        rw [hm, Finset.sum_range_succ', fr_pow_zero, fr_one_mul,
+        rw [hm, Finset.sum_range_succ', pow_zero, fr_one_mul,
           show j - n + n * (0 + 1) = j by omega, ite_eq_left hjf]
         by_cases hj2 : j < f.size - n
         · -- Both `q[j - n]!` and `q[j]!` are in bounds, and the `e = m` term of `q[j]!` vanishes.
@@ -453,7 +449,7 @@ private theorem coeff_toeplitzQuotient_mul_binomial (f : PolynomialCoeff) {n : N
               omega
             rw [hidx]
             by_cases hk_in : j + n * (k + 1) < f.size
-            · rw [ite_eq_left hk_in, ite_eq_left hk_in, fr_pow_succ,
+            · rw [ite_eq_left hk_in, ite_eq_left hk_in, pow_succ,
                 Bls.Fr.mul_comm (c ^ k) c, Bls.Fr.mul_assoc]
             · rw [ite_eq_right hk_in, ite_eq_right hk_in, fr_mul_zero]
           rw [hmatch]
@@ -1014,7 +1010,7 @@ theorem fk20CellsAndProofs_eq_perCellSpec
           ∑ i ∈ Finset.range N, (c ^ i).val • G1.toPoint padded[i]! := by
       change (∑ i ∈ Finset.range N, (ω ^ (i * r)).val • G1.toPoint padded[i]!) = _
       refine Finset.sum_congr rfl fun i _ => ?_
-      rw [Nat.mul_comm i r, fr_pow_mul, ← hc_eq_ωr]
+      rw [Nat.mul_comm i r, pow_mul, ← hc_eq_ωr]
     exact hpow_rw.trans hsum_eq
   -- Index into `(bitReversalPermutation (fftG1 ...)).map compressG1`.
   set fftOut := fftG1 padded (computeRootsOfUnity N)

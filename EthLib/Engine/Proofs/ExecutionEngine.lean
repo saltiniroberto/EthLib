@@ -73,7 +73,8 @@ theorem decodeTransactions_of_toBlock {f : Fork}
   cases result
   exact decoded
 
-private theorem toOption_eq_some {ε α : Type} {x : Except ε α} {a : α}
+/-- A computation whose option holds a value has succeeded with that value. -/
+theorem toOption_eq_some {ε α : Type} {x : Except ε α} {a : α}
     (h : x.toOption = some a) : x = .ok a := by
   cases x <;> simp_all [Except.toOption]
 
@@ -204,28 +205,51 @@ theorem executionEngine_accepts_iff {chain : BlockChain}
     · simp [found, hBlock, sinceValue, deneb, hashes deneb]
     · simp [hBlock, transition, Except.toBool]
 
-/-- From Bellatrix to Gloas, the version of the method at a fork takes some fork. -/
-theorem exists_acceptsFork_newPayloadVersion (h : .bellatrix ≤ fork ∧ fork < .hegota) :
+/-- From Bellatrix to Fulu, the execution layer of a chain accepts a block's request as follows.
+
+From Electra, the request lists of the requests of the block must be well formed.
+
+The payload of the block must have a block at the active fork of the chain.
+
+From Deneb, that block reads the parent root of the latest block header of the state.
+
+From Deneb, its blob transactions carry the versioned hashes of the commitments of the block.
+
+They are the hashes of those commitments, in the order of the commitments.
+
+The block must pass the state transition of the chain. -/
+theorem executionEngine_accepts_newPayloadRequest_iff {chain : BlockChain}
+    {state : Consensus.BeaconState preset fork} {body : Consensus.BeaconBlockBody preset fork}
+    {bellatrix : .bellatrix ≤ fork ∧ fork < .glamsterdam} :
+    (executionEngine chain).verifyAndNotifyNewPayload (body.newPayloadRequest state bellatrix) =
+        .ok true ↔
+      ∃ requests : Since .pectra fork (List ByteArray),
+        (∀ electra : .pectra ≤ fork,
+          Consensus.getExecutionRequestsList (body.executionRequests ⟨electra, bellatrix.2⟩) =
+            .ok (requests electra)) ∧
+        ∃ f b, payloadBlock chain.config (body.executionPayload bellatrix)
+            (fun _ => state.latestBlockHeader.parentRoot) requests = some ⟨f, b⟩ ∧
+          (∀ deneb : .dencun ≤ fork, ExecutionPayload.blobVersionedHashes b.transactions =
+            (body.blobKzgCommitments ⟨deneb, bellatrix.2⟩).data.toList.map
+              Consensus.commitmentVersionedHash) ∧
+          ∃ post, stateTransition chain b (checkSeal := false) = .ok post := by
+  rw [executionEngine_accepts_iff]
+  simp only [Consensus.NewPayloadRequest.requestsList_eq_ok_iff]
+  refine exists_congr fun requests => and_congr Iff.rfl <| exists_congr fun f =>
+    exists_congr fun b => and_congr Iff.rfl <| and_congr ?_ Iff.rfl
+  exact forall_congr' fun deneb => by simp [Consensus.BeaconBlockBody.newPayloadRequest]
+
+/-- From Bellatrix on, the version of the method at a fork takes some fork. -/
+theorem exists_acceptsFork_newPayloadVersion (h : .bellatrix ≤ fork) :
     ∃ f, acceptsFork (newPayloadVersion fork) f = true := by
-  obtain ⟨low, high⟩ := h
   cases fork <;> first
-    | exact absurd low (by decide)
-    | exact absurd high (by decide)
+    | exact absurd h (by decide)
     | exact ⟨.paris, by decide⟩
     | exact ⟨.shapella, by decide⟩
     | exact ⟨.dencun, by decide⟩
     | exact ⟨.pectra, by decide⟩
     | exact ⟨.glamsterdam, by decide⟩
-
-/-- From Heze, no payload of the beacon chain has a block here. -/
-theorem payloadBlock_of_hegota_le (h : .hegota ≤ fork) {config : ChainConfig}
-    {p : Consensus.ExecutionPayload preset fork} {root : Since .dencun fork Consensus.Root}
-    {requests : Since .pectra fork (List ByteArray)} :
-    payloadBlock config p root requests = none := by
-  have zero : newPayloadVersion fork = 0 := by simp [newPayloadVersion, h]
-  unfold payloadBlock
-  cases anyPayloadOf p <;> cases config.activeFork p.blockNumber.toNat p.timestamp.toNat <;>
-    simp [zero, acceptsFork]
+    | exact ⟨.hegota, by decide⟩
 
 /-- A payload with a block has it at a fork that the version of the method takes. -/
 theorem acceptsFork_of_payloadBlock {config : ChainConfig}
@@ -235,16 +259,26 @@ theorem acceptsFork_of_payloadBlock {config : ChainConfig}
     acceptsFork (newPayloadVersion fork) f = true :=
   (payloadBlock_spec h).1
 
-/-- From Gloas, a payload with a block has a block of Amsterdam. -/
-theorem fork_of_payloadBlock_of_gloas (gloas : .glamsterdam ≤ fork) {config : ChainConfig}
+/-- From Heze, a payload with a block has a block of Bogota. -/
+theorem fork_of_payloadBlock_of_heze (heze : .hegota ≤ fork) {config : ChainConfig}
+    {p : Consensus.ExecutionPayload preset fork}
+    {root : Since .dencun fork Consensus.Root} {requests : Since .pectra fork (List ByteArray)}
+    {f : Fork} {b : Block f Transaction} (h : payloadBlock config p root requests = some ⟨f, b⟩) :
+    f = .hegota := by
+  have version : newPayloadVersion fork = 6 := by simp [newPayloadVersion, heze]
+  have accepted := acceptsFork_of_payloadBlock h
+  rw [version] at accepted
+  simpa [acceptsFork] using accepted
+
+/-- At Gloas, a payload with a block has a block of Amsterdam. -/
+theorem fork_of_payloadBlock_of_gloas (gloas : .glamsterdam ≤ fork) (before : fork < .hegota)
+    {config : ChainConfig}
     {p : Consensus.ExecutionPayload preset fork}
     {root : Since .dencun fork Consensus.Root} {requests : Since .pectra fork (List ByteArray)}
     {f : Fork} {b : Block f Transaction} (h : payloadBlock config p root requests = some ⟨f, b⟩) :
     f = .glamsterdam := by
-  -- From Heze no payload has a block, so the fork is Gloas.
-  by_cases heze : .hegota ≤ fork
-  · rw [payloadBlock_of_hegota_le heze] at h
-    cases h
+  -- Before Heze the fork is Gloas, which calls version 5.
+  have heze : ¬.hegota ≤ fork := Nat.not_le.mpr before
   have version : newPayloadVersion fork = 5 := by simp [newPayloadVersion, heze, gloas]
   have accepted := acceptsFork_of_payloadBlock h
   rw [version] at accepted
@@ -274,14 +308,15 @@ theorem header_of_payloadBlock_of_gloas (gloas : .glamsterdam ≤ fork) {config 
   exact ⟨(ExecutionPayload.toBlock_slotNumber hBlock (Nat.le_refl _)).trans sl',
     (ExecutionPayload.toBlock_accessList hBlock (Nat.le_refl _)).2.trans (congrArg _ acc')⟩
 
-/-- From Gloas, the execution layer accepts exactly the requests whose Amsterdam block passes.
+/-- At Gloas, the execution layer accepts exactly the requests whose Amsterdam block passes.
 
 The request lists must be well formed, and the block of the payload must exist.
 
 The blob transactions of that block must carry the versioned hashes of the request, in order.
 
 The block must pass the state transition of the chain. -/
-theorem executionEngine_accepts_iff_of_gloas (gloas : .glamsterdam ≤ fork) {chain : BlockChain}
+theorem executionEngine_accepts_iff_of_gloas (gloas : .glamsterdam ≤ fork)
+    (before : fork < .hegota) {chain : BlockChain}
     {request : Consensus.NewPayloadRequest preset fork} :
     (executionEngine chain).verifyAndNotifyNewPayload request = .ok true ↔
       ∃ requests, request.requestsList = .ok requests ∧ ∃ b : Block .glamsterdam Transaction,
@@ -293,7 +328,7 @@ theorem executionEngine_accepts_iff_of_gloas (gloas : .glamsterdam ≤ fork) {ch
   rw [executionEngine_accepts_iff]
   constructor
   · rintro ⟨requests, found, f, b, hBlock, hashes, post, transition⟩
-    obtain rfl := fork_of_payloadBlock_of_gloas gloas hBlock
+    obtain rfl := fork_of_payloadBlock_of_gloas gloas before hBlock
     exact ⟨requests, found, b, hBlock, hashes _, post, transition⟩
   · rintro ⟨requests, found, b, hBlock, hashes, post, transition⟩
     exact ⟨requests, found, _, b, hBlock, fun _ => hashes, post, transition⟩
@@ -335,6 +370,32 @@ theorem sinceValue_of_atFork {p : Json.AnyPayload} {q : ExecutionPayload fork}
   obtain ⟨w, hw, b, hb, e, he, h⟩ := h
   cases h
   exact ⟨Json.sinceValue_of_since hw, Json.sinceValue_of_since hb, Json.sinceValue_of_since he⟩
+
+/-- Two structures that give one payload at some fork give the same result at every fork.
+
+The payload at a fork reads only the common fields and the optional fields, never the version. -/
+theorem atFork_eq_of_atFork {p₁ p₂ : Json.AnyPayload} {f : Fork} {q : ExecutionPayload f}
+    (h₁ : p₁.atFork f = .ok q) (h₂ : p₂.atFork f = .ok q) (g : Fork) :
+    p₁.atFork g = p₂.atFork g := by
+  obtain ⟨w₁, b₁, e₁⟩ := sinceValue_of_atFork h₁
+  obtain ⟨w₂, b₂, e₂⟩ := sinceValue_of_atFork h₂
+  -- The common fields are those of the payload at the fork, on both sides.
+  have common : p₁.common = p₂.common := by
+    obtain ⟨_, c₁, _, _, _⟩ := p₁
+    obtain ⟨_, c₂, _, _, _⟩ := p₂
+    simp only [Json.AnyPayload.atFork, bind_ok_iff] at h₁ h₂
+    obtain ⟨_, _, _, _, _, _, r₁⟩ := h₁
+    obtain ⟨_, _, _, _, _, _, r₂⟩ := h₂
+    cases r₁
+    simp only [pure, Except.pure, Except.ok.injEq, ExecutionPayload.mk.injEq] at r₂
+    obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _, -⟩ := r₂
+    cases c₁
+    cases c₂
+    simp_all only
+    -- The fields from later forks are absent at Paris on both sides.
+    congr <;> funext h <;> exact absurd h (by decide)
+  unfold Json.AnyPayload.atFork
+  rw [common, ← w₁.symm.trans w₂, ← b₁.symm.trans b₂, ← e₁.symm.trans e₂]
 
 /-- A decoded payload takes a fork exactly when its version is the version of that fork.
 

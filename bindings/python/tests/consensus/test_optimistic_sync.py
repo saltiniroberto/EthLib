@@ -82,12 +82,23 @@ def test_optimistic_candidate_with_another_number_of_slots():
 
 
 @pytest.mark.parametrize(
-    ("candidate", "code"),
-    [(block(3, bytes([7]) * 32), 2), (block(2**64 - 1, RG), 7)],
+    ("candidate", "code", "message"),
+    [
+        (
+            block(3, bytes([7]) * 32),
+            2,
+            f"optimistic sync: no known block has root 0x{'07' * 32}",
+        ),
+        (
+            block(2**64 - 1, RG),
+            7,
+            "optimistic sync: arithmetic: EthLib.Base.ArithError.overflow",
+        ),
+    ],
     ids=["unknown parent", "overflow"],
 )
-def test_optimistic_candidate_rejected(candidate: bytes, code: int):
-    with raises(ERROR, f"optimistic sync failed with code {code}") as info:
+def test_optimistic_candidate_rejected(candidate: bytes, code: int, message: str):
+    with raises(ERROR, message) as info:
         consensus.is_optimistic_candidate_block("mainnet", FORK, BLOCKS, 0, candidate)
     assert info.value.code == code
 
@@ -111,11 +122,12 @@ def test_latest_verified_ancestor(optimistic: list, start: bytes, expected: byte
 
 def test_latest_verified_ancestor_rejected():
     orphan = block(4, bytes([7]) * 32)
-    with raises(ERROR, "optimistic sync failed with code 2") as info:
+    with raises(ERROR, f"optimistic sync: no known block has root 0x{'09' * 32}") as info:
         consensus.latest_verified_ancestor("mainnet", FORK, BLOCKS, [], bytes([9]) * 32)
     assert info.value.code == 2
-    with raises(ERROR, "optimistic sync failed with code 2"):
+    with raises(ERROR, f"optimistic sync: no known block has root 0x{'07' * 32}") as info:
         consensus.latest_verified_ancestor("mainnet", FORK, [orphan], [root(orphan)], root(orphan))
+    assert info.value.code == 2
 
 
 @pytest.mark.parametrize(
@@ -140,10 +152,11 @@ def test_invalidated_payload(first: bytes, expected: list):
 
 def test_transitions_rejected():
     lower = block(1, RB)
-    with raises(ERROR, "optimistic sync failed with code 6") as info:
+    message = f"optimistic sync: the block 0x{root(lower).hex()} has a parent at no lower slot"
+    with raises(ERROR, message) as info:
         consensus.on_valid_payload("mainnet", FORK, [*BLOCKS, lower], [], root(lower))
     assert info.value.code == 6
-    with raises(ERROR, "optimistic sync failed with code 2") as info:
+    with raises(ERROR, f"optimistic sync: no known block has root 0x{'09' * 32}") as info:
         consensus.on_invalidated_payload("mainnet", FORK, BLOCKS, [bytes([9]) * 32], RA)
     assert info.value.code == 2
 
@@ -287,7 +300,8 @@ def test_gloas_latest_verified_ancestor(optimistic: list[bytes], status: int, ex
 )
 def test_gloas_no_verified_ancestor(optimistic: list[bytes], start: bytes, status: int):
     # Every payload that the node holds is optimistic, or it holds none.
-    with raises(ERROR, "optimistic sync failed with code 39") as info:
+    message = f"optimistic sync: the payload of the block 0x{GG.hex()} is not verified"
+    with raises(ERROR, message) as info:
         consensus.latest_verified_ancestor(
             "minimal", GLOAS_FORK, GLOAS_BLOCKS, optimistic, start, payload_status=status
         )
@@ -483,10 +497,98 @@ def test_gloas_optimistic_head(roots: list[bytes], status: int):
     ids=["full", "empty", "pending"],
 )
 def test_gloas_head_not_optimistic(roots: list[bytes], status: int):
-    # The second case of an optimistic node is not yet specified from Gloas.
-    with raises(ERROR, "optimistic sync failed with code 24") as info:
-        _gloas_optimistic_node(roots, status)
-    assert info.value.code == 24
+    # No payload was found invalid, so the second case cannot hold.
+    assert _gloas_optimistic_node(roots, status) is False
+
+
+# The signed envelope of block 1, whose payload block 2 builds on.
+GLOAS_ENVELOPE_1 = _pinned_file(
+    "execution_payload_envelope_0x131ab93ae0a85b4dae8dd199874c24c136c7c8645f3a7b21bb0135cff179e47a"
+)
+
+
+def _envelope_parent_hash(signed: bytes) -> bytes:
+    """The parent hash of the payload of a signed envelope: the hash its block builds on."""
+    (message,) = struct.unpack_from("<I", signed)
+    (payload,) = struct.unpack_from("<I", signed, message)
+    return signed[message + payload : message + payload + 32]
+
+
+def _gloas_invalid_steps(latest_valid_hash: bytes | None) -> list[consensus.ForkChoiceStep]:
+    """The steps of the case, then the envelope of block 1 again with an invalid verdict."""
+    return [
+        *_pinned_steps(),
+        ("payload", ("INVALID", latest_valid_hash)),
+        ("execution_payload", GLOAS_ENVELOPE_1),
+    ]
+
+
+# Block 1 builds on the anchor, whose parent the store lacks.
+# A hash naming the payload under block 1 is found from block 1's bid alone.
+@pytest.mark.parametrize(
+    "latest_valid_hash",
+    [None, _envelope_parent_hash(GLOAS_ENVELOPE_1)],
+    ids=["no hash", "parent hash"],
+)
+def test_gloas_invalid_payload_drops_the_blocks_built_on_it(latest_valid_hash: bytes | None):
+    reads = consensus.fork_choice(
+        "minimal",
+        GLOAS_FORK,
+        _pinned_file("anchor_state"),
+        _pinned_file("anchor_block"),
+        [*_gloas_invalid_steps(latest_valid_hash), ("checks", False)],
+        verify=False,
+    )
+    # Block 2 left with the payload of block 1, and block 1 without it is the head.
+    read = reads[-1][0]
+    assert isinstance(read, dict)
+    assert read["head"] == {"slot": 1, "root": BLOCK_1, "payload_status": EMPTY}
+
+
+# The offset of the block hash in the fixed part of a Gloas payload.
+BLOCK_HASH_OFFSET = 32 + 20 + 32 + 32 + 256 + 32 + 8 * 4 + 4 + 32
+
+
+def _envelope_block_hash(signed: bytes) -> bytes:
+    """The block hash of the payload of a signed envelope."""
+    (message,) = struct.unpack_from("<I", signed)
+    (payload,) = struct.unpack_from("<I", signed, message)
+    start = message + payload + BLOCK_HASH_OFFSET
+    return signed[start : start + 32]
+
+
+def test_gloas_hash_of_the_payload_itself_removes_nothing():
+    # The envelope fails, but the hash names its own payload as valid, so block 2 stays.
+    # The payload hash in these vectors is zero, while the hash it builds on is not.
+    reads = consensus.fork_choice(
+        "minimal",
+        GLOAS_FORK,
+        _pinned_file("anchor_state"),
+        _pinned_file("anchor_block"),
+        [*_gloas_invalid_steps(_envelope_block_hash(GLOAS_ENVELOPE_1)), ("checks", False)],
+        verify=False,
+    )
+    read = reads[-1][0]
+    assert isinstance(read, dict)
+    assert read["head"] == {"slot": 2, "root": BLOCK_2, "payload_status": EMPTY}
+
+
+def test_gloas_dropped_block_leaves_a_viable_branch():
+    # Block 2 was dropped above the justified anchor, but block 1 without its payload is viable.
+    # The head given, block 2 with its payload, is not optimistic; the store does not check it.
+    # So the answer depends only on whether a dropped block leaves no viable branch.
+    node = consensus.is_optimistic_node(
+        "minimal",
+        GLOAS_FORK,
+        _pinned_file("anchor_state"),
+        _pinned_file("anchor_block"),
+        _gloas_invalid_steps(None),
+        [],
+        BLOCK_2,
+        verify=False,
+        head_payload_status=FULL,
+    )
+    assert node is False
 
 
 # The anchor builds on a payload that the store does not hold.
@@ -496,7 +598,10 @@ GLOAS_ANCHOR_ROOT = gloas_root(_pinned_file("anchor_block"))
 @pytest.mark.parametrize("status", [EMPTY, PENDING], ids=["empty", "pending"])
 def test_gloas_head_on_a_payload_the_store_lacks(status: int):
     # Without its own optimistic payload, the head cannot be judged.
-    with raises(ERROR, "optimistic sync failed with code 39") as info:
+    message = (
+        f"optimistic sync: the payload of the block 0x{GLOAS_ANCHOR_ROOT.hex()} is not verified"
+    )
+    with raises(ERROR, message) as info:
         _gloas_optimistic_node([], status, GLOAS_ANCHOR_ROOT)
     assert info.value.code == 39
 
@@ -619,7 +724,8 @@ def test_inclusion_list_satisfaction_once_valid(satisfied: bool):
 )
 def test_inclusion_list_satisfaction_once_valid_of_payload_not_optimistic(status: int, root: bytes):
     # Only a payload kept before it was validated can move from not validated to valid.
-    with raises(ERROR, "optimistic sync failed with code 52") as info:
+    message = f"optimistic sync: the payload of the block 0x{root.hex()} is not optimistic"
+    with raises(ERROR, message) as info:
         _satisfaction(status, True, root)
     assert info.value.code == 52
 

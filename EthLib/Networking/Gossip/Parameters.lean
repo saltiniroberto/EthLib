@@ -1,5 +1,7 @@
 module
 
+public import EthLib.Base.Uint64
+
 /-!
 # `Networking.Gossip.Parameters`
 
@@ -57,17 +59,35 @@ structure GossipsubParameters where
 /--
 The gossipsub parameters, given the slot duration in milliseconds and the slots per epoch.
 
-A seen message ID lasts two epochs, in whole seconds, with the remainder dropped.
+Their names are those of the Parameters section of gossipsub v1.0, with the heartbeat in ms:
+<https://github.com/libp2p/specs/blob/4facaf9876da1eb7d6e066982010c81495ebb965/pubsub/gossipsub/gossipsub-v1.0.md#parameters>
+
+The values are those the consensus layer sets, and some differ from the defaults there.
 -/
-def gossipsubParameters (slotDurationMs slotsPerEpoch : Nat) : GossipsubParameters where
-  D := 8
-  D_low := 6
-  D_high := 12
-  D_lazy := 6
-  heartbeat_interval_ms := 700
-  fanout_ttl := 60
-  mcache_len := 6
-  mcache_gossip := 3
-  seen_ttl := slotDurationMs * slotsPerEpoch * 2 / 1000
+def gossipsubParameters (slotDurationMs slotsPerEpoch : UInt64) :
+    Except Base.ArithError GossipsubParameters := do
+  -- Two epochs in milliseconds: the slot duration times the slots per epoch, times 2.
+  --
+  -- The slot duration and the slots per epoch are 64-bit configuration values.
+  --
+  -- So two epochs in milliseconds must fit 64 bits, and an overflow is an error.
+  let epochMs ← Base.Uint64.mulChecked slotDurationMs slotsPerEpoch
+  let twoEpochsMs ← Base.Uint64.mulChecked epochMs 2
+  return {
+    -- The mesh degree: a target of 8 peers per topic, kept between 6 and 12.
+    D := 8
+    D_low := 6
+    D_high := 12
+    -- Gossip goes to 6 peers outside the mesh.
+    D_lazy := 6
+    -- A heartbeat every 0.7 seconds, written in milliseconds so that it is an integer.
+    heartbeat_interval_ms := 700
+    -- The fanout of a topic lasts 60 seconds.
+    fanout_ttl := 60
+    -- Whole messages are kept for 6 heartbeat windows, and the IDs of the last 3 are gossiped.
+    mcache_len := 6
+    mcache_gossip := 3
+    -- The seen time to live: two epochs in whole seconds, with the remainder dropped.
+    seen_ttl := (twoEpochsMs / 1000).toNat }
 
 end EthLib.Networking.Gossip

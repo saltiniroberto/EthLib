@@ -17,14 +17,9 @@ Node indices run across the trees.
 
 In tree `kappa`, node `j` at height `z` has tree index `kappa 2^(a - z) + j`.
 
-For leaf `s` of tree `kappa` and `1 <= z <= a`:
+Leaf `s` of tree `kappa` is `Y_{0,s}`, the hash of its secret `sk_{kappa,s}`.
 
-```text
-    sk_{kappa,s}  = PRF(PK.seed, SK.seed, ADRS_fprf(idx, kappa 2^a + s))
-    Y_{0,s}       = F(PK.seed, ADRS_fors(idx, 0, kappa 2^a + s), sk_{kappa,s})
-    Y_{z,j}       = H(PK.seed, ADRS_fors(idx, z, kappa 2^(a-z) + j), Y_{z-1,2j} | Y_{z-1,2j+1})
-    Fors.key(idx) = T_k(PK.seed, ADRS_roots(idx), Y^0_{a,0} | ... | Y^23_{a,0})
-```
+The tree's nodes are `Y_{z,j}` for `1 <= z <= a`, and its root is `Y^kappa_{a,0}`.
 
 The FORS public key `Fors.key(idx)` is one digest, which the bottom one-time key signs.
 
@@ -66,18 +61,31 @@ variable {m : Type → Type} [Monad m] (H : ByteArray → m (Vector UInt8 32))
 
 It is FIPS 205's `fors_skGen`, one `PRF` call. -/
 def forsSecret (prf : Prf m) (idx : Nat) (kappa : Fin FORS_TREES) (s : Nat) : m Digest :=
+  -- Algorithm 14, lines 2 to 5.
+  --
+  -- `sk_{kappa,s} = PRF(PK.seed, SK.seed, ADRS_fprf(idx, kappa 2^a + s))`.
   prf (adrsFprf idx (forsTreeIndex kappa 0 s))
 
 /-- `Y_{0,s}`: leaf `s` of tree `kappa` of instance `idx`, `F` of its secret. -/
 def forsLeafHash (pkSeed : PkSeed) (idx : Nat) (kappa : Fin FORS_TREES) (s : Nat)
     (secret : Digest) : m Digest :=
+  -- Algorithm 15, lines 3 to 5.
+  --
+  -- `Y_{0,s} = F(PK.seed, ADRS_fors(idx, 0, kappa 2^a + s), sk_{kappa,s})`.
   th H pkSeed (adrsFors idx 0 (forsTreeIndex kappa 0 s)) (packBytes secret)
 
-/-- The parent at index `j` and height `z` of tree `kappa` of instance `idx`, from its children. -/
-def forsNodeHash (pkSeed : PkSeed) (idx : Nat) (kappa : Fin FORS_TREES) (z j : Nat)
+/-- The parent at a position of tree `kappa` of instance `idx`, from its children.
+
+The position's level is the height `z`, and its index is the index `j`. -/
+def forsNodeHash (pkSeed : PkSeed) (idx : Nat) (kappa : Fin FORS_TREES) (p : Merkle.Position)
     (left right : Digest) : m Digest :=
+  -- Algorithm 15, lines 9 to 11.
+  --
+  -- `Y_{z,j} = H(PK.seed, ADRS_fors(idx, z, kappa 2^(a-z) + j), Y_{z-1,2j} | Y_{z-1,2j+1})`.
+  --
   -- The payload is the left child, then the right child.
-  th H pkSeed (adrsFors idx z (forsTreeIndex kappa z j)) (packBytes left ++ packBytes right)
+  th H pkSeed (adrsFors idx p.level (forsTreeIndex kappa p.level p.index))
+    (packBytes left ++ packBytes right)
 
 /-- `Y_{0,s}`, computed from the secret: leaf `s` of tree `kappa` of instance `idx`. -/
 def forsLeaves (pkSeed : PkSeed) (prf : Prf m) (idx : Nat) (kappa : Fin FORS_TREES)
@@ -89,7 +97,7 @@ def forsLeaves (pkSeed : PkSeed) (prf : Prf m) (idx : Nat) (kappa : Fin FORS_TRE
 /-- `Y_{z,j}`: node `j` at height `z` of tree `kappa` of instance `idx`, FIPS 205's `fors_node`. -/
 def forsNode (pkSeed : PkSeed) (prf : Prf m) (idx : Nat) (kappa : Fin FORS_TREES)
     (z j : Nat) : m Digest :=
-  Merkle.node (forsNodeHash H pkSeed idx kappa) (forsLeaves H pkSeed prf idx kappa) z j
+  Merkle.node (forsNodeHash H pkSeed idx kappa) (forsLeaves H pkSeed prf idx kappa) ⟨z, j⟩
 
 /-- `Y^kappa_{a,0}`: the root of tree `kappa` of instance `idx`. -/
 def forsRoot (pkSeed : PkSeed) (prf : Prf m) (idx : Nat) (kappa : Fin FORS_TREES) : m Digest :=
@@ -100,6 +108,7 @@ def forsRoot (pkSeed : PkSeed) (prf : Prf m) (idx : Nat) (kappa : Fin FORS_TREES
 The input has `48 + 24 * 16 = 432` bytes. -/
 def forsPkFromRoots (pkSeed : PkSeed) (idx : Nat) (roots : Vector Digest FORS_TREES) :
     m Digest :=
+  -- Algorithm 17, lines 22 to 24: `Fors.key(idx) = T_k(PK.seed, ADRS_roots(idx), Y^0_{a,0} | ...)`.
   th H pkSeed (adrsRoots idx) (packDigests roots)
 
 /-- `Fors.key(idx)`: the FORS public key of instance `idx`, from the roots of its trees. -/
@@ -109,25 +118,36 @@ def forsKey (pkSeed : PkSeed) (prf : Prf m) (idx : Nat) : m Digest := do
 
 /-! ## Signing -/
 
-/-- The opening of tree `kappa` of instance `idx` at leaf `s`: its secret and its path.
+/-- Every node of tree `kappa` of instance `idx`, each computed once.
 
-```text
-    P_z = Y_{z, floor(s / 2^z) xor 1},   z < 10
-```
--/
+Its top value is the tree's root `Y^kappa_{a,0}`, and it holds the path of each leaf. -/
+def forsBuild (pkSeed : PkSeed) (prf : Prf m) (idx : Nat) (kappa : Fin FORS_TREES) :
+    m (Merkle.Built Digest) :=
+  Merkle.build (forsNodeHash H pkSeed idx kappa) (forsLeaves H pkSeed prf idx kappa)
+    ⟨FORS_HEIGHT, 0⟩
+
+/-- The opening of tree `kappa` of instance `idx` at leaf `s`, with the tree's root.
+
+The opening is the leaf's secret and its path `P_z = Y_{z, floor(s / 2^z) xor 1}`, for `z < 10`.
+
+One build of the tree gives both the path and the root. -/
 def treeOpen (pkSeed : PkSeed) (prf : Prf m) (idx : Nat) (kappa : Fin FORS_TREES)
-    (s : Fin (2 ^ FORS_HEIGHT)) : m TreeOpening := do
+    (s : Fin (2 ^ FORS_HEIGHT)) : m (TreeOpening × Digest) := do
   let secret ← forsSecret prf idx kappa s.val
-  let path ← Merkle.path (forsNodeHash H pkSeed idx kappa) (forsLeaves H pkSeed prf idx kappa)
-    FORS_HEIGHT s.val
-  return { secret, path }
+  let tree ← forsBuild H pkSeed prf idx kappa
+  return ({ secret, path := tree.path FORS_HEIGHT s.val }, tree.value)
 
-/-- `Fors.sign(idx, s)`: the opening of every tree, each at the leaf the digest picked for it.
+/-- `Fors.sign(idx, s)`: the opening of every tree, at the leaf the digest picked for it.
 
-It is FIPS 205's `fors_sign`, and the trees are opened in order, tree 0 first. -/
+It also gives `Fors.key(idx)`, `T_k` over the roots of the trees it built.
+
+Its openings are FIPS 205's `fors_sign`, and the trees are opened in order, tree 0 first. -/
 def forsSign (pkSeed : PkSeed) (prf : Prf m) (idx : Nat)
-    (leaves : Vector (Fin (2 ^ FORS_HEIGHT)) FORS_TREES) : m (Vector TreeOpening FORS_TREES) :=
-  ofFnInOrder FORS_TREES fun kappa => treeOpen H pkSeed prf idx kappa leaves[kappa]
+    (leaves : Vector (Fin (2 ^ FORS_HEIGHT)) FORS_TREES) :
+    m (Vector TreeOpening FORS_TREES × Digest) := do
+  let opened ← ofFnInOrder FORS_TREES fun kappa => treeOpen H pkSeed prf idx kappa leaves[kappa]
+  let key ← forsPkFromRoots H pkSeed idx (opened.map Prod.snd)
+  return (opened.map Prod.fst, key)
 
 /-! ## Recovering the key -/
 
@@ -139,7 +159,7 @@ def treeRecover (pkSeed : PkSeed) (idx : Nat) (kappa : Fin FORS_TREES)
   -- Step 1: the leaf, from its revealed secret.
   let leaf ← forsLeafHash H pkSeed idx kappa s.val opening.secret
   -- Step 2: climb from height 0 to the root.
-  Merkle.climb (forsNodeHash H pkSeed idx kappa) 0 s.val leaf opening.path.toList
+  Merkle.climb (forsNodeHash H pkSeed idx kappa) ⟨0, s.val⟩ leaf opening.path.toList
 
 /-- `Fors.recover(idx, s, openings)`: the FORS public key that the openings lead to.
 

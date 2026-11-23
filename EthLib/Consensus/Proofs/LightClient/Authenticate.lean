@@ -3,6 +3,7 @@ module
 public import EthLib.Consensus.Proofs.LightClient.Containers
 public import EthLib.Consensus.Proofs.LightClient.FullNode
 public import EthLib.Consensus.Proofs.LightClient.Sync
+public import EthLib.Consensus.Proofs.SignatureChecks
 
 /-!
 # Proofs: what an accepted light client update authenticates
@@ -10,6 +11,8 @@ public import EthLib.Consensus.Proofs.LightClient.Sync
 An update carries a header that the sync committee signed, the attested header.
 
 Its finality branch proves a finalized root against the state root of that header.
+
+At the genesis slot, the finality check holds the finalized header to the empty header.
 
 Its committee branch proves the next sync committee against the same state root.
 
@@ -26,6 +29,8 @@ A new store trusts a block.
 Its committee, which the bootstrap proves, is the current committee of the state of that block.
 
 The signature needs an assumption: an aggregate verifies only if every signer signed the message.
+
+The assumption covers only the one aggregate check that the client makes on the update.
 
 Under it, every member whose bit is set signed the signing root of the attested header.
 
@@ -94,7 +99,7 @@ theorem validateFinality_proves {config : Config} {update : LightClientUpdate pr
     cases zero
     obtain ⟨gindex, indexed, rest⟩ := Base.bind_ok_iff.mp rest
     obtain ⟨verdict, checked, rest⟩ := Base.bind_ok_iff.mp rest
-    obtain rfl := LightClientError.require_ok.mp rest
+    obtain rfl := Base.ensure_ok_iff.mp rest
     exact ⟨gindex, _, indexed, .inl ⟨genesis, rfl⟩, LightClientError.liftRoot_ok.mp checked⟩
   · rename_i later
     obtain ⟨_, -, rest⟩ := Base.bind_ok_iff.mp accepted
@@ -102,9 +107,26 @@ theorem validateFinality_proves {config : Config} {update : LightClientUpdate pr
     obtain ⟨leaf, rooted, rest⟩ := Base.bind_ok_iff.mp rest
     obtain ⟨gindex, indexed, rest⟩ := Base.bind_ok_iff.mp rest
     obtain ⟨verdict, checked, rest⟩ := Base.bind_ok_iff.mp rest
-    obtain rfl := LightClientError.require_ok.mp rest
+    obtain rfl := Base.ensure_ok_iff.mp rest
     exact ⟨gindex, leaf, indexed, .inr ⟨later, LightClientError.liftRoot_ok.mp rooted⟩,
       LightClientError.liftRoot_ok.mp checked⟩
+
+/-- At the genesis slot, an accepted finality check gives the beacon header of the empty header.
+
+It needs the check to accept the update, and the finalized header to be at the genesis slot.
+
+There the check asks the finalized header to have the SSZ value of the empty one. -/
+theorem validateFinality_beacon_of_genesis {config : Config}
+    {update : LightClientUpdate preset fork}
+    (accepted : validateFinality config update = .ok ())
+    (genesis : update.finalizedHeader.beacon.slot = GENESIS_SLOT) :
+    update.finalizedHeader.beacon = (LightClientHeader.empty preset fork).beacon := by
+  refine LightClientHeader.beacon_eq_of_sameSszValue ?_
+  unfold validateFinality at accepted
+  split at accepted
+  · exact Base.ensure_ok_iff.mp accepted
+  · obtain ⟨_, same, -⟩ := Base.bind_ok_iff.mp accepted
+    exact Base.ensure_ok_iff.mp same
 
 /-- An accepted committee branch verifies the root of the next committee of an update.
 
@@ -121,7 +143,7 @@ theorem validateNextSyncCommitteeBranch_proves {config : Config}
   obtain ⟨leaf, rooted, rest⟩ := Base.bind_ok_iff.mp accepted
   obtain ⟨gindex, indexed, rest⟩ := Base.bind_ok_iff.mp rest
   obtain ⟨verdict, checked, rest⟩ := Base.bind_ok_iff.mp rest
-  obtain rfl := LightClientError.require_ok.mp rest
+  obtain rfl := Base.ensure_ok_iff.mp rest
   exact ⟨gindex, leaf, indexed, LightClientError.liftRoot_ok.mp rooted,
     LightClientError.liftRoot_ok.mp checked⟩
 
@@ -191,8 +213,8 @@ theorem initializeLightClientStore_proves {config : Config} {trustedBlockRoot : 
   obtain ⟨gindex, indexed, rest⟩ := Base.bind_ok_iff.mp rest
   obtain ⟨verdict, checked, rest⟩ := Base.bind_ok_iff.mp rest
   obtain ⟨_, accepted, built⟩ := Base.bind_ok_iff.mp rest
-  obtain rfl := LightClientError.require_ok.mp trusted
-  obtain rfl := LightClientError.require_ok.mp accepted
+  obtain rfl := Base.ensure_ok_iff.mp trusted
+  obtain rfl := Base.ensure_ok_iff.mp accepted
   cases built
   exact ⟨LightClientError.liftRoot_ok.mp headerRooted, rfl, gindex, leaf, indexed,
     LightClientError.liftRoot_ok.mp leafRooted, LightClientError.liftRoot_ok.mp checked⟩
@@ -220,31 +242,12 @@ theorem validateLightClientUpdate_proves {config : Config} {checks : SignatureCh
       ∃ signingRoot, syncCommitteeSigningRoot config update genesisValidatorsRoot =
           .ok signingRoot ∧
         checks.fastAggregateVerify
-          (((store.signatureCommittee update).participantKeys update.syncAggregate).map packBytes)
-          (packBytes signingRoot) (packBytes update.syncAggregate.syncCommitteeSignature) =
+          ((store.signatureCommittee update).participantKeys update.syncAggregate)
+          (packBytes signingRoot) update.syncAggregate.syncCommitteeSignature =
           true := by
-  unfold validateLightClientUpdate at accepted
-  simp only [Base.bind_ok_iff, LightClientError.require_ok] at accepted
-  obtain ⟨_, -, _, participants, _, -, _, -, _, -, rest⟩ := accepted
-  refine ⟨participants, ?_⟩
-  -- Split on the three conditions of the branches, then read each chain of checks.
-  cases known : store.isNextSyncCommitteeKnown <;>
-    cases committee : update.isSyncCommitteeUpdate <;>
-    simp only [known, committee, Bool.not_true, Bool.not_false, Bool.false_eq_true, ↓reduceIte,
-      and_false, and_true, Base.bind_ok_iff, LightClientError.require_ok] at rest
-  · obtain ⟨_, -, _, -, ⟨⟩, finality, _, empty, root, rooted, verified⟩ := rest
-    exact ⟨finality, nofun, fun _ => empty, root, rooted, verified⟩
-  · obtain ⟨_, -, _, -, ⟨⟩, finality, ⟨⟩, branch, root, rooted, verified⟩ := rest
-    exact ⟨finality, fun _ => branch, nofun, root, rooted, verified⟩
-  · obtain ⟨_, -, _, -, ⟨⟩, finality, _, empty, root, rooted, verified⟩ := rest
-    exact ⟨finality, nofun, fun _ => empty, root, rooted, verified⟩
-  · obtain ⟨_, -, _, -, ⟨⟩, finality, rest⟩ := rest
-    -- A next committee that the store knows must also match; the branch check follows.
-    split at rest <;> simp only [Base.bind_ok_iff, LightClientError.require_ok] at rest
-    · obtain ⟨_, -, ⟨⟩, branch, root, rooted, verified⟩ := rest
-      exact ⟨finality, fun _ => branch, nofun, root, rooted, verified⟩
-    · obtain ⟨⟨⟩, branch, root, rooted, verified⟩ := rest
-      exact ⟨finality, fun _ => branch, nofun, root, rooted, verified⟩
+  obtain ⟨-, participants, -, -, -, -, -, -, finality, empty, branch, signed⟩ :=
+    validateLightClientUpdate_eq_ok_iff.mp accepted
+  exact ⟨participants, finality, fun carried => (branch carried).2, empty, signed⟩
 
 /-- The finalized root of an accepted update is a node of the attested state.
 
@@ -496,31 +499,6 @@ theorem initializeLightClientStore_currentSyncCommittee {config : Config}
     isValidNormalizedMerkleBranch_value (currentSyncCommitteeGindexAtSlot_named layout) valid state
       rooted (BeaconState.nodeRoot_currentSyncCommittee altair state nodeRooted)⟩
 
-/-- The assumption on an aggregate signature check: it accepts only messages that all keys signed.
-
-The relation says which messages the holder of each key signed.
-
-BLS with proofs of possession is meant to give this, except with small probability.
-
-A separate module bounds how often one honest member's bit is forged, with random oracles.
-
-It needs a proof of possession for every signer, and it is not a proof of this assumption.
-
-Ethereum's keys carry deposit signatures instead.
-
-The theorems below reason about one accepted update, so they take the assumption instead. -/
-def SignatureChecks.AggregateSound (checks : SignatureChecks)
-    (signed : ByteArray → ByteArray → Prop) : Prop :=
-  ∀ keys message signature, checks.fastAggregateVerify keys message signature = true →
-    ∀ key ∈ keys, signed key message
-
-/-- The assumption has content: the checks that accept every signature do not meet it.
-
-Here no key signed any message, and the checks still accept a signature by one key. -/
-theorem SignatureChecks.not_aggregateSound_acceptAll :
-    ¬SignatureChecks.acceptAll.AggregateSound fun _ _ => False :=
-  fun sound => sound #[.empty] .empty .empty rfl .empty (by simp)
-
 /-- Keys whose bit is set number as many as the set bits, when there is a key for each bit. -/
 theorem length_filterMap_zip_bits {β : Type} :
     ∀ (bits : List Bool) (keys : List β), bits.length ≤ keys.length →
@@ -554,27 +532,47 @@ theorem SyncCommittee.size_participantKeys (committee : SyncCommittee preset)
   simp only [List.size_toArray]
   exact length_filterMap_zip_bits _ _ (by simp)
 
+/-- The one aggregate call that the client checks on an update, as a set of calls.
+
+The call holds the keys of the members whose bit is set, for the committee of the store.
+
+It holds the signing root of the attested header, as bytes, and the signature of the aggregate.
+
+The set is empty when the signing root cannot be computed, and the client then rejects the update.
+-/
+def updateSignatureCall (config : Config) (store : LightClientStore preset fork)
+    (update : LightClientUpdate preset fork) (genesisValidatorsRoot : Root) :
+    Array Cryptography.Bls.BLSPubkey × ByteArray × Cryptography.Bls.BLSSignature → Prop :=
+  fun call => ∃ signingRoot,
+    syncCommitteeSigningRoot config update genesisValidatorsRoot = .ok signingRoot ∧
+      call = ((store.signatureCommittee update).participantKeys update.syncAggregate,
+        packBytes signingRoot, update.syncAggregate.syncCommitteeSignature)
+
 /-- What the signature of an accepted update authenticates, under the assumption on it.
+
+The assumption covers only the aggregate call that the client checks on this update.
 
 The update names the committee of the store for its signature period.
 
-At least the minimum of its members signed the signing root of the attested header. -/
+Keys of at least the minimum of its seats signed the signing root of the attested header. -/
 theorem validateLightClientUpdate_signed {config : Config} {checks : SignatureChecks}
     {store : LightClientStore preset fork} {update : LightClientUpdate preset fork}
     {currentSlot : Slot} {genesisValidatorsRoot : Root}
     (accepted : validateLightClientUpdate config checks store update currentSlot
       genesisValidatorsRoot = .ok ())
-    {signed : ByteArray → ByteArray → Prop} (sound : checks.AggregateSound signed) :
+    {signed : Cryptography.Bls.BLSPubkey → ByteArray → Prop}
+    (sound : checks.AggregateSoundOn
+      (updateSignatureCall config store update genesisValidatorsRoot) signed) :
     ∃ signingRoot, syncCommitteeSigningRoot config update genesisValidatorsRoot =
         .ok signingRoot ∧
       preset.MIN_SYNC_COMMITTEE_PARTICIPANTS.toNat ≤
         ((store.signatureCommittee update).participantKeys update.syncAggregate).size ∧
       ∀ key ∈ (store.signatureCommittee update).participantKeys update.syncAggregate,
-        signed (packBytes key) (packBytes signingRoot) := by
+        signed key (packBytes signingRoot) := by
   obtain ⟨participants, -, -, -, signingRoot, rooted, verified⟩ :=
     validateLightClientUpdate_proves accepted
   refine ⟨signingRoot, rooted, by rw [SyncCommittee.size_participantKeys]; exact participants,
-    fun key member => sound _ _ _ verified _ (Array.mem_map_of_mem member)⟩
+    fun key member => sound _ _ _ ⟨signingRoot, rooted, rfl⟩ verified _ member⟩
 
 /-- An accepted update was signed by a member outside any set that holds fewer committee seats.
 
@@ -582,7 +580,7 @@ Take a set of keys, such as those that may sign anything.
 
 Suppose it holds fewer seats of the signing committee than there are signers.
 
-Under the assumption on aggregate signatures, a signer outside the set signed the signing root.
+Under the assumption on the aggregate call of the update, a signer outside the set signed the root.
 
 That root is the signing root of the attested header. -/
 theorem validateLightClientUpdate_signed_outside {config : Config} {checks : SignatureChecks}
@@ -590,14 +588,16 @@ theorem validateLightClientUpdate_signed_outside {config : Config} {checks : Sig
     {currentSlot : Slot} {genesisValidatorsRoot : Root}
     (accepted : validateLightClientUpdate config checks store update currentSlot
       genesisValidatorsRoot = .ok ())
-    {signed : ByteArray → ByteArray → Prop} (sound : checks.AggregateSound signed)
+    {signed : Cryptography.Bls.BLSPubkey → ByteArray → Prop}
+    (sound : checks.AggregateSoundOn
+      (updateSignatureCall config store update genesisValidatorsRoot) signed)
     (excluded : Cryptography.Bls.BLSPubkey → Bool)
     (few : (store.signatureCommittee update).pubkeys.toList.countP excluded <
       update.syncAggregate.participants) :
     ∃ signingRoot, syncCommitteeSigningRoot config update genesisValidatorsRoot =
         .ok signingRoot ∧
       ∃ key ∈ (store.signatureCommittee update).participantKeys update.syncAggregate,
-        excluded key = false ∧ signed (packBytes key) (packBytes signingRoot) := by
+        excluded key = false ∧ signed key (packBytes signingRoot) := by
   obtain ⟨signingRoot, rooted, -, all⟩ := validateLightClientUpdate_signed accepted sound
   refine ⟨signingRoot, rooted, ?_⟩
   -- The signers are seats of the committee, so the set holds fewer of them than there are.

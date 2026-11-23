@@ -28,7 +28,7 @@ from .forks import ends
 # The fork that adds the precompile, fusaka, and the latest fork: no fork in between changes it.
 FORKS = ends("fusaka")
 
-CASES = json.loads((Path(__file__).parent / "eip7951_cases.json").read_text())
+CASES = json.loads((Path(__file__).parent / "eips" / "eip7951_cases.json").read_text())
 
 
 @pytest.mark.parametrize("case", CASES, ids=[case["Name"] for case in CASES])
@@ -43,8 +43,9 @@ def test_out_of_gas(fork: str) -> None:
     with raises(
         ValueError,
         (
-            "EthLib.Execution.Evm.Precompiles.PrecompileError.p256Verify\n  "
-            "(EthLib.Execution.Evm.Precompiles.P256Verify.P256VerifyError.outOfGas 6900 6899)"
+            "EthLib.Execution.Evm.Precompiles.PrecompileError.p256Verify "
+            "(EthLib.Execution.Evm.Precompiles.P256Verify.P256VerifyError.outOfGas "
+            "(cost := 6900) (gas := 6899))"
         ),
     ):
         run(fork, 0x100, bytes.fromhex(CASES[0]["Input"]), 6899)

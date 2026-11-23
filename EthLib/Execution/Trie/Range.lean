@@ -13,9 +13,13 @@ That holds when the hash resists collisions, as Keccak-256 is assumed to.
 
 The snap capability of devp2p sends such ranges, as [`caps/snap.md`][snap] says.
 
-Its sections "AccountRange (0x01)" and "StorageRanges (0x03)" describe the proofs.
+Its sections AccountRange (0x01) and StorageRanges (0x03) describe the proofs.
 
-[snap]: https://github.com/ethereum/devp2p/blob/88f1c80800d622cc3a542a2125bbe33cc18c9f9c/caps/snap.md
+Those sections state what the proof shows, not how to check it.
+
+The check below is EthLib's own algorithm.
+
+[snap]: https://github.com/ethereum/devp2p/blob/277ceb399c15df86efb17d51eb58200c26879784/caps/snap.md
 
 The first end is a starting key, which the trie may not hold.
 
@@ -53,12 +57,13 @@ open EthLib.Serialization.Rlp
 
 /-- Why a range of a trie is rejected. -/
 inductive RangeError where
-  /-- The keys are not in strictly increasing order. -/
-  | unsorted
-  /-- The first key is below the starting key. -/
-  | beforeStart
-  /-- A value is the empty byte string, which the trie never stores. -/
-  | emptyValue
+  /-- The key at `index`, counted from 0, is not above the key before it. -/
+  | unsorted (index : Nat)
+  /-- The key at `index`, counted from 0, is below the starting key. -/
+  | beforeStart (index : Nat)
+  /-- The value at `index`, counted from 0, is the empty byte string, which the trie never stores.
+  -/
+  | emptyValue (index : Nat)
   /-- A node that the check needs is missing from the proof, or a node or reference is malformed. -/
   | proof (error : ProofError)
   /-- The RLP encoding of a node failed, because a payload has `2^64` bytes or more. -/
@@ -67,7 +72,23 @@ inductive RangeError where
   | branchValue
   /-- The entries do not build the trie of the root that the proof shows. -/
   | mismatch
-  deriving Repr, DecidableEq
+  deriving DecidableEq
+
+/-- A constructor of the error, named in full, applied to its arguments. -/
+def rangeErrorFormat (name : String) (args : List Std.Format) (prec : Nat) : Std.Format :=
+  constructorFormat ("EthLib.Execution.Trie.RangeError." ++ name) args prec
+
+/-- The form of the error in Lean syntax, with each value named. -/
+def RangeError.reprPrec : RangeError → Nat → Std.Format
+  | .unsorted index, p => rangeErrorFormat "unsorted" [namedArg "index" index] p
+  | .beforeStart index, p => rangeErrorFormat "beforeStart" [namedArg "index" index] p
+  | .emptyValue index, p => rangeErrorFormat "emptyValue" [namedArg "index" index] p
+  | .proof error, p => rangeErrorFormat "proof" [reprArg error] p
+  | .rlp error, p => rangeErrorFormat "rlp" [reprArg error] p
+  | .branchValue, p => rangeErrorFormat "branchValue" [] p
+  | .mismatch, p => rangeErrorFormat "mismatch" [] p
+
+instance : Repr RangeError := ⟨RangeError.reprPrec⟩
 
 /-- The stable code of an error, one per constructor.
 
@@ -77,9 +98,9 @@ The codes start at 201, above every code of a trie error and of a proof error.
 
 A new constructor takes a new code, so that each code keeps its meaning. -/
 def RangeError.code : RangeError → UInt32
-  | .unsorted => 201
-  | .beforeStart => 202
-  | .emptyValue => 203
+  | .unsorted _ => 201
+  | .beforeStart _ => 202
+  | .emptyValue _ => 203
   | .proof _ => 204
   | .rlp _ => 205
   | .branchValue => 206
@@ -106,6 +127,7 @@ A path that is no prefix of an end compares with every extension of itself as it
 So it falls wholly before, inside or after the range. -/
 def rangePlace (left : List Nibble) (right : Option (List Nibble)) (pre : List Nibble) :
     RangePlace :=
+  -- A prefix of an end lies on the path of that end.
   if pre.isPrefixOf left || right.any pre.isPrefixOf then .boundary
   else if pre < left then .before
   else if right.any (· < pre) then .after
@@ -120,16 +142,19 @@ def rangePlace (left : List Nibble) (right : Option (List Nibble)) (pre : List N
 Unlike a proof of one key, a range proof is a set of nodes, so the nodes come in any order. -/
 def lookupNode (nodes : List (Hash32 × ByteArray)) (reference : Item) : Except ProofError Item :=
   match reference with
+  -- `n(I, i) = c(I, i)` when `||RLP(c(I, i))|| < 32`: the node inside its parent, Appendix D.
   | .list _ => .ok reference
   | .bytes digest =>
+    -- `n(∅, i) = ()`, no node.
     if digest.size = 0 then
       .ok reference
+    -- `n(I, i) = KEC(RLP(c(I, i)))`: the proof node with that hash.
     else if digest.size = 32 then
       match nodes.find? fun (hash, _) => hash.toList == digest.data.toList with
       | some (_, encoded) => (decode encoded).mapError .rlp
-      | none => .error .missingNode
+      | none => .error (.missingNode (some digest))
     else
-      .error .invalidReference
+      .error (.invalidReference digest.size)
 
 /-- Check the subtree that `reference` holds at the path `pre`, against `entries`.
 
@@ -152,9 +177,10 @@ def checkSubtree (hash : ByteArray → Hash32) (nodes : List (Hash32 × ByteArra
     (left : List Nibble) (right : Option (List Nibble)) :
     Nat → Item → List Nibble → List (List Nibble × ByteArray) → Except RangeError Bool
   -- The budget never runs out, so this error never occurs.
-  | 0, _, _, _ => .error (.proof .missingNode)
+  | 0, _, _, _ => .error (.proof (.missingNode none))
   | fuel + 1, reference, pre, entries =>
     match rangePlace left right pre with
+    -- No entry lies before the range.
     | .before => if entries.isEmpty then .ok false else .error .mismatch
     -- Any node after the range holds a key there.
     | .after => if entries.isEmpty then .ok (reference != .bytes .empty) else .error .mismatch
@@ -163,6 +189,7 @@ def checkSubtree (hash : ByteArray → Hash32) (nodes : List (Hash32 × ByteArra
       let node ← (patricialize hash entries pre.length).mapError .rlp
       let held ← (encodeInternalNode hash node).mapError .rlp
       if held = reference then .ok false else .error .mismatch
+    -- A node on the path of an end: held inside its parent, or a proof node found by its hash.
     | .boundary => do
       let item ← (lookupNode nodes reference).mapError .proof
       if item = .bytes .empty then
@@ -184,6 +211,7 @@ def checkSubtree (hash : ByteArray → Hash32) (nodes : List (Hash32 × ByteArra
         else
           throw .mismatch
       | .branch subnodes value =>
+        -- Each key has 64 nibbles, so no key ends at a branch.
         if value.size ≠ 0 then throw .branchValue
         -- Each entry goes on below the branch, to the child of its next nibble.
         unless entries.all fun (key, _) => pre.length < key.length do throw .mismatch
@@ -209,18 +237,29 @@ With no entry, the range runs from the start to the end of the trie.
 It then returns false, since the trie holds no key from the start on. -/
 def verifyRange (hash : ByteArray → Hash32) (root start : Hash32)
     (entries : List (Hash32 × ByteArray)) (proof : List ByteArray) : Except RangeError Bool := do
+  -- `y(I)` of Appendix D: each key, a 32-byte hash, as its path of 64 nibbles.
   let obj := entries.map fun (key, value) => (bytesToNibbleList ⟨key.toArray⟩, value)
   let left := bytesToNibbleList ⟨start.toArray⟩
-  unless strictlyIncreasing (obj.map Prod.fst) do throw .unsorted
-  if obj.any fun (key, _) => key < left then throw .beforeStart
-  if obj.any fun (_, value) => value.size = 0 then throw .emptyValue
+  -- Each error names the first entry that breaks its rule, which exists when the rule fails.
+  let keys := obj.map Prod.fst
+  -- The sections send consecutive entries; EthLib reads that as strictly increasing hashes.
+  unless strictlyIncreasing keys do
+    throw (.unsorted (((keys.zip keys.tail).findIdx fun (a, b) => !decide (a < b)) + 1))
+  -- No entry lies below the starting hash, where the range starts.
+  if obj.any fun (key, _) => key < left then
+    throw (.beforeStart (obj.findIdx fun (key, _) => key < left))
+  -- EthLib's rule: no value is empty, since a value of a state or storage trie never is.
+  let emptyIndex := obj.findIdx fun (_, value) => value.size = 0
+  if obj.any fun (_, value) => value.size = 0 then throw (.emptyValue emptyIndex)
   if proof.isEmpty then
     -- The whole trie: the entries must build the root.
     let trie : Trie := ⟨false, entries.map fun (key, value) => (⟨key.toArray⟩, value)⟩
     match Trie.root hash trie with
     | .ok built => if built = root then return false else throw .mismatch
     | .error (.rlp error) => throw (.rlp error)
-    | .error .emptyValue => throw .emptyValue
+    -- The values were checked above, so this error never occurs.
+    | .error .emptyValue => throw (.emptyValue emptyIndex)
+  -- With a proof: a walk from the root along the starting hash and the last entry.
   else
     let nodes := proof.map fun encoded => (hash encoded, encoded)
     checkSubtree hash nodes left (obj.getLast?.map Prod.fst) (left.length + 2)

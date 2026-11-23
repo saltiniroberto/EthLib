@@ -1,8 +1,8 @@
 # Engine API test vectors
 
 `new_payload.json` holds calls of `engine_newPayload` from the engine blockchain tests of `ethereum/execution-specs`.
-They come from the release `tests@v21.0.2`, whose target is commit `e27f097ec7b3e6e8ee9c2c1873c183e8f7da7a6e`, under CC0-1.0.
-Its archive `fixtures.tar.gz` has sha256 `e2fa7ea2ea516459f9ab92284b2927892f318f4e1f78ca802cb05a6c3b479ed9`.
+They come from the release `tests@v21.0.3`, whose target is commit `391d8a05d5cb182542ac7e7330c858b6ee03f990`, under CC0-1.0.
+Its archive `fixtures.tar.gz` has sha256 `46bd48fb71a23da084218fe856fe442ab0c8d00c85c1c1aead0d2a965804fd24`.
 
 The cases come from the directory `blockchain_tests_engine`, for the networks from Paris to Amsterdam.
 Amsterdam has two networks here: `Amsterdam` and `BPO2ToAmsterdamAtTime15k`.
@@ -33,6 +33,16 @@ A payload counts as valid when the fixture expects neither an exception nor an e
 
 ```text
 python -I extract_forkchoice.py <directory blockchain_tests_engine> forkchoice.json
+```
+
+`openrpc.json` holds the examples of the OpenRPC method files of the Engine API, in `ethereum/execution-apis` at commit `3284ee80c3da3e516c53782dde75157cccf1ebdc`, under CC0-1.0.
+They are the files `src/engine/openrpc/methods/*.yaml` of its source archive, whose sha256 is `1225889b796135c1ac78ee4e264fbf4b0299867f80f4709b820dda467b40e3e4`.
+Each example keeps the name of its file, its method, its own name, the value of each parameter and the value of its result, without change.
+`extract_openrpc.py` wrote the file from that directory, and writes the same bytes again.
+It reads YAML, so it runs with PyYAML:
+
+```text
+uv run --no-project --with pyyaml==6.0.2 python -I extract_openrpc.py <directory src/engine/openrpc/methods> openrpc.json
 ```
 
 The Python tests in `bindings/python/tests/engine/` read these cases and never rewrite them.

@@ -5,6 +5,7 @@ public import EthLib.Base.Proofs.BigEndian
 public import EthLib.Base.Proofs.MapM
 public import EthLib.Cryptography.Proofs.Inverse
 public import EthLib.Cryptography.Proofs.Bls.Fp2
+public import EthLib.Base.Proofs.Except
 
 /-!
 # Proofs: `Evm.Precompiles.Bls12381.Encoding`
@@ -22,7 +23,7 @@ public import EthLib.Cryptography.Proofs.Bls.Fp2
 namespace EthLib.Execution.Evm.Precompiles.Bls12381
 
 open EthLib.Base (bytesToNat natToBytes)
-open EthLib.Cryptography.Bls (Fp Fp2 G1 G2)
+open EthLib.Cryptography.Bls (Fp Fp2 G1 G2 G2.zero)
 
 /-! ## Padding -/
 
@@ -167,10 +168,6 @@ theorem natToBytes_bytesToFq2 {raw : List UInt8} (hlength : raw.length = 96) {a 
 
 /-! ## G1 points -/
 
-/-- Binding a success passes its value to the continuation. -/
-private theorem ok_bind {α β : Type} (a : α) (f : α → Except Bls12381Error β) :
-    (Except.ok a >>= f) = f a := rfl
-
 /-- Binding an error keeps the error. -/
 private theorem error_bind {α β : Type} (e : Bls12381Error) (f : α → Except Bls12381Error β) :
     (Except.error e >>= f) = Except.error e := rfl
@@ -180,14 +177,8 @@ private theorem throw_bind {α β : Type} (e : Bls12381Error) (f : α → Except
     (throw e >>= f) = throw e := rfl
 
 /-- The affine form of a point with `z = 1` is its `x` and `y`. -/
-theorem g1_toAffine_one (x y : Fp) : G1.toAffine ⟨x, y, Fp.one⟩ = (x, y) := by
-  have hinv : Cryptography.BaseField.inverse Fp.one = Fp.one := Fp.toZMod.injective (by
-    rw [Fp.baseField_inverse, Fp.toZMod_inverse, Fp.one_def, Fp.toZMod_one, inv_one])
-  have hz : Cryptography.BaseField.isZero Fp.one = false := Fp.one_isZero
-  simp only [G1.toAffine, hz, hinv, Bool.false_eq_true, ↓reduceIte]
-  have hone (a : Fp) : a * Fp.one = a := Fp.toZMod.injective (by
-    rw [Fp.toZMod_mul, Fp.one_def, Fp.toZMod_one, mul_one])
-  rw [hone, hone, hone, hone]
+theorem g1_toAffine_one (x y : Fp) : G1.toAffine ⟨x, y, Fp.one⟩ = (x, y) :=
+  G1.Law.toAffine_mk_one Fp.embedding x y
 
 /-- The point at infinity encodes as 96 zero bytes. -/
 theorem g1ToBytes_of_isZero {p : G1} (h : p.z.isZero = true) :
@@ -222,10 +213,10 @@ theorem bytesToG1_eq_ok_iff {raw : List UInt8} {subgroupCheck : Bool} {p : G1} :
   | ok x =>
     cases dy with
     | error e =>
-      rw [ok_bind, error_bind]
+      rw [Base.ok_bind, error_bind]
       simp only [reduceCtorEq, false_and, and_false, exists_false]
     | ok y =>
-      rw [ok_bind, ok_bind]
+      rw [Base.ok_bind, Base.ok_bind]
       simp only [Except.ok.injEq, exists_and_left, exists_eq_left']
       by_cases hz : x.val = 0 ∧ y.val = 0
       · rw [ite_eq_left hz]
@@ -294,8 +285,8 @@ set_option maxRecDepth 8000 in
 /-- The point at infinity encodes as 192 zero bytes. -/
 theorem g2ToBytes_of_isZero {p : G2} (h : p.z.isZero = true) :
     g2ToBytes p = List.replicate 192 0 := by
-  simp only [g2ToBytes, G2.toAffine, h, ↓reduceIte, Fp2.zero_eq_zero, Fp2.zero_c0, Fp2.zero_c1,
-    Fp.val_zero]
+  simp only [g2ToBytes, G1.toAffine, Cryptography.Fp2.fieldOps_isZero, h, ↓reduceIte,
+    Cryptography.Fp2.fieldOps_zero, Fp2.zero_c0, Fp2.zero_c1, Fp.val_zero]
   rfl
 
 /-- The G2 decoder reads two elements `x` and `y` of `Fp2`, and succeeds in exactly two cases.
@@ -323,10 +314,10 @@ theorem bytesToG2_eq_ok_iff {raw : List UInt8} {subgroupCheck : Bool} {p : G2} :
   | ok x =>
     cases dy with
     | error e =>
-      rw [ok_bind, error_bind]
+      rw [Base.ok_bind, error_bind]
       simp only [reduceCtorEq, false_and, and_false, exists_false]
     | ok y =>
-      rw [ok_bind, ok_bind]
+      rw [Base.ok_bind, Base.ok_bind]
       simp only [Except.ok.injEq, exists_and_left, exists_eq_left']
       by_cases hz : x.c0.val = 0 ∧ x.c1.val = 0 ∧ y.c0.val = 0 ∧ y.c1.val = 0
       · rw [ite_eq_left hz]
@@ -337,10 +328,10 @@ theorem bytesToG2_eq_ok_iff {raw : List UInt8} {subgroupCheck : Bool} {p : G2} :
         · -- `(0, 0)` is not on the twist, so the second case cannot hold.
           obtain ⟨h0, h1, h2, h3⟩ := hz
           have hx0 : x = ⟨0, 0⟩ := by
-            cases x; simp only [Fp2.mk.injEq]
+            cases x; simp only [Cryptography.Fp2.mk.injEq]
             exact ⟨Fp.ext (h0.trans Fp.val_zero.symm), Fp.ext (h1.trans Fp.val_zero.symm)⟩
           have hy0 : y = ⟨0, 0⟩ := by
-            cases y; simp only [Fp2.mk.injEq]
+            cases y; simp only [Cryptography.Fp2.mk.injEq]
             exact ⟨Fp.ext (h2.trans Fp.val_zero.symm), Fp.ext (h3.trans Fp.val_zero.symm)⟩
           rw [onCurveG2, Fp2.beq_iff_eq, hx0, hy0] at hon
           exact absurd hon (by decide_eq_at_model [G2.bTwist])

@@ -34,11 +34,10 @@ public section
 
 namespace EthLib.Execution.Blocks.Exports
 
-open EthLib.Exports (Result PyValue forkUpTo pyExport)
+open EthLib.Exports (Result PyValue UnreadArgument forkUpTo pyExport toResult)
 open EthLib.Base
 open EthLib.Serialization.Rlp
-open EthLib.Execution.Transactions.Exports (abortMessage inclusionMessage message oneLine
-  stateEntryItem)
+open EthLib.Execution.Transactions.Exports (stateEntryItem)
 
 /-- A recent block from its fork name, its header and its ommers, each header in RLP form.
 
@@ -47,8 +46,8 @@ def recentOf (config : ChainConfig) (block : String × ByteArray × List ByteArr
     Result RecentBlock := do
   let (name, header, ommers) := block
   let fork ← forkUpTo .glamsterdam name.toUTF8
-  return ⟨fork, ← runRlp "recent header rejected" (Codec.decode header),
-    ← runRlp "recent ommers rejected" (ommers.mapM fun ommer => do
+  return ⟨fork, ← toResult "recent header rejected" (Codec.decode header),
+    ← toResult "recent ommers rejected" (ommers.mapM fun ommer => do
       Header.ofItemAtNumber (forkAtBlock config) (← decode ommer))⟩
 
 /-- The chain that a configuration, a state and recent blocks give, as the exports take them.
@@ -59,20 +58,30 @@ A state or a recent block that does not decode has code 0, since the export read
 def chainOf (config : PyValue) (state : ByteArray)
     (recent : List (String × ByteArray × List ByteArray)) : Result BlockChain := do
   let config ← ChainConfig.Exports.configOfJson config.toJson
-  let pre ← (State.Exports.ofInput state).mapError fun e => (0, e.message)
-  let recent ← (recent.mapM (recentOf config)).mapError fun (_, m) => (0, m)
+  let pre ← toResult none
+    ((State.Exports.ofInput state).mapError fun e => UnreadArgument.mk e.message)
+  let recent ← toResult none
+    ((recent.mapM (recentOf config)).mapError fun (_, m) => UnreadArgument.mk m)
   return ⟨config, pre, recent⟩
 
 /-- The accounts of a state, as the list of entries of the state root export. -/
 def accountsItem (state : Execution.State.State) : Item :=
   .list (state.accounts.toList.map fun (address, account) => stateEntryItem state address account)
 
-/-- A message for a block error, phrased for a Python traceback. -/
-def blockErrorMessage : BlockError → String
-  | .invalidTransaction index e => s!"transaction {index} rejected: {inclusionMessage e}"
-  | .aborted e => abortMessage e
-  | .systemCallFailed address e => s!"system call to {oneLine address} failed: {oneLine e}"
-  | e => s!"block invalid: {(oneLine e).replace "EthLib.Execution.Blocks.BlockError." ""}"
+/-- A block from the name of its fork and its RLP form, with its transactions decoded.
+
+Each ommer is at the fork of its own number on the chain `config`.
+
+A block or a transaction that does not decode has the code of its block error. -/
+def blockOf (config : ChainConfig) (fork : String) (block : ByteArray) :
+    Result ((fork : Fork) × Block fork Transactions.Transaction) := do
+  let fork ← forkUpTo .glamsterdam fork.toUTF8
+  let raw : Block fork Item ← toResult none
+    ((Block.decode (forkAtBlock config) block).mapError BlockError.encoding)
+  let transactions ← raw.transactions.zipIdx.mapM fun (item, index) =>
+    toResult none ((Transactions.decodeBodyTransaction fork item).mapError
+      (BlockError.undecodableTransaction index))
+  return ⟨fork, { raw with transactions }⟩
 
 /-- Run the state transition of a block on a chain, and give the state after it.
 
@@ -84,18 +93,11 @@ def stateTransitionOf
       Bool) : Result ByteArray := do
   let (config, state, recent, fork, block, checkSeal) := args
   let chain ← chainOf config state recent
-  let fork ← forkUpTo .glamsterdam fork.toUTF8
-  let raw : Block fork Item ← (Block.decode (forkAtBlock chain.config) block).mapError
-    fun e => ((BlockError.encoding e).code, s!"block rejected: {reprStr e}")
-  let transactions ← raw.transactions.zipIdx.mapM fun (item, index) =>
-    (Transactions.decodeBodyTransaction fork item).mapError fun e =>
-      ((BlockError.undecodableTransaction index e).code,
-        s!"transaction {index} does not decode: {message e}")
-  let post ← (stateTransition chain { raw with transactions } checkSeal).mapError
-    fun e => (e.code, blockErrorMessage e)
+  let ⟨_, block⟩ ← blockOf chain.config fork block
+  let post ← toResult none (stateTransition chain block checkSeal)
   let root ← State.Exports.rootOf post
-  (encode (Item.list [Codec.toItem root, accountsItem post])).mapError
-    fun e => (0, s!"result: {reprStr e}")
+  toResult none ((encode (Item.list [Codec.toItem root, accountsItem post])).mapError
+    fun e => UnreadArgument.mk s!"result: {reprStr e}")
 
 /-- Run the state transition of a block on a chain, and give the state after it.
 
@@ -127,11 +129,12 @@ def genesisOf (args : String × GenesisFields × ByteArray) : Result ByteArray :
     baseFeePerGas := baseFeePerGas, excessBlobGas := excessBlobGas, slotNumber := slotNumber }
   let fork ← forkUpTo .glamsterdam fork.toUTF8
   -- The state is read by the export itself, so its errors have code 0.
-  let alloc ← (State.Exports.ofInput state).mapError fun e => (0, e.message)
-  let block ← (genesis fork params alloc).mapError fun e => (e.code, blockErrorMessage e)
+  let alloc ← toResult none
+    ((State.Exports.ofInput state).mapError fun e => UnreadArgument.mk e.message)
+  let block ← toResult none (genesis fork params alloc)
   -- The body is empty, so its transactions take the form of RLP items.
-  ({ block with transactions := ([] : List Item) }.encode).mapError
-    fun e => (0, s!"result: {reprStr e}")
+  toResult none (({ block with transactions := ([] : List Item) }.encode).mapError
+    fun e => UnreadArgument.mk s!"result: {reprStr e}")
 
 /-- The genesis block at a fork, in RLP form.
 

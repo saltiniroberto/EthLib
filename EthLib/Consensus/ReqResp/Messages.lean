@@ -143,6 +143,7 @@ def ReqRespProtocol.versions (fork : Fork) : ReqRespProtocol → List Nat
 
 /-- The protocol IDs of a fork: each protocol with each version that the fork defines. -/
 def protocolIds (fork : Fork) : List ProtocolId :=
+  -- Each protocol in the order of the list, with each version of the fork, oldest first.
   ReqRespProtocol.all.flatMap fun protocol =>
     (protocol.versions fork).map fun version => ⟨protocol, version⟩
 
@@ -151,10 +152,18 @@ def protocolIds (fork : Fork) : List ProtocolId :=
 The version is written in decimal with no leading zero, and is positive.
 -/
 def ProtocolId.parse? (text : String) : Option ProtocolId := do
+  -- The text is `/eth2/beacon_chain/req/`, then a body, then `/ssz_snappy`.
   let rest ← Networking.Gossip.dropPrefix? "/eth2/beacon_chain/req/".toList text.toList
   let body ← Networking.Gossip.dropSuffix? "/ssz_snappy".toList rest
+  -- The body starts with the name of a protocol, then `/`.
+  --
+  -- No name holds `/`, so at most one protocol matches.
   let protocol ← ReqRespProtocol.all.find? fun p => (p.name ++ "/").toList.isPrefixOf body
+  -- The rest of the body is the version, in decimal with no leading zero.
+  --
+  -- It is below `2^64`, a bound of EthLib.
   let version ← Networking.Gossip.parseSubnetId (body.drop (protocol.name.length + 1))
+  -- The version is positive.
   if version = 0 then none else some ⟨protocol, version.toNat⟩
 
 /-- The status of a node, which each peer sends when it connects; Fulu adds a field. -/
@@ -182,6 +191,7 @@ instance {fork : Fork} : SszType (Status fork) :=
 
 /-- The fork whose status a version of the status protocol carries. -/
 def statusFork : Nat → Option Fork
+  -- Version 1 carries the status of Phase 0, and version 2 that of Fulu.
   | 1 => some .phase0
   | 2 => some .fusaka
   | _ => none
@@ -206,6 +216,7 @@ instance {config : Config} {fork : Fork} : SszType (MetaData config fork) :=
 
 /-- The fork whose metadata a version of the metadata protocol carries. -/
 def metadataFork : Nat → Option Fork
+  -- Version 1 carries the metadata of Phase 0, 2 that of Altair, and 3 that of Fulu.
   | 1 => some .phase0
   | 2 => some .altair
   | 3 => some .fusaka
@@ -231,10 +242,13 @@ inductive GoodbyeReason where
 
 /-- The reason that a goodbye message carries. -/
 def GoodbyeReason.ofCode (code : UInt64) : GoodbyeReason :=
+  -- Codes 1, 2 and 3 are a shutdown of the client, an irrelevant network, and a fault or error.
   if code = 1 then .clientShutDown
   else if code = 2 then .irrelevantNetwork
   else if code = 3 then .faultOrError
+  -- Codes 4 to 127 are reserved.
   else if 4 ≤ code ∧ code ≤ 127 then .reserved code
+  -- Code 0 and codes from 128 on are kept as they are.
   else .other code
 
 /-- The code that a goodbye reason stands for. -/
@@ -243,6 +257,18 @@ def GoodbyeReason.toCode : GoodbyeReason → UInt64
   | .irrelevantNetwork => 2
   | .faultOrError => 3
   | .reserved code | .other code => code
+
+/-- Whether a value lies in the range of a count of values from a start.
+
+The bound is computed without overflow, so a range past the largest value stops there.
+
+Requests by range name their slots or their light client periods this way. -/
+def InCountRange (start count value : UInt64) : Prop :=
+  -- `x ≤ v < x + n` in natural numbers, for the start `x`, the count `n` and the value `v`.
+  start.toNat ≤ value.toNat ∧ value.toNat < start.toNat + count.toNat
+
+instance (start count value : UInt64) : Decidable (InCountRange start count value) :=
+  inferInstanceAs (Decidable (_ ∧ _))
 
 /-- A request for the blocks of a range of slots; the step must be 1. -/
 structure BeaconBlocksByRangeRequest where
@@ -260,6 +286,7 @@ instance : SszType BeaconBlocksByRangeRequest :=
 
 /-- The most blocks in one request: Deneb lowers the limit. -/
 def Config.maxRequestBlocks (config : Config) (fork : Fork) : UInt64 :=
+  -- `MAX_REQUEST_BLOCKS_DENEB` from Deneb, and `MAX_REQUEST_BLOCKS` before it.
   if .dencun ≤ fork then config.MAX_REQUEST_BLOCKS_DENEB else config.MAX_REQUEST_BLOCKS
 
 /-- A request for blocks by the roots of their messages. -/
@@ -277,6 +304,13 @@ structure LightClientUpdatesByRangeRequest where
 instance : SszType LightClientUpdatesByRangeRequest :=
   .container ["start_period", "count"] (fun r => (r.startPeriod, r.count))
     (fun (s, c) => ⟨s, c⟩)
+
+/-- The most light client updates that a request of a count of periods allows.
+
+The updates query of the Beacon API reads the same limit. -/
+def lightClientUpdatesLimit (count : UInt64) : Nat :=
+  -- `min(MAX_REQUEST_LIGHT_CLIENT_UPDATES, n)` for the count `n`, where the constant is 128.
+  min MAX_REQUEST_LIGHT_CLIENT_UPDATES.toNat count.toNat
 
 /-- A request for the blob sidecars of a range of slots. -/
 structure BlobSidecarsByRangeRequest where
@@ -380,15 +414,26 @@ Exits weigh 2/3 against 1 for consolidations.
 
 The stake over that weighted churn is `3 * E * C / (2 * C + 3 * E)`, rounded down.
 
+The configuration values are 64-bit, so a sum or product of 2^64 or more is an error.
+
+From Gloas, a zero denominator is an error too, which happens exactly when both quotients are 0.
+
 [EIP-8061]: https://eips.ethereum.org/EIPS/eip-8061#weak-subjectivity-period
 -/
-def Config.computeMinEpochsForBlockRequests (config : Config) (fork : Fork) : Epoch :=
+def Config.computeMinEpochsForBlockRequests (config : Config) (fork : Fork) :
+    Except ArithError Epoch := do
   if .glamsterdam ≤ fork then
-    let exit := config.CHURN_LIMIT_QUOTIENT_GLOAS.toNat
-    let consolidation := config.CONSOLIDATION_CHURN_LIMIT_QUOTIENT.toNat
-    let quotient := 3 * exit * consolidation / (2 * consolidation + 3 * exit)
-    config.MIN_VALIDATOR_WITHDRAWABILITY_DELAY + (quotient / 2).toUInt64
+    -- The numerator `3 * E * C`.
+    let exitWeight ← Uint64.mulChecked 3 config.CHURN_LIMIT_QUOTIENT_GLOAS
+    let numerator ← Uint64.mulChecked exitWeight config.CONSOLIDATION_CHURN_LIMIT_QUOTIENT
+    -- The denominator `2 * C + 3 * E`, which reuses the product `3 * E` of the numerator.
+    let consolidationWeight ← Uint64.mulChecked 2 config.CONSOLIDATION_CHURN_LIMIT_QUOTIENT
+    let denominator ← Uint64.addChecked consolidationWeight exitWeight
+    -- `MIN_VALIDATOR_WITHDRAWABILITY_DELAY + floor(floor(3 * E * C / (2 * C + 3 * E)) / 2)`.
+    let quotient ← Uint64.divChecked numerator denominator
+    Uint64.addChecked config.MIN_VALIDATOR_WITHDRAWABILITY_DELAY (quotient / 2)
   else
-    config.MIN_VALIDATOR_WITHDRAWABILITY_DELAY + config.CHURN_LIMIT_QUOTIENT / 2
+    -- `MIN_VALIDATOR_WITHDRAWABILITY_DELAY + floor(CHURN_LIMIT_QUOTIENT / 2)`.
+    Uint64.addChecked config.MIN_VALIDATOR_WITHDRAWABILITY_DELAY (config.CHURN_LIMIT_QUOTIENT / 2)
 
 end EthLib.Consensus

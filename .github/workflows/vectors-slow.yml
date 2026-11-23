@@ -96,6 +96,12 @@ jobs:
             shard: 2/2
             bindings: true
             run: uv run --no-sync pytest -n auto -m archive bindings/python/tests/parity/test_consensus.py
+          # The fork choice compliance cases of the pinned release of consensus-specs.
+          # Locally in November 2026, their 10,304 cases took about 75 minutes of one core.
+          # So one job runs them all.
+          - suite: parity-compliance
+            bindings: true
+            run: uv run --no-sync pytest -n auto -m archive bindings/python/tests/parity/test_compliance.py
           # The cases of the execution-spec-tests devnets that the pinned release lacks.
           - suite: parity-devnets
             bindings: true
@@ -122,7 +128,9 @@ jobs:
           - suite: nist-cavp
             bindings: true
             run: uv run --no-sync pytest -n auto -m archive bindings/python/tests/aes/test_cavp_gcm.py
-          # A newer release of a pinned suite, or the tests of the next execution fork, fails the job.
+          # A newer release of a pinned suite fails the job.
+          # So does an asset of a pinned release that tests/sources.toml does not place.
+          # So do the tests of the next execution fork.
           - suite: releases
             bindings: false
             run: uv run --no-project --python 3.12 python scripts/check_spec_releases.py
@@ -137,7 +145,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "0.13.6"
           enable-cache: false
@@ -217,7 +225,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "0.13.6"
           enable-cache: false
@@ -230,7 +238,7 @@ jobs:
       - name: merge
         run: |
           status=0
-          for suite in parity-execution parity-consensus parity-devnets parity-legacy; do
+          for suite in parity-execution parity-consensus parity-compliance parity-devnets parity-legacy; do
             uv run --no-project --python 3.12 python scripts/merge_parity.py \
               "$RUNNER_TEMP/$suite.md" "$RUNNER_TEMP"/shards/"$suite"-*/parity.json || status=1
             if [ -f "$RUNNER_TEMP/$suite.md" ]; then

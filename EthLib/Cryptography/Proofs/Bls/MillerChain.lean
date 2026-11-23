@@ -1,6 +1,7 @@
 module
 
 public import EthLib.Cryptography.Proofs.Bls.MillerLoop
+public import EthLib.Cryptography.Proofs.Bls.PairingFactor
 public import EthLib.Cryptography.Proofs.Bls.G2Subgroup
 public import EthLib.Cryptography.Proofs.MillerFunction
 
@@ -74,7 +75,7 @@ theorem twist_x_ne_zero {x y : Fp2} (h : G2.curve.toAffine.Nonsingular x y) : x 
   have he : y * y = 2 * 2 * Fp2.xi := by
     have h1 := h.1
     rw [equation_iff] at h1
-    simp only [G2.curve, WeierstrassCurve.Jacobian.toAffine] at h1
+    simp only [G2.curve, G1.Law.curveOf, WeierstrassCurve.Jacobian.toAffine] at h1
     rw [show (2 : Fp2) * 2 * Fp2.xi = G2.bTwist by decide_eq_at_model [Fp2.xi, G2.map_bTwist]]
     linear_combination h1
   have hn := congrArg Fp2.norm he
@@ -228,7 +229,7 @@ theorem finalExponentiation_millerDouble {T : G2} (hT : G2.Valid T) (hz : T.z �
 /-- After the final exponentiation, an addition step multiplies by `g_{T,Q}`. -/
 theorem finalExponentiation_millerAdd {T : G2} {xq yq : Fp2} (hT : G2.Valid T)
     (hz : T.z ≠ 0) (hQ : G2.Valid ⟨xq, yq, Fp2.one⟩) (hx : xq * T.z ^ 2 - T.x ≠ 0)
-    (h2 : (T.add ⟨xq, yq, Fp2.one⟩).z ≠ 0) (xp yp : Fp) {f f' : Fp12}
+    (h2 : (G2.add T ⟨xq, yq, Fp2.one⟩).z ≠ 0) (xp yp : Fp) {f f' : Fp12}
     (hf : finalExponentiation f = finalExponentiation f') :
     finalExponentiation (millerAdd T xq yq xp yp f).2 =
       finalExponentiation (f' * Miller.lineRatio ambientCurve (g2Hom (G2.toPoint T))
@@ -351,16 +352,16 @@ theorem finalExponentiation_millerSteps {s : ℕ} (hs : s < Fr.modulus) {xq yq :
       have hx := x_ne_of_nsmul hT2 hz2 hQ (j := 2 * k) (by omega) hk2
         (hne (2 * k - 1) (by omega) (by omega)) (hne (2 * k + 1) (by omega) (by omega))
       have hT3 := G2.valid_add hT2 hQ
-      have hk3 : G2.toPoint (T.double.add Q1) = (2 * k + 1) • G2.toPoint Q1 := by
+      have hk3 : G2.toPoint (G2.add T.double Q1) = (2 * k + 1) • G2.toPoint Q1 := by
         rw [G2.toPoint_add hT2 hQ, hk2, add_nsmul, one_nsmul]
-      have hz3 : (T.double.add Q1).z ≠ 0 :=
+      have hz3 : (G2.add T.double Q1).z ≠ 0 :=
         z_ne_zero_of_toPoint (hk3 ▸ hne (2 * k + 1) (by omega) (by omega))
       have hA := finalExponentiation_millerAdd hT2 hz2 hQ hx hz3 xp yp hD
-      have hg3 : g2Hom (G2.toPoint (T.double.add Q1)) =
+      have hg3 : g2Hom (G2.toPoint (G2.add T.double Q1)) =
           g2Hom (G2.toPoint T) + g2Hom (G2.toPoint T) + g2Hom (G2.toPoint Q1) := by
         rw [G2.toPoint_add hT2 hQ, map_add, hg2]
       have ha1 : (millerAdd T.double xq yq xp yp (millerDouble T xp yp f).2).1 =
-          T.double.add Q1 := rfl
+          G2.add T.double Q1 := rfl
       rw [ha1, ← hg3, ← hg2]
       exact ih _ _ _ hT3 (by rw [hk3, hsplit]) (by omega) hA
     · have hb' : ¬(s >>> n) &&& 1 = 1 := fun h => hb ((bit_iff s n).mp h)
@@ -387,9 +388,11 @@ theorem pairing_eq_finalExponentiation_loop {P : G1} {Q : G2} (hQ : G2.Valid Q)
   by_cases hQi : Q.isInfinity = true
   · have h1 : (1 : Fp12).conjugate = 1 := by apply Fp12.ext <;> simp
     rw [(G2.isInfinity_eq_true_iff_toPoint_eq_zero hQ).mp hQi, map_zero, Miller.loop_zero,
-      pairing, hQi, Bool.or_true, ite_eq_left rfl, h1,
-      finalExponentiation_eq_pow, one_pow, Fp12.one_eq_one]
-  rw [pairing, hP, Bool.false_or, ite_eq_right hQi]
+      h1, finalExponentiation_eq_pow, one_pow,
+      pairing_eq_one_of_pairFactor (pairFactor_eq_none (by rw [hQi, Bool.or_true])),
+      Fp12.one_eq_one]
+  rw [pairing_eq_of_pairFactor
+    (pairFactor_eq_some (by rw [hP, Bool.false_or]; exact Bool.eq_false_iff.mpr hQi))]
   apply finalExponentiation_conjugate_congr
   have hz : Q.z ≠ 0 := fun h => hQi (Fp2.isZero_iff.mpr h)
   obtain ⟨h, e⟩ := toPoint_eq_some hQ hz

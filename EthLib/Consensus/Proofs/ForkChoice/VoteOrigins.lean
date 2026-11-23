@@ -120,6 +120,43 @@ theorem VoteOrigin.exists_mem_committee {validator : ValidatorIndex}
   rw [origin.targetEpoch] at below
   exact ⟨targetState, index, committee, state, below, committeeOk, member⟩
 
+/-- A counted vote for a known node comes from an attestation at or after the slot of its block.
+
+The latest votes of the store must come from attestations, with the facts behind them. -/
+theorem VotesHaveOrigins.exists_attestation_of_voteCountsFor (holds : store.VotesHaveOrigins config)
+    {node : ForkChoiceNode} {block : BeaconBlock preset fork} {v : ValidatorIndex}
+    (found : store.blocks[node.root]? = some block)
+    (counts : store.voteCountsFor node v = true) :
+    ∃ attestation, store.latestMessages[v]? = some (LatestMessage.ofAttestation attestation) ∧
+      store.VoteOrigin config v attestation ∧ block.slot ≤ attestation.data.slot := by
+  obtain ⟨message, supported, latest, -, supportedOk, descends⟩ :=
+    store.exists_of_voteCountsFor counts
+  obtain ⟨attestation, rfl, origin⟩ := holds latest
+  obtain ⟨supportedBlock, supportedFound, slotLe⟩ := slot_le_of_isAncestor found descends
+  rw [getSupportedNode_root supportedOk] at supportedFound
+  obtain ⟨voted, votedFound, votedLe⟩ := origin.voted
+  have same : supportedBlock = voted := by
+    simp only [LatestMessage.ofAttestation] at supportedFound
+    rw [votedFound] at supportedFound
+    exact (Option.some.inj supportedFound).symm
+  subst same
+  exact ⟨attestation, latest, origin, UInt64.le_trans slotLe votedLe⟩
+
+/-- A known node that a counted vote supports has its block before the current slot.
+
+The latest votes of the store must come from attestations, with the facts behind them. -/
+theorem VotesHaveOrigins.slot_lt_of_voteCountsFor (holds : store.VotesHaveOrigins config)
+    {current : Slot} {node : ForkChoiceNode} {block : BeaconBlock preset fork}
+    (slotOk : store.getCurrentSlot config = .ok current)
+    (found : store.blocks[node.root]? = some block) {v : ValidatorIndex}
+    (counts : store.voteCountsFor node v = true) :
+    block.slot < current := by
+  obtain ⟨attestation, -, origin, le⟩ := holds.exists_attestation_of_voteCountsFor found counts
+  obtain ⟨current', currentOk, past⟩ := origin.past
+  rw [slotOk, Except.ok.injEq] at currentOk
+  subst current'
+  exact UInt64.lt_of_le_of_lt le past
+
 /-- The latest votes keep their facts in a store with the same votes, blocks, states and clock. -/
 private theorem VotesHaveOrigins.of_same (holds : store.VotesHaveOrigins config)
     (messages : after.latestMessages = store.latestMessages)
@@ -139,7 +176,7 @@ private theorem VotesHaveOrigins.of_same (holds : store.VotesHaveOrigins config)
 /-! ## The attestation handler -/
 
 /-- Storing the state of a target keeps the latest votes and the states already stored. -/
-private theorem storeTargetCheckpointState_kept {checks : SignatureChecks} {target : Checkpoint}
+theorem storeTargetCheckpointState_kept {checks : SignatureChecks} {target : Checkpoint}
     (stored : store.storeTargetCheckpointState config checks target = .ok after) :
     after.latestMessages = store.latestMessages ∧
       ∀ {checkpoint : Checkpoint} {state : BeaconState preset fork},
@@ -165,27 +202,32 @@ private theorem storeTargetCheckpointState_kept {checks : SignatureChecks} {targ
           rfl))) absent
     · exact found
 
-/-- After an attestation, a latest vote is one from before or the vote of the attestation.
-
-The vote of the attestation then has the facts behind it, in the store after it. -/
-theorem onAttestation_latestMessages_cases {checks : SignatureChecks}
+/-- A newly recorded vote has its origin and the same successful indexed signature read. -/
+theorem onAttestation_latestMessages_read_cases {checks : SignatureChecks}
     {attestation : Attestation preset fork} {isFromBlock : Bool}
     {validator : ValidatorIndex} {latest : LatestMessage fork}
     (attested : store.onAttestation config checks attestation isFromBlock = .ok after)
     (found : after.latestMessages[validator]? = some latest) :
     store.latestMessages[validator]? = some latest ∨
       (latest = LatestMessage.ofAttestation attestation ∧
-        after.VoteOrigin config validator attestation) := by
+        after.VoteOrigin config validator attestation ∧
+        ∃ stored targetState indexed,
+          store.storeTargetCheckpointState config checks attestation.data.target = .ok stored ∧
+          stored.checkpointState attestation.data.target = .ok targetState ∧
+          getIndexedAttestation targetState attestation = .ok indexed ∧
+          isValidIndexedAttestation config checks targetState indexed = .ok true ∧
+          validator ∈ indexed.attestingIndices.data.toList) := by
   have frame := onAttestation_frame attested
   have clock := (onAttestation_sameClock attested).getCurrentSlot (config := config)
   unfold onAttestation at attested
   simp only [bind_ok_iff] at attested
   obtain ⟨passed, valid, stored, storing, targetState, stateFound, checked, committeesOk,
-    indexed, indexedOk, isValid, _, attested⟩ := attested
+    indexed, indexedOk, isValid, validIndexed, attested⟩ := attested
   cases passed
   cases checked
   split at attested
-  · simp only [pure, Except.pure, Except.ok.injEq] at attested
+  · rename_i validTrue
+    simp only [pure, Except.pure, Except.ok.injEq] at attested
     subst attested
     obtain ⟨keptMessages, -⟩ := storeTargetCheckpointState_kept storing
     rcases foldl_recordVote_cases _ _ found with old | ⟨voter, rfl⟩
@@ -197,14 +239,32 @@ theorem onAttestation_latestMessages_cases {checks : SignatureChecks}
       intro root block known
       rw [frame.2.1]
       exact known
-    refine .inr ⟨rfl, ?_, epoch, getCheckpointBlock_of_blocks blocks root, ?_, ?_⟩
+    refine .inr ⟨rfl, ⟨?_, epoch, getCheckpointBlock_of_blocks blocks root, ?_, ?_⟩,
+      stored, targetState, indexed, storing, stateFound, mapError_ok_iff.mp indexedOk,
+      ?_, voter⟩
     · obtain ⟨block, known, le⟩ := voted
       exact ⟨block, blocks known, le⟩
     · exact ⟨targetState, indexed, checkpointState_ok_iff.mp stateFound,
         mapError_ok_iff.mp committeesOk, mapError_ok_iff.mp indexedOk, voter⟩
     · rw [clock]
       exact past
+    · simpa [validTrue] using mapError_ok_iff.mp validIndexed
   · simp [throw, throwThe, MonadExceptOf.throw, bind, Except.bind] at attested
+
+/-- After an attestation, a latest vote is one from before or the vote of the attestation.
+
+The vote of the attestation then has the facts behind it, in the store after it. -/
+theorem onAttestation_latestMessages_cases {checks : SignatureChecks}
+    {attestation : Attestation preset fork} {isFromBlock : Bool}
+    {validator : ValidatorIndex} {latest : LatestMessage fork}
+    (attested : store.onAttestation config checks attestation isFromBlock = .ok after)
+    (found : after.latestMessages[validator]? = some latest) :
+    store.latestMessages[validator]? = some latest ∨
+      (latest = LatestMessage.ofAttestation attestation ∧
+        after.VoteOrigin config validator attestation) := by
+  rcases onAttestation_latestMessages_read_cases attested found with old | ⟨same, origin, _⟩
+  · exact .inl old
+  · exact .inr ⟨same, origin⟩
 
 /-- An attestation keeps the state of each checkpoint of the store. -/
 theorem onAttestation_checkpointStates_of_found {checks : SignatureChecks}

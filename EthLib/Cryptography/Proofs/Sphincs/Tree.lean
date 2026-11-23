@@ -2,6 +2,7 @@ module
 
 public import EthLib.Cryptography.Sphincs.Tree
 public import EthLib.Cryptography.Proofs.Merkle.Completeness
+public import EthLib.Cryptography.Proofs.Merkle.Build
 
 /-!
 # Proofs: the trees of the leanSPHINCS hypertree
@@ -13,6 +14,8 @@ The key `e` of a tree of height `h` reaches node `floor(e / 2^h)` at the top hei
 So a key below `2^h`, which every key of the tree is, reaches the root.
 
 A tree hashes only at heights 1 to its own height, so only those node hashes matter.
+
+A build of a tree holds its root and the path of each of its keys.
 
 Each statement specializes one proved for every Merkle tree.
 
@@ -26,6 +29,10 @@ The other statements hold for every hash function `f`, run in the identity monad
 namespace EthLib.Cryptography.Sphincs
 
 open EthLib.Cryptography.Sphincs.Constants
+
+/-- No layer is taller than the top one. -/
+theorem Layer.height_le (layer : Layer) : layer.height ≤ TOP_HEIGHT := by
+  cases layer <;> decide
 
 /-! ## Unfolding, in any monad -/
 
@@ -44,33 +51,60 @@ theorem node_succ (z j : Nat) :
     node H pkSeed prf layer tree (z + 1) j = (do
       let left ← node H pkSeed prf layer tree z (2 * j)
       let right ← node H pkSeed prf layer tree z (2 * j + 1)
-      nodeHash H pkSeed layer tree (z + 1) j left right) :=
+      nodeHash H pkSeed layer tree ⟨z + 1, j⟩ left right) :=
   rfl
 
 /-! ## Only the heights of the tree matter -/
 
 /-- A path is the same with any node hash that agrees on the heights of the tree. -/
-theorem path_eq_of_agree (hash' : Nat → Nat → Digest → Digest → m Digest)
-    (agree : ∀ k, 1 ≤ k → k ≤ layer.height → nodeHash H pkSeed layer tree k = hash' k) (e : Nat) :
+theorem path_eq_of_agree (hash' : Merkle.Position → Digest → Digest → m Digest)
+    (agree : ∀ q : Merkle.Position, 1 ≤ q.level → q.level ≤ layer.height →
+      nodeHash H pkSeed layer tree q = hash' q) (e : Nat) :
     path H pkSeed prf layer tree e
       = Merkle.path hash' (leaves H pkSeed prf layer tree) layer.height e :=
-  Merkle.path_congr _ hash' _ _ e fun k h1 h2 => agree k h1 (by omega)
+  Merkle.path_congr _ hash' _ _ e fun q h1 h2 => agree q h1 (by omega)
 
 /-- A fold is the same with any node hash that agrees on the heights of the tree. -/
-theorem fold_eq_of_agree (hash' : Nat → Nat → Digest → Digest → m Digest)
-    (agree : ∀ k, 1 ≤ k → k ≤ layer.height → nodeHash H pkSeed layer tree k = hash' k) (e : Nat)
+theorem fold_eq_of_agree (hash' : Merkle.Position → Digest → Digest → m Digest)
+    (agree : ∀ q : Merkle.Position, 1 ≤ q.level → q.level ≤ layer.height →
+      nodeHash H pkSeed layer tree q = hash' q) (e : Nat)
     (leaf : Digest) (pi : Vector Digest layer.height) :
-    fold H pkSeed layer tree e leaf pi = Merkle.climb hash' 0 e leaf pi.toList :=
-  Merkle.climb_congr _ hash' _ 0 e leaf fun k h1 h2 => agree k (by omega) (by simpa using h2)
+    fold H pkSeed layer tree e leaf pi = Merkle.climb hash' ⟨0, e⟩ leaf pi.toList :=
+  Merkle.climb_congr _ hash' _ ⟨0, e⟩ leaf fun q h1 h2 =>
+    agree q (by omega) (by simpa using h2)
 
 /-- The root is the same with any node hash that agrees on the heights of the tree. -/
-theorem treeRoot_eq_of_agree (hash' : Nat → Nat → Digest → Digest → m Digest)
-    (agree : ∀ k, 1 ≤ k → k ≤ layer.height → nodeHash H pkSeed layer tree k = hash' k) :
+theorem treeRoot_eq_of_agree (hash' : Merkle.Position → Digest → Digest → m Digest)
+    (agree : ∀ q : Merkle.Position, 1 ≤ q.level → q.level ≤ layer.height →
+      nodeHash H pkSeed layer tree q = hash' q) :
     treeRoot H pkSeed prf layer tree
       = Merkle.root hash' (leaves H pkSeed prf layer tree) layer.height :=
-  Merkle.node_congr _ hash' _ _ 0 agree
+  Merkle.node_congr _ hash' _ _ agree
 
 end Monad
+
+/-! ## A build holds the root and the paths -/
+
+section Build
+
+variable {H : ByteArray → Id (Vector UInt8 32)} {pkSeed : PkSeed} {prf : Prf Id} {layer : Layer}
+  {tree : Nat}
+
+/-- The top value of a tree's build is the tree's root. -/
+theorem value_buildTree_run :
+    (buildTree H pkSeed prf layer tree).run.value = (treeRoot H pkSeed prf layer tree).run :=
+  Merkle.value_build_run _ _ _
+
+/-- The path of a key of the tree, read from the tree's build, is the key's path. -/
+theorem path_buildTree_run {e : Nat} (he : e < 2 ^ layer.height) :
+    (buildTree H pkSeed prf layer tree).run.path layer.height e
+      = (path H pkSeed prf layer tree e).run := by
+  -- The key's ancestor at the top height is the root, node 0.
+  have h := Merkle.path_build_run (nodeHash H pkSeed layer tree) (leaves H pkSeed prf layer tree)
+    layer.height e
+  rwa [Nat.div_eq_of_lt he] at h
+
+end Build
 
 /-! ## The path reaches the root -/
 

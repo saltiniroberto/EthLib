@@ -39,15 +39,6 @@ def BYTES_PER_CELL : Nat := FIELD_ELEMENTS_PER_CELL * BYTES_PER_FIELD_ELEMENT
 /-- Number of cells in an extended blob. -/
 def CELLS_PER_EXT_BLOB : Nat := FIELD_ELEMENTS_PER_EXT_BLOB / FIELD_ELEMENTS_PER_CELL
 
-/-- Domain separator for the Fiat-Shamir challenge of a blob and its commitment. -/
-def FIAT_SHAMIR_PROTOCOL_DOMAIN : ByteArray := String.toUTF8 "FSBLOBVERIFY_V1_"
-
-/-- Domain separator for the Fiat-Shamir challenge of the batch check of blob proofs. -/
-def RANDOM_CHALLENGE_KZG_BATCH_DOMAIN : ByteArray := String.toUTF8 "RCKZGBATCH___V1_"
-
-/-- Domain separator for the Fiat-Shamir challenge of the batch check of cell proofs. -/
-def RANDOM_CHALLENGE_KZG_CELL_BATCH_DOMAIN : ByteArray := String.toUTF8 "RCKZGCBATCH__V1_"
-
 /-- Serialized form of the point at infinity on the G1 group. -/
 def G1_POINT_AT_INFINITY : Vector UInt8 48 :=
   (Vector.replicate 48 0).set 0 0xc0
@@ -57,5 +48,24 @@ def KZG_SETUP_G2_LENGTH : Nat := 65
 
 /-- Length of a compressed G2 point in bytes. -/
 def BYTES_PER_G2_POINT : Nat := 96
+
+/-!
+## Domain separators
+
+Each domain separator starts the hash input of one Fiat-Shamir challenge.
+
+Each is 16 ASCII bytes.
+
+Neither EIP-4844 nor EIP-7594 states these bytes in its own text.
+-/
+
+/-- Domain separator for the Fiat-Shamir challenge of a blob and its commitment. -/
+def FIAT_SHAMIR_PROTOCOL_DOMAIN : ByteArray := String.toUTF8 "FSBLOBVERIFY_V1_"
+
+/-- Domain separator for the Fiat-Shamir challenge of the batch check of blob proofs. -/
+def RANDOM_CHALLENGE_KZG_BATCH_DOMAIN : ByteArray := String.toUTF8 "RCKZGBATCH___V1_"
+
+/-- Domain separator for the Fiat-Shamir challenge of the batch check of cell proofs. -/
+def RANDOM_CHALLENGE_KZG_CELL_BATCH_DOMAIN : ByteArray := String.toUTF8 "RCKZGCBATCH__V1_"
 
 end EthLib.Cryptography.Kzg.Constants

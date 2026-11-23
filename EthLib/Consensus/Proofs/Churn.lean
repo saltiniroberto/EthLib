@@ -22,6 +22,8 @@ Amounts queued in turn spend exactly their sum, with one full churn for each add
 
 So the amounts placed up to an epoch take at most the churn left, then a full churn per epoch.
 
+The bound also holds when the first epoch and the churn vary between calls, under a cap.
+
 In Electra, the churns of consolidations and of activations and exits add up to the whole churn.
 
 So their difference does not wrap.
@@ -207,6 +209,61 @@ theorem churnQueue_foldlM_spend {firstEpoch perEpochChurn earliestEpoch churnLef
       churnLeft.toNat + (epoch.toNat - earliestEpoch.toNat) * perEpochChurn.toNat :=
   (churnQueue_foldlM first computed).2
 
+/-- Calls at varying rates spend at most the starting capacity plus a cap per epoch advanced.
+
+The queue epoch never moves back.
+
+A call whose first epoch is later resets the queue and drops the unspent capacity. -/
+theorem churnQueue_window_le (cap : Nat) :
+    ∀ (calls : List (UInt64 × UInt64 × UInt64)) (earliest available epoch left : UInt64),
+      (∀ call ∈ calls, call.2.1.toNat ≤ cap) →
+      calls.foldlM (fun (queue : UInt64 × UInt64) call =>
+        churnQueue queue.1 call.1 call.2.1 queue.2 call.2.2) (earliest, available) =
+          .ok (epoch, left) →
+      earliest.toNat ≤ epoch.toNat ∧
+        left.toNat + (calls.map fun c => c.2.2.toNat).sum ≤
+          available.toNat + (epoch.toNat - earliest.toNat) * cap := by
+  intro calls
+  induction calls with
+  | nil =>
+    intro earliest available epoch left _ computed
+    cases Except.ok.inj computed
+    simp
+  | cons call rest ih =>
+    intro earliest available epoch left rates computed
+    simp only [List.foldlM_cons, bind_ok_iff] at computed
+    obtain ⟨⟨middle, remaining⟩, queued, restOk⟩ := computed
+    obtain ⟨placed, spent, _⟩ := churnQueue_spend queued
+    have rate := rates call (by simp)
+    have later := UInt64.le_iff_toNat_le.mp placed
+    rw [Base.Uint64.toNat_max] at later
+    have firstLe : earliest.toNat ≤ middle.toNat := Nat.le_trans (Nat.le_max_left _ _) later
+    obtain ⟨lastLe, tailBound⟩ := ih middle remaining epoch left
+      (fun c hc => rates c (List.mem_cons_of_mem _ hc)) restOk
+    have oneBound : remaining.toNat + call.2.2.toNat ≤
+        available.toNat + (middle.toNat - earliest.toNat) * cap := by
+      split at spent
+      · rename_i reset
+        have reset := UInt64.lt_iff_toNat_lt.mp reset
+        rw [Base.Uint64.toNat_max] at reset
+        have distance : middle.toNat - max earliest.toNat call.1.toNat + 1 ≤
+            middle.toNat - earliest.toNat := by omega
+        rw [Base.Uint64.toNat_max] at spent
+        have product := Nat.mul_le_mul distance rate
+        rw [Nat.add_mul, Nat.one_mul] at product
+        omega
+      · rw [Base.Uint64.toNat_max] at spent
+        have distance : middle.toNat - max earliest.toNat call.1.toNat ≤
+            middle.toNat - earliest.toNat := by omega
+        have product := Nat.mul_le_mul distance rate
+        omega
+    refine ⟨Nat.le_trans firstLe lastLe, ?_⟩
+    have distance : epoch.toNat - earliest.toNat =
+        (epoch.toNat - middle.toNat) + (middle.toNat - earliest.toNat) := by omega
+    simp only [List.map_cons, List.sum_cons]
+    rw [distance, Nat.add_mul]
+    omega
+
 /-- Amounts queued in turn take at most the churn left at the start of the queue.
 
 Each epoch that the queue moves past allows one more full churn.
@@ -216,13 +273,19 @@ The epochs never move back, so the amounts placed up to an epoch are the first o
 So the balance placed up to an epoch is at most the churn left, plus a full churn per later epoch.
 -/
 theorem churnQueue_foldlM_le {firstEpoch perEpochChurn earliestEpoch churnLeft epoch left :
-    UInt64} {amounts : List UInt64} (first : firstEpoch ≤ earliestEpoch)
+    UInt64} {amounts : List UInt64}
     (computed : amounts.foldlM (fun (queue : UInt64 × UInt64) amount =>
         churnQueue queue.1 firstEpoch perEpochChurn queue.2 amount)
       (earliestEpoch, churnLeft) = .ok (epoch, left)) :
     (amounts.map UInt64.toNat).sum ≤
       churnLeft.toNat + (epoch.toNat - earliestEpoch.toNat) * perEpochChurn.toNat := by
-  have := churnQueue_foldlM_spend first computed
+  have calls := churnQueue_window_le perEpochChurn.toNat
+    (amounts.map fun amount => (firstEpoch, perEpochChurn, amount)) earliestEpoch churnLeft
+    epoch left (by simp) (by rw [List.foldlM_map]; exact computed)
+  simp only [List.map_map, Function.comp_def] at calls
+  have same : (amounts.map fun amount => amount.toNat) = amounts.map UInt64.toNat := rfl
+  have spent := calls.2
+  rw [same] at spent
   omega
 
 /-- In Electra, the churns of consolidations and of activations and exits add up to the whole churn.
@@ -361,6 +424,68 @@ theorem computeConsolidationEpochAndUpdateChurn_first {config : Config}
   have placed := UInt64.le_iff_toNat_le.mp (churnQueue_spend queue).1
   rw [UInt64.max_def] at placed
   split at placed <;> rename_i order <;> simp only [UInt64.le_iff_toNat_le] at order ⊢ <;>
+    omega
+
+/-- An amount rounded down to whole increments has the value of the rounded amount. -/
+theorem toNat_roundToIncrement (preset : Preset) (amount : Gwei) :
+    (roundToIncrement preset amount).toNat =
+      amount.toNat - amount.toNat % preset.EFFECTIVE_BALANCE_INCREMENT.toNat := by
+  unfold roundToIncrement
+  rw [UInt64.toNat_sub_of_le _ _ (UInt64.le_iff_toNat_le.mpr (by
+    rw [UInt64.toNat_mod]
+    exact Nat.mod_le _ _)), UInt64.toNat_mod]
+
+/-- A share of a total, raised to the least churn and rounded down to an increment, is bounded.
+
+When the least churn is at least one increment, so is the share.
+
+The share is at most the least churn plus the total. -/
+theorem roundToIncrement_share_bounds {config : Config} (total quotient : Gwei)
+    (increment : 0 < preset.EFFECTIVE_BALANCE_INCREMENT)
+    (minimum : preset.EFFECTIVE_BALANCE_INCREMENT ≤ config.MIN_PER_EPOCH_CHURN_LIMIT_ELECTRA) :
+    preset.EFFECTIVE_BALANCE_INCREMENT.toNat ≤
+        (roundToIncrement preset (max config.MIN_PER_EPOCH_CHURN_LIMIT_ELECTRA
+          (total / quotient))).toNat ∧
+      (roundToIncrement preset (max config.MIN_PER_EPOCH_CHURN_LIMIT_ELECTRA
+          (total / quotient))).toNat ≤
+        config.MIN_PER_EPOCH_CHURN_LIMIT_ELECTRA.toNat + total.toNat := by
+  rw [toNat_roundToIncrement, toNat_max, UInt64.toNat_div]
+  have positive : 0 < preset.EFFECTIVE_BALANCE_INCREMENT.toNat :=
+    UInt64.lt_iff_toNat_lt.mp increment
+  have minimum := UInt64.le_iff_toNat_le.mp minimum
+  have share := Nat.div_le_self total.toNat quotient.toNat
+  have amountLower : preset.EFFECTIVE_BALANCE_INCREMENT.toNat ≤
+      max config.MIN_PER_EPOCH_CHURN_LIMIT_ELECTRA.toNat (total.toNat / quotient.toNat) := by
+    omega
+  have amountUpper : max config.MIN_PER_EPOCH_CHURN_LIMIT_ELECTRA.toNat
+      (total.toNat / quotient.toNat) ≤
+        config.MIN_PER_EPOCH_CHURN_LIMIT_ELECTRA.toNat + total.toNat := by
+    omega
+  generalize max config.MIN_PER_EPOCH_CHURN_LIMIT_ELECTRA.toNat (total.toNat / quotient.toNat) =
+    amount at *
+  have split := Nat.mod_add_div amount preset.EFFECTIVE_BALANCE_INCREMENT.toNat
+  have whole : 1 ≤ amount / preset.EFFECTIVE_BALANCE_INCREMENT.toNat :=
+    (Nat.le_div_iff_mul_le positive).mpr (by omega)
+  have lower : preset.EFFECTIVE_BALANCE_INCREMENT.toNat ≤
+      amount - amount % preset.EFFECTIVE_BALANCE_INCREMENT.toNat := by
+    have := Nat.le_mul_of_pos_right preset.EFFECTIVE_BALANCE_INCREMENT.toNat whole
+    omega
+  exact ⟨lower, Nat.le_trans (Nat.sub_le _ _) amountUpper⟩
+
+/-- Epochs of a churn of at least one increment hold an amount plus less than one churn.
+
+Then there are at most the amount in increments, plus one. -/
+theorem epochs_le_div_add_one {epochs churn increment left amount : Nat}
+    (positive : 0 < increment) (least : increment ≤ churn)
+    (spent : epochs * churn ≤ left + amount) (below : left < churn) :
+    epochs ≤ amount / increment + 1 := by
+  cases epochs with
+  | zero => exact Nat.zero_le _
+  | succ epochs =>
+    rw [Nat.add_mul, Nat.one_mul] at spent
+    have scaled := Nat.mul_le_mul_left epochs least
+    have bounded : epochs * increment ≤ amount := by omega
+    have := (Nat.le_div_iff_mul_le positive).mpr bounded
     omega
 
 end EthLib.Consensus

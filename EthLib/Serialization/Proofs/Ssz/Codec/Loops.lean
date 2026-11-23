@@ -5,9 +5,11 @@ public import EthLib.Serialization.Ssz.Codec.Json
 /-!
 # Proofs: the loops of the SSZ codec
 
-The serializer and the hex reader run their lists in loops that carry what they have built so far.
+The serializer and the byte-run reader loop over their lists, carrying what they have built so far.
 
 The theorems below give back the plain recursion on the first element, which the other proofs use.
+
+The two smallest cases of the hex reader are here too.
 -/
 
 @[expose] public section
@@ -209,45 +211,11 @@ theorem serializeFields_cons (field : Desc) (fields : List Desc) (value : Value)
 
 /-! ## Hex and byte runs -/
 
-/-- The hex loop from some bytes is the loop from none, after them. -/
-theorem hexBytesFrom_eq : ∀ (digits : List Char) (out : Bytes),
-    hexBytesFrom digits out = (hexBytesFrom digits #[]).map (out ++ ·)
-  | [], out => by simp [hexBytesFrom, Except.map]
-  | [_], _ => rfl
-  | high :: low :: rest, out => by
-    simp only [hexBytesFrom]
-    cases hexDigit high with
-    | error e => rfl
-    | ok h =>
-      cases hexDigit low with
-      | error e => rfl
-      | ok l =>
-        show hexBytesFrom rest (out.push _) = (hexBytesFrom rest (#[].push _)).map _
-        rw [hexBytesFrom_eq rest (out.push _), hexBytesFrom_eq rest (#[].push _)]
-        cases hexBytesFrom rest #[] <;>
-          simp only [Except.map, Array.push_eq_append, Array.empty_append, Array.append_assoc]
-
 /-- No digits hold no bytes. -/
 theorem hexBytes_nil : hexBytes [] = .ok #[] := rfl
 
 /-- One digit alone holds no byte. -/
 theorem hexBytes_single (c : Char) : hexBytes [c] = .error .hexDigits := rfl
-
-/-- The first two digits hold the first byte, and the rest hold the bytes after it. -/
-theorem hexBytes_cons (high low : Char) (rest : List Char) :
-    hexBytes (high :: low :: rest) = do
-      let byte := 16 * (← hexDigit high) + (← hexDigit low)
-      return #[UInt8.ofNat byte] ++ (← hexBytes rest) := by
-  simp only [hexBytes, hexBytesFrom]
-  cases hexDigit high with
-  | error e => rfl
-  | ok h =>
-    cases hexDigit low with
-    | error e => rfl
-    | ok l =>
-      show hexBytesFrom rest (#[].push _) = _
-      rw [hexBytesFrom_eq]
-      cases hexBytesFrom rest #[] <;> rfl
 
 /-- The byte-run loop from some bytes is the loop from none, after them. -/
 theorem byteRunFrom_eq : ∀ (values : List Value) (out : Bytes),
@@ -293,54 +261,13 @@ theorem assemble_eq (inline : List Bool) (parts : List Bytes) :
       return headOf leading slots ++ bodiesOf slots) := by
   rw [assemble, List.zip_eq_zipWith]
 
-/-- The slices of a fixed-count sequence, with offsets paired to spans by `zip`. -/
-theorem vectorSlices_eq (element : Desc) (length : Nat) (data : Bytes) :
-    vectorSlices element length data = (do
-      if data.size ≥ 2 ^ (8 * bytesPerOffset) then throw (.offsetOverflow data.size)
-      match element.fixedSize with
-      | some width =>
-        let expected := width * length
-        if data.size != expected then throw (.scope expected data.size)
-        return (List.range length).map fun i => data.extract (i * width) ((i + 1) * width)
-      | none =>
-        let expectedFirst := length * bytesPerOffset
-        if data.size < expectedFirst then throw (.scopeTooSmall expectedFirst data.size)
-        if length == 0 then return []
-        let offsets := readOffsets data length
-        if offsets.headD 0 != expectedFirst then
-          throw (.firstOffset expectedFirst (offsets.headD 0))
-        let spans ← offsetSpans offsets data.size
-        return (offsets.zip spans).map fun (start, span) => data.extract start (start + span)) := by
-  simp only [vectorSlices, List.map_zip_eq_zipWith]
-  rfl
+/-- Cutting each offset's span out of the data is a map over the offsets zipped with their spans.
 
-/-- The slices of a counted sequence, with offsets paired to spans by `zip`. -/
-theorem listSlices_eq (element : Desc) (limit : Option Nat) (data : Bytes) :
-    listSlices element limit data = (do
-      if data.size ≥ 2 ^ (8 * bytesPerOffset) then throw (.offsetOverflow data.size)
-      let scope := data.size
-      if scope == 0 then return []
-      match element.fixedSize with
-      | some width =>
-        if width == 0 then throw .scopeWidthless
-        if scope % width != 0 then throw (.scopeUndivided scope width)
-        let count := scope / width
-        if let some cap := limit then
-          if count > cap then throw (.overLimit cap count)
-        return (List.range count).map fun i => data.extract (i * width) ((i + 1) * width)
-      | none =>
-        if scope < bytesPerOffset then throw (.scopeTooSmall bytesPerOffset scope)
-        let first := readUint data 0 bytesPerOffset
-        if first < bytesPerOffset then throw .offsetBelowTable
-        if first % bytesPerOffset != 0 then throw .offsetUnaligned
-        if first > scope then throw .offsetPastScope
-        let count := first / bytesPerOffset
-        if let some cap := limit then
-          if count > cap then throw (.overLimit cap count)
-        let offsets := readOffsets data count
-        let spans ← offsetSpans offsets scope
-        return (offsets.zip spans).map fun (start, span) => data.extract start (start + span)) := by
-  simp only [listSlices, List.map_zip_eq_zipWith]
+Proofs about the slicers rewrite their last step into this form. -/
+theorem zipWith_extract_eq (data : Bytes) (offsets spans : List Nat) :
+    List.zipWith (fun start span => data.extract start (start + span)) offsets spans =
+      (offsets.zip spans).map fun (start, span) => data.extract start (start + span) := by
+  rw [List.map_zip_eq_zipWith]
   rfl
 
 /-! ## Offsets -/
@@ -367,14 +294,14 @@ theorem offsetSpans_nil (scope : Nat) : offsetSpans [] scope = .ok [] := rfl
 /-- The last body is closed by the budget. -/
 theorem offsetSpans_single (start scope : Nat) :
     offsetSpans [start] scope =
-      if scope < start then .error .offsetPastScope else .ok [scope - start] := by
+      if scope < start then .error (.offsetPastScope start scope) else .ok [scope - start] := by
   simp only [offsetSpans, offsetSpansFrom]
   split <;> rfl
 
 /-- Every other body ends where the next one begins. -/
 theorem offsetSpans_cons_cons (start next : Nat) (rest : List Nat) (scope : Nat) :
     offsetSpans (start :: next :: rest) scope =
-      if next < start then .error .offsetUnordered
+      if next < start then .error (.offsetUnordered start next)
       else do return (next - start) :: (← offsetSpans (next :: rest) scope) := by
   simp only [offsetSpans, offsetSpansFrom]
   split

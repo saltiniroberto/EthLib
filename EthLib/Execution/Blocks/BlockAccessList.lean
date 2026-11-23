@@ -219,6 +219,7 @@ The empty list has the RLP form `0xc0`.
 
 It fails only when a field has `2^64` bytes or more, since RLP cannot encode it. -/
 def hash (bal : BlockAccessList) : Except RlpError Hash32 := do
+  -- EIP-7928: the hash is `keccak256(rlp(L))` of the list `L`.
   return keccak256 (← Codec.encode bal)
 
 /-! ## The checks of the list alone -/
@@ -279,20 +280,26 @@ def Error.code : Error → UInt32
   | .codeChangesNotAscending _ => 409
   | .tooManyItems .. => 410
 
-/-- Check the order of the changes of one account.
-
-Each list is in strictly ascending order, so no slot, key or position appears twice.
-
-Each written slot has a change, and no key is both read and written. -/
+/-- Check the order and the uniqueness rules of one account. -/
 def checkAccount (a : AccountChanges) : Except Error Unit := do
   let address := a.address
   let slots := a.storageChanges.map (·.slot.toNat)
+  -- The storage changes come by ascending storage key.
+  --
+  -- The order is strict, so each storage key appears at most once among them.
   ensure (ascending slots) (.slotsNotAscending address)
   a.storageChanges.forM fun s => do
+    -- The changes of each slot hold at least one change.
     ensure (!s.changes.isEmpty) (.slotWithoutChange address s.slot)
+    -- Within each slot, the changes come by strictly ascending block access index.
     ensure (ascending (s.changes.map (·.index.toNat))) (.storageChangesNotAscending address s.slot)
+  -- The storage reads come by strictly ascending storage key.
   ensure (ascending (a.storageReads.map (·.toNat))) (.readsNotAscending address)
+  -- A storage key never appears both among the storage changes and among the storage reads.
   a.storageReads.forM fun r => ensure (!slots.contains r.toNat) (.readAndWritten address r)
+  -- The balance, nonce and code changes come by strictly ascending block access index.
+  --
+  -- So each block access index appears at most once in each list of changes.
   ensure (ascending (a.balanceChanges.map (·.index.toNat))) (.balanceChangesNotAscending address)
   ensure (ascending (a.nonceChanges.map (·.index.toNat))) (.nonceChangesNotAscending address)
   ensure (ascending (a.codeChanges.map (·.index.toNat))) (.codeChangesNotAscending address)
@@ -301,6 +308,9 @@ def checkAccount (a : AccountChanges) : Except Error Unit := do
 
 The error names the first account that does not. -/
 def checkAddresses : List AccountChanges → Except Error Unit
+  -- The accounts come in strict lexicographic order of address.
+  --
+  -- So each address appears at most once; EIP-7928 asks exactly once, and this check gives at most.
   | a :: b :: rest =>
     if addressKey a.address < addressKey b.address then checkAddresses (b :: rest)
     else .error (.accountsNotAscending b.address)
@@ -312,21 +322,22 @@ Once the checks of each account pass, no key of an account appears twice.
 
 So this counts the accounts and the distinct storage keys of each account, as EIP-7928 does. -/
 def itemCount (bal : BlockAccessList) : Nat :=
+  -- The items are the addresses plus the storage keys.
   (bal.map fun a => 1 + a.storageChanges.length + a.storageReads.length).sum
 
 /-- Check a block access list alone, in a block with the gas limit `gasLimit`.
 
 The order and uniqueness rules are in [EIP-7928][order].
 
-Accounts come in strictly ascending order of address, so each appears once.
-
 The [size rule][size] allows at most `gasLimit / 2000` items.
 
 [order]: https://eips.ethereum.org/EIPS/eip-7928#ordering-uniqueness-and-determinism
 [size]: https://eips.ethereum.org/EIPS/eip-7928#block-access-list-size-constraint -/
 def check (bal : BlockAccessList) (gasLimit : Nat) : Except Error Unit := do
+  -- The order and the uniqueness of each account, then of the accounts.
   bal.forM checkAccount
   checkAddresses bal
+  -- EIP-7928: there are at most `floor(H_l / ITEM_COST)` items.
   let limit := gasLimit / ITEM_COST
   ensure (itemCount bal ≤ limit) (.tooManyItems (itemCount bal) limit)
 

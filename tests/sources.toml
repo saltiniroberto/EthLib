@@ -42,9 +42,25 @@ directories = [
   "tests/cryptography/bls",
 ]
 
+[repositories."ethereum/beacon-APIs"]
+commit = "0ed12552077c9927ba2599ee632e76b2caf021d7"
+directories = ["tests/consensus/beacon_api"]
+
 [repositories."ethereum/builder-specs"]
-commit = "fce64468a81a87892d7cb9b4858272bb3d010e50"
+commit = "ea92eff73ad77c33d3b59a2033ffa02dfae5ee05"
 directories = ["tests/consensus/builder_api"]
+
+[repositories."flashbots/relay-specs"]
+commit = "a4e0a50d9d46bfe881fd74cc7e0db366371f4eed"
+directories = ["tests/consensus/relay_api"]
+
+[repositories."ethereum/keymanager-APIs"]
+commit = "3e7c64e2118f819a51de7093ea2b2f03bb2f8f6e"
+directories = ["tests/consensus/keymanager_api"]
+
+[repositories."ethereum/remote-signing-api"]
+commit = "514525ca961a9d001e96a02bf870285a8ae401a4"
+directories = ["tests/consensus/remote_signing_api"]
 
 [repositories."ethereum/c-kzg-4844"]
 commit = "a751e2d92abcd63b01d1400789789f5ea289a8b0"
@@ -76,7 +92,12 @@ commit = "7406111ac4ae539ea0db8b7ea2dc76730cd957f4"
 commit = "31cf6b577123bf1703eb3713f0b242f65fea806a"
 
 [repositories."ethereum/devp2p"]
-commit = "88f1c80800d622cc3a542a2125bbe33cc18c9f9c"
+commit = "277ceb399c15df86efb17d51eb58200c26879784"
+
+# A mainnet block after Shapella, which the check of a received body reads.
+[repositories."ethereum/portal-spec-tests"]
+commit = "938744a83d4f85dcdcf9bac12b798e15f2eac2b1"
+directories = ["bindings/python/tests/eth/portal_block_data"]
 
 [repositories."bitcoinjs/tiny-secp256k1"]
 commit = "e1fd7a77bb0ca87fb4726fb1fd4f424f30a04db9"
@@ -86,6 +107,7 @@ directories = ["bindings/python/tests/secp256k1/tiny_secp256k1"]
 commit = "46976b2a9bf99f727fb87dc8c809e3a3cdc6b445"
 directories = [
   "bindings/python/tests/consensus/deposit_tree",
+  "bindings/python/tests/precompile/eips",
   "bindings/python/tests/state/dao",
 ]
 
@@ -119,15 +141,16 @@ directories = ["bindings/python/tests/ethash/spec"]
 
 [repositories."ethereum/execution-apis"]
 commit = "3284ee80c3da3e516c53782dde75157cccf1ebdc"
-directories = ["bindings/python/tests/trie/getproof"]
+directories = ["bindings/python/tests/rpc/fixtures", "tests/engine"]
 
 [repositories."ethereum/yellowpaper"]
 commit = "efc5f9a1f356cba376c978eedb63cb0363c2aa85"
 
 [repositories."ethereum/execution-specs"]
-commit = "e27f097ec7b3e6e8ee9c2c1873c183e8f7da7a6e"
-release = "tests@v21.0.2"
+commit = "391d8a05d5cb182542ac7e7330c858b6ee03f990"
+release = "tests@v21.0.3"
 directories = [
+  "bindings/python/tests/precompile/execution_specs",
   "tests/engine", "tests/execution/blocks", "tests/execution/fees", "tests/execution/genesis",
   "tests/execution/modexp",
   "tests/execution/precompiles", "tests/execution/transactions",
@@ -135,6 +158,12 @@ directories = [
 
 [repositories."eth-clients/hoodi"]
 commit = "2a7efb3c530cce7c71702cc98d0f965df2411c11"
+
+[repositories."eth-clients/mainnet"]
+commit = "8cad4805e9cb5aa5e8e74d30e3f5029a7f133372"
+
+[repositories."eth-clients/sepolia"]
+commit = "7b1b9d9549787b6bbf538f943304c4cf84f7e39e"
 
 [repositories."ethereum/ssz-specs"]
 commit = "7bce07ff7d51b1a3c66ff4e2bd3233ac248ede70"
@@ -147,7 +176,7 @@ release = "v5.3.0"
 
 # The leanSPHINCS tests read the known answer of an independent implementation at this commit.
 [repositories."leanEthereum/leanVM"]
-commit = "5e3ade21d339a45e1b3b0dba97ad9300ab50e49b"
+commit = "fa4b43935667234e8e29c6cc19ffcfb3ab5164d5"
 
 # The libp2p tests read the hex examples and the key vector of these documents.
 # The mplex and yamux tests also read their frame layouts.
@@ -158,7 +187,7 @@ commit = "dd184f1ce89c81808503bb719b5fcb13844d08f3"
 commit = "9a1fbe8edadebea223f47102f1913b8026c23a1c"
 
 [repositories."libp2p/specs"]
-commit = "c750236de43cd8b246a824b377dfdb26bae686db"
+commit = "4facaf9876da1eb7d6e066982010c81495ebb965"
 
 # The gossip RPC tests build their frames from the protobuf encoding guide at this commit.
 [repositories."protocolbuffers/protocolbuffers.github.io"]
@@ -183,17 +212,24 @@ url = "https://github.com/ethereum/consensus-specs/releases/download/v1.7.0-beta
 size = 967886924
 sha256 = "67762986572372a08d3b182535aa760433c86e174e14e0bbd756f350dd19398c"
 
+# The fork choice compliance tests of the same release.
+[archives."consensus-specs/v1.7.0-beta.4/comptests"]
+repository = "ethereum/consensus-specs"
+url = "https://github.com/ethereum/consensus-specs/releases/download/v1.7.0-beta.4/comptests.tar.gz"
+size = 313252208
+sha256 = "ccb3149d29e4179e852499f1a3d121424dbac22745375908cd9059350aece746"
+
 [archives."bls12-381-tests/v0.1.2/bls_tests_yaml"]
 repository = "ethereum/bls12-381-tests"
 url = "https://github.com/ethereum/bls12-381-tests/releases/download/v0.1.2/bls_tests_yaml.tar.gz"
 size = 8319
 sha256 = "a4ef909b6248395094949a3bcdeb4e1b5b999733d4436f2c5006edba99d29279"
 
-[archives."execution-specs/tests@v21.0.2/fixtures"]
+[archives."execution-specs/tests@v21.0.3/fixtures"]
 repository = "ethereum/execution-specs"
-url = "https://github.com/ethereum/execution-specs/releases/download/tests%40v21.0.2/fixtures.tar.gz"
-size = 939189561
-sha256 = "e2fa7ea2ea516459f9ab92284b2927892f318f4e1f78ca802cb05a6c3b479ed9"
+url = "https://github.com/ethereum/execution-specs/releases/download/tests%40v21.0.3/fixtures.tar.gz"
+size = 944748649
+sha256 = "46bd48fb71a23da084218fe856fe442ab0c8d00c85c1c1aead0d2a965804fd24"
 
 # The devnet pre-releases of execution-spec-tests, beside the pinned release line.
 [archives."execution-specs/tests-heze-devnet@v3.0.0/fixtures"]
@@ -236,6 +272,25 @@ url = "https://era1.ethportal.net/mainnet-00000-5ec1ffb8.era1"
 size = 3891337
 sha256 = "9c3f42e0247d5503533f437ada2d44e7e9661170421c1b7844687c8dcfc0eb9b"
 
+# The genesis state of mainnet, a file used as it is, for the root of its genesis validators.
+[archives."eth-clients/mainnet@8cad4805/genesis.ssz"]
+repository = "eth-clients/mainnet"
+url = "https://raw.githubusercontent.com/eth-clients/mainnet/8cad4805e9cb5aa5e8e74d30e3f5029a7f133372/metadata/genesis.ssz"
+size = 5404504
+sha256 = "bbdf6fa5ffd6ead8ca6714c60a17d14d48ccaabbb18622b8485f88b58633d620"
+
+# The KZG trusted setup of the mainnet presets, a file used as it is, for the embedded setup.
+[archives."consensus-specs@aa16bb4c/trusted_setup_4096.json"]
+repository = "ethereum/consensus-specs"
+url = "https://raw.githubusercontent.com/ethereum/consensus-specs/aa16bb4c156184e9548a997d53efaf2a228a6304/presets/mainnet/trusted_setups/trusted_setup_4096.json"
+size = 881553
+sha256 = "f8e44a31ebf0a6d0734dcb301b0716e2c77f3ae18ed0cab0870fbcc2ca55616f"
+
+# The assets of a pinned release that no test reads, by download URL, each with its reason.
+# The release watcher fails on an asset of a pinned release that is neither here nor an archive.
+[unread_assets]
+"https://github.com/ethereum/consensus-specs/releases/download/v1.7.0-beta.4/general.tar.gz" = "Only the Altair BLS cases; the pinned general archive of v1.7.0-alpha.12 holds them too"
+
 # The pinned vector directories whose cases come from no repository, with their source.
 [other]
 "tests/cryptography/keystore" = "Unicode Character Database 16.0.0, UnicodeData.txt and NormalizationTest.txt"
@@ -245,8 +300,8 @@ sha256 = "9c3f42e0247d5503533f437ada2d44e7e9661170421c1b7844687c8dcfc0eb9b"
 "tests/cryptography/vrf" = "An independent implementation for the known answers, and EthLib"
 "tests/cryptography/sphincs" = "EthLib, and an independent implementation for the known answers"
 "tests/cryptography/xmss" = "EthLib, and an independent implementation for the known answers"
-"tests/consensus/pq_keys" = "Derived with the Python SSZ of ethereum/ssz-specs release v0.1.0, and EthLib for the proofs"
 "tests/serialization/ssz_limits" = "Derived with the Python SSZ of ethereum/ssz-specs release v0.1.0"
+"tests/serialization/ssz_proofs" = "Derived with the Python SSZ of ethereum/ssz-specs release v0.1.0"
 "bindings/python/tests/aes/cavp" = "KAT_AES.zip, aesmct.zip and gcmtestvectors.zip of NIST CAVP"
 "bindings/python/tests/keccak/kat" = "KeccakKAT-3.zip of the Keccak team"
 "bindings/python/tests/sha256/cavp" = "shabytetestvectors.zip of NIST CAVP"

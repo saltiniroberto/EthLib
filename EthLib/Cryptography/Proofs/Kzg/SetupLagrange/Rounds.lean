@@ -42,21 +42,6 @@ open EthLib.Base (array_mapM_ok)
 /-! ## Points by position -/
 
 
-/-- Each string of a decoded list gives the byte string at its position. -/
-theorem hexListToBytes_getElem {hex : Array String} {bytes : Array ByteArray}
-    (h : TrustedSetup.hexListToBytes hex = .ok bytes) :
-    bytes.size = hex.size ∧
-      ∀ (i : Nat) (hi : i < hex.size), TrustedSetup.hexToBytes? hex[i] = some bytes[i]! := by
-  obtain ⟨hsize, hget⟩ := array_mapM_ok h
-  refine ⟨hsize, fun i hi => ?_⟩
-  have hj : i < bytes.size := hsize ▸ hi
-  have he := hget i hi hj
-  rw [getElem!_pos bytes i hj]
-  split at he
-  · rename_i b hb
-    rw [hb, Except.ok.inj he]
-  · cases he
-
 /-- Each point of a decoded setup decompresses from the bytes at its position.
 
 Lagrange point `i` comes from position `reverseBits i 4096`. -/
@@ -64,34 +49,30 @@ theorem ofBytes_getElem {g1LagrangeBytes g1MonomialBytes g2MonomialBytes : Array
     {s : TrustedSetup}
     (h : TrustedSetup.ofBytes g1LagrangeBytes g1MonomialBytes g2MonomialBytes = .ok s)
     (i : Fin FIELD_ELEMENTS_PER_BLOB) :
-    G1.uncompress g1MonomialBytes[i.val]! = .ok s.g1Monomial[i] ∧
-      G1.uncompress g1LagrangeBytes[reverseBits i.val FIELD_ELEMENTS_PER_BLOB]! =
+    TrustedSetup.decodeG1 g1MonomialBytes[i.val]! = .ok s.g1Monomial[i] ∧
+      TrustedSetup.decodeG1 g1LagrangeBytes[reverseBits i.val FIELD_ELEMENTS_PER_BLOB]! =
         .ok s.g1LagrangeBrp[i] := by
   unfold TrustedSetup.ofBytes at h
   dsimp only at h
-  cases h₁ : g1LagrangeBytes.mapM fun b =>
-      (Bls.G1.uncompress b).mapError fun _ => KzgError.invalidTrustedSetup with
+  cases h₁ : g1LagrangeBytes.mapM TrustedSetup.decodeG1 with
   | error e => rw [h₁] at h; cases h
   | ok lagrange =>
-  cases h₂ : g1MonomialBytes.mapM fun b =>
-      (Bls.G1.uncompress b).mapError fun _ => KzgError.invalidTrustedSetup with
+  cases h₂ : g1MonomialBytes.mapM TrustedSetup.decodeG1 with
   | error e => rw [h₁, h₂] at h; cases h
   | ok monomial =>
-  cases h₃ : g2MonomialBytes.mapM fun b =>
-      (Bls.G2.uncompress b).mapError fun _ => KzgError.invalidTrustedSetup with
+  cases h₃ : g2MonomialBytes.mapM TrustedSetup.decodeG2 with
   | error e => rw [h₁, h₂, h₃] at h; cases h
   | ok monomial2 =>
   rw [h₁, h₂, h₃] at h
   dsimp only [bind, Except.bind] at h
   -- A successful map gives each output from the input at the same position.
   have hpos {xs : Array ByteArray} {ys : Array G1}
-      (hm : (xs.mapM fun b =>
-        (Bls.G1.uncompress b).mapError fun _ => KzgError.invalidTrustedSetup) = .ok ys)
-      (j : Nat) (hj : j < ys.size) : G1.uncompress xs[j]! = .ok ys[j] := by
+      (hm : xs.mapM TrustedSetup.decodeG1 = .ok ys)
+      (j : Nat) (hj : j < ys.size) : TrustedSetup.decodeG1 xs[j]! = .ok ys[j] := by
     obtain ⟨hsize, hget⟩ := array_mapM_ok hm
     have hj' : j < xs.size := by rw [← hsize]; exact hj
     rw [getElem!_pos xs j hj']
-    exact Base.mapError_ok_iff.mp (hget j hj' hj)
+    exact hget j hj' hj
   split at h
   · rename_i hl
     split at h
@@ -201,7 +182,7 @@ theorem toPoint_of_roundCheck {ins outs : Nat → Nat × Nat} {tw : Nat → Nat}
   have hroots : ∀ (i : Nat) (hi : i < 2 ^ 4), (roots16[i]'hi) < Fr.modulus ∧
       Fr.ofNat (roots16[i]'hi) = (zeta ^ 256) ^ i := by
     intro i hi
-    simpa [roots16] using rootPowNat_spec (i := i) hi
+    simpa [roots16] using rootPowNat_spec i
   have he := toPoint_of_dftCheck (k := 4) isPrimitiveRoot_root h hroots
     (fun i hi => by simpa using htw i hi) (fun i hi => by simpa using htor i hi) ⟨j, hj⟩
   simp only [Fin.getElem_fin, Vector.getElem_ofFn] at he
@@ -218,13 +199,13 @@ theorem modulus_smul_sum {P : Nat → G1.curve.toAffine.Point} {a b : Nat → Na
   refine sum_eq_zero fun i hi => ?_
   rw [smul_comm, smul_comm Fr.modulus (b i), h i (mem_range.mp hi), nsmul_zero, nsmul_zero]
 
-private theorem scalarB_val {k1 j2 : Nat} (hk1 : k1 < 16) (hj2 : j2 < 16) :
+private theorem scalarB_val (k1 j2 : Nat) :
     scalarB k1 j2 = ((4096 : Fr)⁻¹ * zeta ^ (16 * j2 * k1)).val := by
-  rw [← (scalarB_spec hk1 hj2).2, Fr.val_ofNat_of_lt (scalarB_spec hk1 hj2).1]
+  rw [← (scalarB_spec k1 j2).2, Fr.val_ofNat_of_lt (scalarB_spec k1 j2).1]
 
-private theorem scalarC_val {k1 k2 j3 : Nat} (hk1 : k1 < 16) (hk2 : k2 < 16) (hj3 : j3 < 16) :
+private theorem scalarC_val (k1 k2 j3 : Nat) :
     scalarC k1 k2 j3 = (zeta ^ (j3 * (k1 + 16 * k2))).val := by
-  rw [← (scalarC_spec hk1 hk2 hj3).2, Fr.val_ofNat_of_lt (scalarC_spec hk1 hk2 hj3).1]
+  rw [← (scalarC_spec k1 k2 j3).2, Fr.val_ofNat_of_lt (scalarC_spec k1 k2 j3).1]
 
 /-! ## The Lagrange points of the embedded setup -/
 
@@ -261,8 +242,8 @@ theorem lagrangeOfMonomial_of_checks {s : TrustedSetup} (hs : TrustedSetup.ofHex
     | error e => cases h
     | ok gb =>
     obtain ⟨hum, hul⟩ := ofBytes_getElem h i
-    have hmget := (hexListToBytes_getElem hm).2
-    have hlget := (hexListToBytes_getElem hl).2
+    have hmget := (TrustedSetup.hexListToBytes_getElem hm).2
+    have hlget := (TrustedSetup.hexListToBytes_getElem hl).2
     have hr : reverseBits i.val FIELD_ELEMENTS_PER_BLOB < 4096 := reverseBits_lt_two_pow i.val 12
     constructor
     · have hd := encodes_of_chunks hMsize hM i.isLt
@@ -303,7 +284,7 @@ theorem lagrangeOfMonomial_of_checks {s : TrustedSetup} (hs : TrustedSetup.ofHex
     have htor (i : Nat) (hi : i < 16) := (hAsum i hi j3 hj3 k1 hk1).2
     have he := toPoint_of_roundCheck (ins := fun i => tA (256 * k1 + 16 * i + j3))
       (outs := fun k2 => tB (256 * k1 + 16 * k2 + j3)) (tw := fun i => scalarB k1 i)
-      (hB k1 hk1 j3 hj3) (fun i hi => (scalarB_spec hk1 hi).1) htor hk2
+      (hB k1 hk1 j3 hj3) (fun i _ => (scalarB_spec k1 i).1) htor hk2
     refine ⟨he, ?_⟩
     rw [Table.point, he]
     exact modulus_smul_sum htor
@@ -315,7 +296,7 @@ theorem lagrangeOfMonomial_of_checks {s : TrustedSetup} (hs : TrustedSetup.ofHex
     intro k1 hk1 k2 hk2 k3 hk3
     exact toPoint_of_roundCheck (ins := fun i => tB (256 * k1 + 16 * k2 + i))
       (outs := fun k3 => tL (k1 + 16 * k2 + 256 * k3)) (tw := fun i => scalarC k1 k2 i)
-      (hC k1 hk1 k2 hk2) (fun i hi => (scalarC_spec hk1 hk2 hi).1)
+      (hC k1 hk1 k2 hk2) (fun i _ => (scalarC_spec k1 k2 i).1)
       (fun i hi => (hBsum k1 hk1 i hi k2 hk2).2) hk3
   -- The three rounds give the transform of size 4096.
   have htotal : ∀ k1 < 16, ∀ k2 < 16, ∀ k3 < 16,
@@ -328,11 +309,11 @@ theorem lagrangeOfMonomial_of_checks {s : TrustedSetup} (hs : TrustedSetup.ofHex
       hCsum k1 hk1 k2 hk2 k3 hk3]
     refine sum_congr rfl fun j3 hj3 => ?_
     rw [mem_range] at hj3
-    rw [scalarC_val hk1 hk2 hj3, (hBsum k1 hk1 j3 hj3 k2 hk2).1]
+    rw [scalarC_val k1 k2 j3, (hBsum k1 hk1 j3 hj3 k2 hk2).1]
     congr 2
     refine sum_congr rfl fun j2 hj2 => ?_
     rw [mem_range] at hj2
-    rw [scalarB_val hk1 hj2, (hAsum j2 hj2 j3 hj3 k1 hk1).1]
+    rw [scalarB_val k1 j2, (hAsum j2 hj2 j3 hj3 k1 hk1).1]
     refine congrArg (_ • ·) (congrArg (_ • ·) ?_)
     refine sum_congr rfl fun j1 hj1 => ?_
     rw [mem_range] at hj1

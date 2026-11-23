@@ -8,6 +8,7 @@ import pytest
 from ethlib.precompiles import run
 from raising import raises
 
+from .bls_faults import first_fault
 from .forks import ends
 
 # The fork that adds the precompile, pectra, and the latest fork: no fork in between changes it.
@@ -19,7 +20,7 @@ FORKS = ends("pectra")
 # Repository: ethereum/EIPs
 # Commit: 46976b2a9bf99f727fb87dc8c809e3a3cdc6b445
 # Licence: CC0-1.0
-CASES = json.loads((Path(__file__).parent / "eip2537_cases.json").read_text())
+CASES = json.loads((Path(__file__).parent / "eips" / "eip2537_cases.json").read_text())
 
 # The address of the precompile that each file tests.
 ADDRESS = {
@@ -48,7 +49,7 @@ ERROR = {
 def error(variant: str) -> str:
     """The message of a failed call, from the variant of its error."""
     return (
-        "EthLib.Execution.Evm.Precompiles.PrecompileError.bls12381\n  "
+        "EthLib.Execution.Evm.Precompiles.PrecompileError.bls12381 "
         f"(EthLib.Execution.Evm.Precompiles.Bls12381.Bls12381Error.{variant})"
     )
 
@@ -80,7 +81,7 @@ def test_exact_price(fork: str, address: int, case: dict) -> None:
 @pytest.mark.parametrize("address, case", SUCCESS)
 @pytest.mark.parametrize("fork", FORKS)
 def test_one_gas_short(fork: str, address: int, case: dict) -> None:
-    with raises(ValueError, error(f"outOfGas {case['Gas']} {case['Gas'] - 1}")):
+    with raises(ValueError, error(f"outOfGas (cost := {case['Gas']}) (gas := {case['Gas'] - 1})")):
         run(fork, address, bytes.fromhex(case["Input"]), case["Gas"] - 1)
 
 
@@ -89,9 +90,12 @@ def test_one_gas_short(fork: str, address: int, case: dict) -> None:
 def test_error(fork: str, address: int, case: dict) -> None:
     data = bytes.fromhex(case["Input"])
     variant = ERROR[case["ExpectedError"]]
-    # The length error names the length of the input.
+    # The length error names the length of the input, and the others the faulty element.
     if variant == "invalidInputLength":
-        variant = f"{variant} {len(data)}"
+        variant = f"{variant} (size := {len(data)})"
+    else:
+        variant = first_fault(address, data)
+        assert variant.startswith(ERROR[case["ExpectedError"]] + " "), variant
     with raises(ValueError, error(variant)):
         run(fork, address, data, AMPLE_GAS)
 
@@ -105,7 +109,7 @@ def test_error(fork: str, address: int, case: dict) -> None:
 # Each input repeats one pair, the point at infinity with the scalar 0, from 9 to 149 times.
 # So the file keeps that pair once per precompile, and each case keeps its pair count.
 # The cases price the discount table of EIP-2537, which the smaller cases do not reach.
-LARGE_MSM = json.loads((Path(__file__).parent / "eip2537_msm_repeated.json").read_text())
+LARGE_MSM = json.loads((Path(__file__).parent / "eips" / "eip2537_msm_repeated.json").read_text())
 
 LARGE = [
     pytest.param(
@@ -136,5 +140,5 @@ def test_large_msm_exact_price(fork: str, address: int, data: bytes, case: dict)
 @pytest.mark.parametrize("address, data, case", LARGE)
 @pytest.mark.parametrize("fork", FORKS)
 def test_large_msm_one_gas_short(fork: str, address: int, data: bytes, case: dict) -> None:
-    with raises(ValueError, error(f"outOfGas {case['Gas']} {case['Gas'] - 1}")):
+    with raises(ValueError, error(f"outOfGas (cost := {case['Gas']}) (gas := {case['Gas'] - 1})")):
         run(fork, address, data, case["Gas"] - 1)

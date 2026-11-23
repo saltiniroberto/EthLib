@@ -299,6 +299,16 @@ theorem readFrame_keeps (rules : MeterRules Q) {cost : Nat} {value : Evm fork Me
   cases h
   exact (rules.trans (rules.chargeGas_keeps h1) (rules.pushWord_keeps h2) :)
 
+/-- An instruction that reads a number of the environment keeps the relation. -/
+theorem readNumber_keeps (rules : MeterRules Q) {cost : Nat} {value : Evm fork Meter → Nat}
+    {evm after : Evm fork Meter} (h : readNumber cost value evm = .ok after) :
+    Q evm.gas after.gas := by
+  unfold readNumber at h
+  split at h
+  · exact rules.readFrame_keeps h
+  · obtain ⟨_, -, h⟩ := Base.bind_ok_iff.mp h
+    cases h
+
 /-- JUMP keeps the relation. -/
 theorem jumpStep_keeps (rules : MeterRules Q) {evm after : Evm fork Meter}
     (h : jumpStep evm = .ok after) : Q evm.gas after.gas := by
@@ -507,6 +517,7 @@ theorem environmentStep_keeps (rules : MeterRules Q) {op : Op}
   all_goals first
     | cases hf
     | exact rules.readFrame_keeps h
+    | exact rules.readNumber_keeps h
 
 /-! ## The instructions that read another account -/
 
@@ -803,7 +814,6 @@ theorem genericCall_keeps (rules : MeterRules Q)
     (h : genericCall evm message newAccount outputStart outputSize = .ok result) :
     result.Keeps (fun a b => Q a.gas b.gas) C evm := by
   unfold genericCall at h
-  dsimp only at h
   split at h
   · obtain ⟨after, hs, rfl⟩ := Base.map_ok_iff.mp h
     exact (rules.trans (rules.refill evm.gas newAccount) (rules.skipCall_keeps hs :) :)

@@ -20,7 +20,9 @@ DISAGREEMENTS = archives.disagreements(SUITE)
 pytestmark = pytest.mark.archive(catalogue.EXECUTION)
 
 
-@pytest.mark.parametrize("case", SHARD, ids=lambda case: case.id)
+@pytest.mark.parametrize(
+    "case", SHARD, ids=lambda case: harness.case_id(case.suite, case.id, case.group)
+)
 def test_case(case, request, record_property) -> None:
     harness.run(cast(Path, ROOT), case, DISAGREEMENTS, request, record_property)
 
@@ -37,6 +39,11 @@ def test_every_network_is_placed() -> None:
     # A network that is not in scope is new upstream.
     networks = {entry["fork"] for entry in catalogue.execution_index()}
     assert sorted(networks - set(catalogue.EXECUTION_FORKS)) == []
+
+
+def test_every_format_is_placed() -> None:
+    # A format that is neither run, planned nor left out is new upstream.
+    assert harness.unplaced_formats(catalogue.execution_index()) == []
 
 
 def test_disagreements() -> None:

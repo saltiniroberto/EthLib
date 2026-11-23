@@ -2,7 +2,7 @@ module
 
 public import EthLib.Cryptography.Proofs.Xmss.Security.XmssSecurity.Proof.Bridge.Program
 public import EthLib.Cryptography.Proofs.Xmss.Security.XmssSecurity.Proof.StatementLemmas
-public import EthLib.Cryptography.Proofs.Xmss.Unforgeability.Translate
+public import EthLib.Cryptography.Proofs.Xmss.Security.XmssSecurity.Translate
 
 /-!
 # The honest preparation
@@ -96,9 +96,10 @@ theorem topLeafHash_tweakable (parameter : PublicParameter) (key : TopIndex)
   exact tweakableHash_tweakable _ _ _
 
 theorem nodeAt_tweakable (parameter : PublicParameter) (layer : EthLib.Cryptography.Xmss.Layer)
-    (level j : Nat) (left right : Digest) :
-    OnlyQueries Tweakable (Concrete.nodeAt parameter layer level j left right :
+    (q : EthLib.Cryptography.Merkle.Position) (left right : Digest) :
+    OnlyQueries Tweakable (Concrete.nodeAt parameter layer q left right :
       OracleComp HashSpec Digest) := by
+  obtain ⟨level, j⟩ := q
   rcases level with _ | level
   · exact .pure _
   · by_cases hlevel : level < treeHeight
@@ -146,7 +147,8 @@ theorem treeNode_tweakable (parameter : PublicParameter) (secret : LeafIndex →
   rw [Concrete.treeNode]
   exact EthLib.Cryptography.Merkle.node_rec _ (OnlyQueries Tweakable) (fun hx hf => hx.bind hf) _
     (fun _ => (OnlyQueries.sequenceFin fun _ => chainWalk_tweakable _ _ _ _ _ _).bind
-      fun _ => leafHash_tweakable _ _ _) (nodeAt_tweakable parameter .bottom) levels node.val
+      fun _ => leafHash_tweakable _ _ _) (nodeAt_tweakable parameter .bottom)
+      ⟨levels, node.val⟩
 
 theorem topTreeNode_tweakable (parameter : PublicParameter) (topSecret : TopIndex → ChainIndex → Digest)
     (levels : Nat) (node : TopNode) :
@@ -155,7 +157,8 @@ theorem topTreeNode_tweakable (parameter : PublicParameter) (topSecret : TopInde
   rw [Concrete.topTreeNode]
   exact EthLib.Cryptography.Merkle.node_rec _ (OnlyQueries Tweakable) (fun hx hf => hx.bind hf) _
     (fun _ => (OnlyQueries.sequenceFin fun _ => topChainWalk_tweakable _ _ _ _ _ _).bind
-      fun _ => topLeafHash_tweakable _ _ _) (nodeAt_tweakable parameter .top) levels node.val
+      fun _ => topLeafHash_tweakable _ _ _) (nodeAt_tweakable parameter .top)
+      ⟨levels, node.val⟩
 
 theorem topSignFrom_tweakable (parameter : PublicParameter) (key : TopIndex) (root : Digest)
     (base : Randomness) (attempts trial : Nat) :
@@ -178,6 +181,28 @@ theorem honestRun_tweakable (d : Derivations) : OnlyQueries Tweakable (honestRun
 
 /-! ## The prepared cache -/
 
+/-- An output of a logged run, without its log, is an output of the run. -/
+theorem mem_support_run_of_logged_run {α : Type} (c : OracleComp HashSpec α)
+    (start : QueryCache HashSpec) (result : α × QueryLog HashSpec) (cache : QueryCache HashSpec)
+    (hmem : (result, cache) ∈ support ((simulateQ randomOracle c.withQueryLog).run start)) :
+    (result.1, cache) ∈ support ((simulateQ randomOracle c).run start) := by
+  rw [← withQueryLog_run_forget, support_map]
+  exact ⟨(result, cache), hmem, rfl⟩
+
+/-- A logged run from a cache resolves the computation from the cache it ends in. -/
+theorem resolves_of_logged_run {α : Type} (c : OracleComp HashSpec α) (start : QueryCache HashSpec)
+    (result : α × QueryLog HashSpec) (cache : QueryCache HashSpec)
+    (hmem : (result, cache) ∈ support ((simulateQ randomOracle c.withQueryLog).run start)) :
+    Resolves cache c result.1 :=
+  resolves_of_run _ _ _ (mem_support_run_of_logged_run _ _ _ _ hmem)
+
+/-- A logged run from a cache ends in a larger cache. -/
+theorem cache_le_of_logged_run {α : Type} (c : OracleComp HashSpec α) (start : QueryCache HashSpec)
+    (result : α × QueryLog HashSpec) (cache : QueryCache HashSpec)
+    (hmem : (result, cache) ∈ support ((simulateQ randomOracle c.withQueryLog).run start)) :
+    start ≤ cache :=
+  cache_le_of_run _ _ _ (mem_support_run_of_logged_run _ _ _ _ hmem)
+
 /-- `cache` is the cache after the logged run of `honestRun d` with result `result`.
 
 The run starts from the programmed cache of `seed`. -/
@@ -194,16 +219,9 @@ theorem prepared_of_mem (seed : MasterSeed) (d : Derivations)
     (hmem : (result, cache) ∈ support
       ((simulateQ randomOracle (honestRun d).withQueryLog).run (progCache seed d))) :
     Prepared seed d result cache where
-  resolves := by
-    have h : (result.1, cache) ∈ support ((simulateQ randomOracle (honestRun d)).run (progCache seed d)) := by
-      rw [← withQueryLog_run_forget, support_map]
-      exact ⟨(result, cache), hmem, rfl⟩
-    exact resolves_of_run _ _ _ h
-  prog_le := by
-    have h : (result.1, cache) ∈ support ((simulateQ randomOracle (honestRun d)).run (progCache seed d)) := by
-      rw [← withQueryLog_run_forget, support_map]
-      exact ⟨(result, cache), hmem, rfl⟩
-    exact cache_le_of_run _ _ _ h
+  -- The helpers hold for any computation: the kernel would run key generation to compare forms.
+  resolves := resolves_of_logged_run _ _ _ _ hmem
+  prog_le := cache_le_of_logged_run _ _ _ _ hmem
   log_agree := by
     intro x hx
     have hfinal := withQueryLog_finalCache _ _ _ hmem

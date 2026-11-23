@@ -79,7 +79,7 @@ theorem stepRules_parent :
   tstore _ _ _ _ := rfl
   log _ hs _ _ _ := by rw [hs]
   selfdestruct _ _ h := parent_finishSelfdestruct h
-  incrementNonce _ _ _ h := TransactionState.parent_incrementNonce h
+  incrementNonce _ _ _ _ h := TransactionState.parent_incrementNonce h
   incorporate h := by rw [state_incorporateChild]; exact h
 
 /-- A result of a step from `evm` that keeps the block of the state.
@@ -163,7 +163,7 @@ theorem exists_rollbackOnError_processMessage [LawfulGasMeter Meter] {message : 
     {held : GasMeter.gasHeld meter ≤ message.gas} {ended}
     (h : processMessage fork message state substate meter held = .ok ended) :
     ∃ last : Evm fork Meter, ended.val = rollbackOnError state last := by
-  rw [processMessage] at h
+  rw [processMessage_unfold] at h
   obtain ⟨ended0, -, rolled⟩ := Base.map_ok_iff.mp h
   have hval := congrArg Subtype.val rolled
   simp only at hval

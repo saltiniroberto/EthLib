@@ -4,6 +4,7 @@ public import EthLib.Cryptography.Xmss.Sign
 public import EthLib.Cryptography.Xmss.Verify
 public import EthLib.Cryptography.Proofs.Wots
 public import EthLib.Cryptography.Proofs.Merkle.Completeness
+public import EthLib.Cryptography.Proofs.Xmss.Ots
 public import VCVio.OracleComp.QueryTracking.QueryBound.Basic
 
 /-!
@@ -13,13 +14,13 @@ Each call of `H` and of the seed function counts at most 1.
 
 Then each algorithm makes at most a fixed number of counted calls.
 
-- The public key takes at most `205 * 2^16` calls.
-- A signature from the derivations takes at most `2^33 + 615 * 2^16 - 3` calls.
+- A tree at level 16 takes at most `205 * 2^16 - 1` calls.
+- A one-time signature takes at most `2^32 + 204` calls.
 - Verification takes at most `384` calls.
 
 A key's leaf takes `29` derivations, `174` chain steps and one hash, `204` calls in all.
 
-A node at level `l` takes `2^l` leaves and `2^l - 1` hashes.
+A node at level `l` takes `2^l` leaves and `2^l - 1` hashes, and so does its build.
 -/
 
 @[expose] public section
@@ -41,7 +42,7 @@ theorem isQueryBoundP_ofFnInOrder {α : Type} {n : Nat} :
       IsQueryBoundP (HashSig.ofFnInOrder k f) p (k * n)
   | 0, _, _ => isQueryBoundP_pure _ _ _
   | k + 1, f, h => by
-    rw [HashSig.ofFnInOrder]
+    rw [HashSig.ofFnInOrder_succ]
     refine (isQueryBoundP_bind (h 0) fun _ _ =>
       isQueryBoundP_bind (isQueryBoundP_ofFnInOrder k _ fun i => h i.succ)
         fun _ _ => isQueryBoundP_pure _ _ 0).mono ?_
@@ -75,51 +76,65 @@ theorem isQueryBoundP_findFirst {κ β : Type} (trial : Nat → κ)
 
 section Merkle
 
-variable {α : Type} {hash : Nat → Nat → α → α → OracleComp spec α}
+variable {α : Type} {hash : Merkle.Position → α → α → OracleComp spec α}
   {leaves : Nat → OracleComp spec α} {c : Nat}
 
 /-- A node at `level` costs its `2^level` leaves of cost `c` and its `2^level - 1` hashes. -/
 theorem isQueryBoundP_merkleNode (hleaves : ∀ j, IsQueryBoundP (leaves j) p c)
-    (hhash : ∀ l j a b, IsQueryBoundP (hash l j a b) p 1) :
-    ∀ level j, IsQueryBoundP (Merkle.node hash leaves level j) p (2 ^ level * (c + 1) - 1)
-  | 0, j => (hleaves j).mono (by simp)
-  | level + 1, j => by
+    (hhash : ∀ q a b, IsQueryBoundP (hash q a b) p 1) :
+    ∀ q : Merkle.Position,
+      IsQueryBoundP (Merkle.node hash leaves q) p (2 ^ q.level * (c + 1) - 1) := by
+  rintro ⟨level, j⟩
+  induction level generalizing j with
+  | zero => exact (hleaves j).mono (by simp)
+  | succ level ih =>
     rw [Merkle.node_succ]
     have h1 : 1 ≤ 2 ^ level * (c + 1) := Nat.one_le_iff_ne_zero.2 (by positivity)
     have h2 : 2 ^ (level + 1) * (c + 1) = 2 * (2 ^ level * (c + 1)) := by ring
-    refine (isQueryBoundP_bind (isQueryBoundP_merkleNode hleaves hhash level _) fun _ _ =>
-      isQueryBoundP_bind (isQueryBoundP_merkleNode hleaves hhash level _) fun _ _ =>
-        hhash _ _ _ _).mono ?_
+    refine (isQueryBoundP_bind (ih _) fun _ _ =>
+      isQueryBoundP_bind (ih _) fun _ _ => hhash _ _ _).mono ?_
+    simp only at h1 h2 ⊢
     omega
+
+/-- A build at `level` costs as the node at its position. -/
+theorem isQueryBoundP_merkleBuild (hleaves : ∀ j, IsQueryBoundP (leaves j) p c)
+    (hhash : ∀ q a b, IsQueryBoundP (hash q a b) p 1) (q : Merkle.Position) :
+    IsQueryBoundP (Merkle.build hash leaves q) p (2 ^ q.level * (c + 1) - 1) :=
+  isQueryBoundP_merkleNode
+    (fun j => (isQueryBoundP_bind (m := 0) (hleaves j) fun _ _ => isQueryBoundP_pure _ _ 0).mono
+      (le_of_eq (Nat.add_zero _)))
+    (fun _ _ _ => (isQueryBoundP_bind (m := 0) (hhash _ _ _) fun _ _ =>
+      isQueryBoundP_pure _ _ 0).mono (le_of_eq (Nat.add_zero _))) q
 
 /-- The `n` siblings above a node at `level` cost the nodes they are. -/
 theorem isQueryBoundP_merkleSiblings (hleaves : ∀ j, IsQueryBoundP (leaves j) p c)
-    (hhash : ∀ l j a b, IsQueryBoundP (hash l j a b) p 1) :
-    ∀ level j n, IsQueryBoundP (Merkle.siblings hash leaves level j n) p
-      (2 ^ (level + n) * (c + 1) - 2 ^ level * (c + 1))
-  | level, j, 0 => by simp [Merkle.siblings]
-  | level, j, n + 1 => by
+    (hhash : ∀ q a b, IsQueryBoundP (hash q a b) p 1) :
+    ∀ (q : Merkle.Position) (n : Nat), IsQueryBoundP (Merkle.siblings hash leaves q n) p
+      (2 ^ (q.level + n) * (c + 1) - 2 ^ q.level * (c + 1))
+  | q, 0 => by simp [Merkle.siblings]
+  | q, n + 1 => by
     simp only [Merkle.siblings]
-    have h1 : 1 ≤ 2 ^ level * (c + 1) := Nat.one_le_iff_ne_zero.2 (by positivity)
-    have h2 : 2 ^ (level + 1) * (c + 1) = 2 * (2 ^ level * (c + 1)) := by ring
-    have h3 : 2 ^ (level + 1) * (c + 1) ≤ 2 ^ (level + 1 + n) * (c + 1) :=
+    have h1 : 1 ≤ 2 ^ q.level * (c + 1) := Nat.one_le_iff_ne_zero.2 (by positivity)
+    have h2 : 2 ^ (q.level + 1) * (c + 1) = 2 * (2 ^ q.level * (c + 1)) := by ring
+    have h3 : 2 ^ (q.level + 1) * (c + 1) ≤ 2 ^ (q.level + 1 + n) * (c + 1) :=
       Nat.mul_le_mul_right _ (Nat.pow_le_pow_right (by norm_num) (by omega))
-    have h4 : level + (n + 1) = level + 1 + n := by omega
+    have h4 : q.level + (n + 1) = q.level + 1 + n := by omega
     rw [h4]
-    refine (isQueryBoundP_bind (isQueryBoundP_merkleNode hleaves hhash level _) fun _ _ =>
-      isQueryBoundP_bind (isQueryBoundP_merkleSiblings hleaves hhash (level + 1) (j / 2) n)
+    refine (isQueryBoundP_bind (isQueryBoundP_merkleNode hleaves hhash q.sibling) fun _ _ =>
+      isQueryBoundP_bind (isQueryBoundP_merkleSiblings hleaves hhash q.parent n)
         fun _ _ => isQueryBoundP_pure _ _ 0).mono ?_
+    simp only [Merkle.Position.sibling_level, Merkle.Position.parent_level]
     omega
 
 /-- A climb costs one hash per sibling. -/
-theorem isQueryBoundP_climb (hhash : ∀ l j a b, IsQueryBoundP (hash l j a b) p 1) :
-    ∀ (siblings : List α) (level j : Nat) (current : α),
-      IsQueryBoundP (Merkle.climb hash level j current siblings) p siblings.length
-  | [], _, _, _ => isQueryBoundP_pure _ _ _
-  | _ :: rest, level, j, current => by
+theorem isQueryBoundP_climb (hhash : ∀ q a b, IsQueryBoundP (hash q a b) p 1) :
+    ∀ (siblings : List α) (q : Merkle.Position) (current : α),
+      IsQueryBoundP (Merkle.climb hash q current siblings) p siblings.length
+  | [], _, _ => isQueryBoundP_pure _ _ _
+  | _ :: rest, q, current => by
     rw [Merkle.climb]
-    refine (isQueryBoundP_bind (hhash _ _ _ _) fun _ _ =>
-      isQueryBoundP_climb hhash rest _ _ _).mono ?_
+    refine (isQueryBoundP_bind (hhash _ _ _) fun _ _ =>
+      isQueryBoundP_climb hhash rest _ _).mono ?_
     simp only [List.length_cons]
     omega
 
@@ -134,11 +149,11 @@ attribute [local irreducible] LAYER_HEIGHT MAX_RANDOMIZER_TRIALS
 section Algorithms
 
 variable {ι : Type} {spec : OracleSpec ι} {p : ι → Prop} [DecidablePred p]
-  {H : ByteArray → OracleComp spec (Vector UInt8 32)} {prf : SeedPrf (OracleComp spec)}
+  {H : Array UInt64 → OracleComp spec Lanes4} {prf : SeedPrf (OracleComp spec)}
 
 /-- A tweakable hash call is one call of `H`. -/
 theorem isQueryBoundP_th (hH : ∀ x, IsQueryBoundP (H x) p 1) (pp : PublicParam)
-    (address : Address) (payload : ByteArray) :
+    (address : Address) (payload : Array UInt64) :
     IsQueryBoundP (th H pp address payload) p 1 :=
   isQueryBoundP_bind (m := 0) (hH _) fun _ _ => isQueryBoundP_pure _ _ 0
 
@@ -171,7 +186,15 @@ theorem isQueryBoundP_node (hH : ∀ x, IsQueryBoundP (H x) p 1)
     (layer : Layer) (level j : Nat) :
     IsQueryBoundP (node H pp prf layer level j) p (2 ^ level * 205 - 1) :=
   isQueryBoundP_merkleNode (c := 204) (fun _ => isQueryBoundP_otsPublicLeaf hH hprf _ _ _)
-    (fun _ _ _ _ => isQueryBoundP_th hH _ _ _) level j
+    (fun _ _ _ => isQueryBoundP_th hH _ _ _) ⟨level, j⟩
+
+/-- A build at `level` is `2^level` leaves and `2^level - 1` hashes. -/
+theorem isQueryBoundP_build (hH : ∀ x, IsQueryBoundP (H x) p 1)
+    (hprf : ∀ pp a suffix, IsQueryBoundP (prf pp a suffix) p 1) (pp : PublicParam)
+    (layer : Layer) (level j : Nat) :
+    IsQueryBoundP (build H pp prf layer level j) p (2 ^ level * 205 - 1) :=
+  isQueryBoundP_merkleBuild (c := 204) (fun _ => isQueryBoundP_otsPublicLeaf hH hprf _ _ _)
+    (fun _ _ _ => isQueryBoundP_th hH _ _ _) ⟨level, j⟩
 
 /-- A key's path is the `16` nodes beside it, one per level. -/
 theorem isQueryBoundP_path (hH : ∀ x, IsQueryBoundP (H x) p 1)
@@ -180,7 +203,7 @@ theorem isQueryBoundP_path (hH : ∀ x, IsQueryBoundP (H x) p 1)
     IsQueryBoundP (path H pp prf layer e) p (2 ^ 16 * 205 - 205) := by
   have h := isQueryBoundP_merkleSiblings (c := 204) (hash := nodeHash H pp layer)
     (leaves := leaves H pp prf layer) (fun _ => isQueryBoundP_otsPublicLeaf hH hprf pp layer _)
-    (fun _ _ _ _ => isQueryBoundP_th hH pp _ _) 0 e LAYER_HEIGHT
+    (fun _ _ _ => isQueryBoundP_th hH pp _ _) ⟨0, e⟩ LAYER_HEIGHT
   unfold path Merkle.path
   exact h.mono (by simp [LAYER_HEIGHT])
 
@@ -190,35 +213,27 @@ theorem isQueryBoundP_publicParamOf
     IsQueryBoundP (publicParamOf prf) p 1 :=
   isQueryBoundP_bind (m := 0) (hprf _ _ _) fun _ _ => isQueryBoundP_pure _ _ 0
 
-/-- The public key is the parameter and the top tree's root. -/
-theorem isQueryBoundP_publicKeyOf (hH : ∀ x, IsQueryBoundP (H x) p 1)
-    (hprf : ∀ pp a suffix, IsQueryBoundP (prf pp a suffix) p 1) :
-    IsQueryBoundP (publicKeyOf H prf) p (205 * 2 ^ 16) := by
-  refine (isQueryBoundP_bind (isQueryBoundP_publicParamOf hprf) fun pp _ =>
-    isQueryBoundP_bind (m := 0) (isQueryBoundP_node hH hprf pp .top LAYER_HEIGHT 0) fun _ _ =>
-      isQueryBoundP_pure _ _ 0).mono ?_
-  simp [LAYER_HEIGHT]
-
 /-- The base of the randomizer trials is one derivation. -/
 theorem isQueryBoundP_randomizerBase
     (hprf : ∀ pp a suffix, IsQueryBoundP (prf pp a suffix) p 1) (pp : PublicParam)
-    (layer : Layer) (e : UInt32) (msg : ByteArray) :
+    (layer : Layer) (e : UInt32) (msg : Array UInt64) :
     IsQueryBoundP (randomizerBase pp prf layer e msg) p 1 :=
   isQueryBoundP_bind (m := 0) (hprf _ _ _) fun _ _ => isQueryBoundP_pure _ _ 0
 
 /-- The codeword search is one digest per trial. -/
 theorem isQueryBoundP_findCodeword (hH : ∀ x, IsQueryBoundP (H x) p 1) (pp : PublicParam)
-    (layer : Layer) (e : UInt32) (msg : ByteArray) (base : Randomizer) (c fuel : Nat) :
-    IsQueryBoundP (Internal.findCodeword H pp layer e msg base c fuel) p fuel :=
-  isQueryBoundP_findFirst _ _ (fun _ => (isQueryBoundP_map_iff _ _ _).2
+    (layer : Layer) (e : UInt32) (msg : Array UInt64) (base : Randomizer) (c fuel : Nat) :
+    IsQueryBoundP (Internal.findCodeword H pp layer e msg base c fuel) p fuel := by
+  rw [Internal.findCodeword_eq]
+  exact isQueryBoundP_findFirst _ _ (fun _ => (isQueryBoundP_map_iff _ _ _).2
     (isQueryBoundP_th hH _ _ _)) c fuel
 
 /-- A one-time signature is the base, at most `2^32` trials, the starts and `174` steps. -/
 theorem isQueryBoundP_otsSign (hH : ∀ x, IsQueryBoundP (H x) p 1)
     (hprf : ∀ pp a suffix, IsQueryBoundP (prf pp a suffix) p 1) (pp : PublicParam)
-    (layer : Layer) (e : UInt32) (msg : ByteArray) :
+    (layer : Layer) (e : UInt32) (msg : Array UInt64) :
     IsQueryBoundP (otsSign H pp prf layer e msg) p (2 ^ 32 + 204) := by
-  unfold otsSign
+  unfold otsSign Internal.otsSignTrials
   refine (isQueryBoundP_bind (isQueryBoundP_randomizerBase hprf pp layer e msg) fun base _ =>
     isQueryBoundP_bind (isQueryBoundP_findCodeword hH pp layer e msg base 0
       MAX_RANDOMIZER_TRIALS) fun r _ => ?_).mono (n := 1 + (MAX_RANDOMIZER_TRIALS + (29 + V * 3)))
@@ -233,43 +248,9 @@ theorem isQueryBoundP_otsSign (hH : ∀ x, IsQueryBoundP (H x) p 1)
     simp only [CHAIN_LENGTH] at this
     omega
 
-/-- One layer's signature is a one-time signature and a path. -/
-theorem isQueryBoundP_signLayer (hH : ∀ x, IsQueryBoundP (H x) p 1)
-    (hprf : ∀ pp a suffix, IsQueryBoundP (prf pp a suffix) p 1) (pp : PublicParam)
-    (layer : Layer) (e : Nat) (msg : ByteArray) :
-    IsQueryBoundP (signLayer H pp prf layer e msg) p (2 ^ 32 + 204 + (2 ^ 16 * 205 - 205)) := by
-  unfold signLayer
-  refine isQueryBoundP_bind (isQueryBoundP_otsSign hH hprf pp layer _ msg) fun r _ => ?_
-  rcases r with _ | ⟨rho, y⟩
-  · exact isQueryBoundP_pure _ _ _
-  · exact (isQueryBoundP_bind (m := 0) (isQueryBoundP_path hH hprf pp layer e) fun _ _ =>
-      isQueryBoundP_pure _ _ 0).mono le_rfl
-
-/-- A signature is two layers' signatures and the root of the bottom tree. -/
-theorem isQueryBoundP_signDerived (hH : ∀ x, IsQueryBoundP (H x) p 1)
-    (hprf : ∀ pp a suffix, IsQueryBoundP (prf pp a suffix) p 1) (pp : PublicParam)
-    (idx : LeafIndex) (msg : Message) :
-    IsQueryBoundP (signDerived H prf pp idx msg) p (2 ^ 33 + 615 * 2 ^ 16 - 3) := by
-  unfold signDerived
-  have hlayer := fun layer e msg => isQueryBoundP_signLayer hH hprf pp layer e msg
-  refine (isQueryBoundP_bind (hlayer .bottom _ _) fun r _ => ?_).mono
-    (n := 2 ^ 32 + 204 + (2 ^ 16 * 205 - 205) +
-      (0 + ((2 ^ LAYER_HEIGHT * 205 - 1) + (2 ^ 32 + 204 + (2 ^ 16 * 205 - 205)))))
-    (by simp [LAYER_HEIGHT])
-  rcases r with err | bottom
-  · exact isQueryBoundP_pure _ _ _
-  · refine isQueryBoundP_bind (isQueryBoundP_pure _ _ 0) fun _ _ =>
-      isQueryBoundP_bind (isQueryBoundP_node hH hprf pp _ LAYER_HEIGHT _) fun _ _ =>
-        (isQueryBoundP_bind (m := 0) (hlayer .top _ _) fun r _ => ?_).mono
-          (le_of_eq (Nat.add_zero _))
-    rcases r with err | top
-    · exact isQueryBoundP_pure _ _ _
-    · exact isQueryBoundP_bind_zero _ _ (isQueryBoundP_pure _ _ _) fun _ =>
-        isQueryBoundP_pure _ _ _
-
 /-- The leaf of a one-time signature is a digest, at most `174` steps and one hash. -/
 theorem isQueryBoundP_otsLeaf (hH : ∀ x, IsQueryBoundP (H x) p 1) (pp : PublicParam)
-    (layer : Layer) (e : UInt32) (msg : ByteArray) (rho : Randomizer) (y : Vector Digest V) :
+    (layer : Layer) (e : UInt32) (msg : Array UInt64) (rho : Randomizer) (y : Vector Digest V) :
     IsQueryBoundP (otsLeaf H pp layer e msg rho y) p 176 := by
   unfold otsLeaf
   refine isQueryBoundP_bind (m := 175) (isQueryBoundP_th hH pp _ _) fun d _ => ?_
@@ -283,15 +264,15 @@ theorem isQueryBoundP_otsLeaf (hH : ∀ x, IsQueryBoundP (H x) p 1) (pp : Public
 
 /-- The root one layer's signature leads to is a leaf and a climb of `16` levels. -/
 theorem isQueryBoundP_layerRoot (hH : ∀ x, IsQueryBoundP (H x) p 1) (pp : PublicParam)
-    (layer : Layer) (e : Nat) (msg : ByteArray) (sig : LayerSignature) :
+    (layer : Layer) (e : Nat) (msg : Array UInt64) (sig : LayerSignature) :
     IsQueryBoundP (layerRoot H pp layer e msg sig) p 192 := by
   unfold layerRoot
   refine (isQueryBoundP_bind (isQueryBoundP_otsLeaf hH pp layer _ msg _ _) fun r _ => ?_).mono
     (n := 176 + (LAYER_HEIGHT + 0)) (by simp [LAYER_HEIGHT])
   rcases r with _ | leaf
   · exact isQueryBoundP_pure _ _ _
-  · refine isQueryBoundP_bind ((isQueryBoundP_climb (fun _ _ _ _ => isQueryBoundP_th hH pp _ _)
-      sig.path.toList 0 e leaf).mono (by simp)) fun _ _ => isQueryBoundP_pure _ _ 0
+  · refine isQueryBoundP_bind ((isQueryBoundP_climb (fun _ _ _ => isQueryBoundP_th hH pp _ _)
+      sig.path.toList ⟨0, e⟩ leaf).mono (by simp)) fun _ _ => isQueryBoundP_pure _ _ 0
 
 /-- Verification is the roots of both layers. -/
 theorem isQueryBoundP_verifyWith (hH : ∀ x, IsQueryBoundP (H x) p 1) (pk : PublicKey)

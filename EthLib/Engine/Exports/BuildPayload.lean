@@ -15,9 +15,21 @@ public section
 
 namespace EthLib.Engine.Exports
 
-open EthLib.Exports (Result PyValue pyExport)
+open EthLib.Exports (ExportError Result PyValue UnreadArgument pyExport rejectArgument toResult)
 open EthLib.Base
 open EthLib.Execution.Blocks
+
+/-- A build that fails reaches Python with the code of the error it holds.
+
+An error of the attributes reads as an Engine API error, and a transaction as its payload error.
+
+An error of the block keeps the message of the block exports. -/
+instance : ExportError BuildError where
+  code := BuildError.code
+  message
+    | .attributes e => s!"engine error: {ExportError.message e}"
+    | .transaction e => s!"{e.code}: {reasonMessage e}"
+    | .block e => ExportError.message e
 
 /-- Build a payload on a chain, from attributes, the builder's choices and transactions.
 
@@ -33,33 +45,24 @@ Then come the requests of the block and its value in wei.
 
 An error has the code of its Engine API error, of the transaction, or of the block.
 
-Code 0 is for a chain that does not decode, and for an unknown method.
-
-It is also for a parent number or time past 64 bits, and for a result without an encoding. -/
+Code 0 is for a chain that does not decode, an unknown method, or a result with no encoding. -/
 def buildPayloadOf
     (args : PyValue × ByteArray × List (String × ByteArray × List ByteArray) × String × PyValue ×
       Address × ByteArray × UInt64 × List ByteArray) :
     Result (ByteArray × ByteArray × List ByteArray × Nat) := do
   let (config, state, recent, method, attributes, feeRecipient, extraData, target, txs) := args
   let chain ← Execution.Blocks.Exports.chainOf config state recent
-  let some version := forkchoiceUpdatedVersion method | throw (0, s!"no method {method}")
-  -- The payload tree holds 64-bit numbers and times, so a parent past them is malformed input.
-  if let some parent := chain.recent.getLast? then
-    unless parent.header.number < UInt64.size ∧ parent.header.timestamp.toNat < UInt64.size do
-      throw (0, "recent: the parent's number or time does not fit 64 bits")
-  let decoded ← (payloadAttributesOfVersion version attributes.toJson).mapError
-    fun e => (e.code, s!"engine error: {reprStr e}")
-  let ⟨_, built⟩ ← (buildPayloadOnChain chain version decoded ⟨feeRecipient, extraData, target⟩
-    txs).mapError fun
-      | .attributes e => (e.code, s!"engine error: {reprStr e}")
-      | .transaction e => (e.code, s!"{e.code}: {reasonMessage e}")
-      | .block e => (e.code, Execution.Blocks.Exports.blockErrorMessage e)
+  let some version := forkchoiceUpdatedVersion method | rejectArgument none s!"no method {method}"
+  let decoded ← toResult "engine error" (payloadAttributesOfVersion version attributes.toJson)
+  let ⟨_, built⟩ ← toResult none
+    (buildPayloadOnChain chain version decoded ⟨feeRecipient, extraData, target⟩ txs)
   let encoded : Except BlockError (ByteArray × ByteArray) := do
     let block ← (Block.encode (← bodyItems built.block)).mapError .encoding
     let accounts ← (Serialization.Rlp.encode
       (Execution.Blocks.Exports.accountsItem built.state)).mapError .encoding
     return (block, accounts)
-  let (block, accounts) ← encoded.mapError fun e => (0, s!"result: {reprStr e}")
+  let (block, accounts) ← toResult none
+    (encoded.mapError fun e => UnreadArgument.mk s!"result: {reprStr e}")
   return (block, accounts, built.requests, built.blockValue)
 
 /-- Build a payload on a chain, from attributes, the builder's choices and transactions.

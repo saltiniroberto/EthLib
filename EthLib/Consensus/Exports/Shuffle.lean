@@ -17,23 +17,28 @@ public section
 
 namespace EthLib.Consensus.Exports
 
-open EthLib.Exports (Result PyValue pyExport)
+open EthLib.Exports (ExportError Result PyValue pyExport toResult)
 
 open Lean Base
 
 /-- The message of a shuffle error, for a Python traceback. -/
 def shuffleErrorText : ShuffleError → String
   | .indexOutOfRange index count => s!"index {index} is not below the index count {count}"
-  | .noCommittee => "the committee count is zero"
-  | .overflow => "a committee bound is 2^64 or more"
+  | .noCommittee index => s!"the committee count is zero, for committee {index}"
+  | .overflow size index =>
+    s!"a bound of committee {index} of {size} indices is 2^64 or more"
   | .countTooLarge count => s!"the index count {count} is above 2^40"
+
+/-- A shuffle error reaches Python with its code, and its message names the fault. -/
+instance : ExportError ShuffleError where
+  code := ShuffleError.code
+  message := shuffleErrorText
 
 /-- The shuffled position of every index below the count, which must be at most `2^40`. -/
 def computeShuffledPermutationOf (args : String × UInt64 × Bytes32) : Result (List UInt64) := do
   let (name, count, seed) := args
   let preset ← presetOf name
-  let shuffled ← (computeShuffledPermutation preset count seed).mapError
-    fun e => (e.code, shuffleErrorText e)
+  let shuffled ← toResult none (computeShuffledPermutation preset count seed)
   return shuffled.toList
 
 /-- The shuffled position of every index below a count of at most `2^40`, as a list.
@@ -47,7 +52,7 @@ def computeShuffledPermutationExport (args : PyValue) : Result PyValue :=
 def computeShuffledIndexOf (args : String × UInt64 × UInt64 × Bytes32) : Result UInt64 := do
   let (name, index, count, seed) := args
   let preset ← presetOf name
-  (computeShuffledIndex preset index count seed).mapError fun e => (e.code, shuffleErrorText e)
+  toResult none (computeShuffledIndex preset index count seed)
 
 /-- The shuffled position of one index.
 

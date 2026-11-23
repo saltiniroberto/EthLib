@@ -56,6 +56,16 @@ FAST_CONFIRMATION = (
     "variables",
 )
 
+# The suites of the fork choice compliance cases, which EthLib runs at every fork above.
+COMPLIANCE = (
+    "attester_slashing_test",
+    "block_cover_test",
+    "block_tree_test",
+    "block_weight_test",
+    "invalid_message_test",
+    "shuffling_test",
+)
+
 # The checks that read the store of the fast confirmation rule.
 # A checks step with them follows a run of that rule.
 # The case leaves that run implicit at the start of each slot.
@@ -92,6 +102,8 @@ def runs(fork: str, runner: str, handler: str) -> bool:
     """Whether EthLib runs the cases of a handler at a fork."""
     if runner == "fast_confirmation":
         return fork in SPECIFIED and handler in FAST_CONFIRMATION
+    if runner == "fork_choice_compliance":
+        return fork in SPECIFIED and handler in COMPLIANCE
     return fork in SPECIFIED and handler in HANDLERS + GLOAS_HANDLERS
 
 
@@ -150,7 +162,18 @@ def _input(case: Path, step: dict) -> tuple:
     raise ValueError(f"no runner for the step {step}")
 
 
-def _check(read: dict, checks: dict) -> None:
+def _viable_leaves(read: list[dict], want: list[dict], gloas: bool) -> tuple[list, list]:
+    """The viable leaves that the store gives and those that a check wants, in one order."""
+    # The order of the leaves depends on the walk, so the sorted lists are compared.
+    # A leaf gives its payload status from Gloas on, and only its root and weight before.
+    fields = ("weight", "payload_status") if gloas else ("weight",)
+    assert all(leaf.keys() == {"root", *fields} for leaf in want), want
+    found = [(leaf["root"], *(leaf[f] for f in fields)) for leaf in read]
+    wanted = [(_hex(leaf["root"]), *(leaf[f] for f in fields)) for leaf in want]
+    return sorted(found), sorted(wanted)
+
+
+def _check(read: dict, checks: dict, gloas: bool) -> None:
     """Compare a read of the store with each check of a step."""
     for key, want in checks.items():
         match key:
@@ -160,10 +183,8 @@ def _check(read: dict, checks: dict) -> None:
                 if "payload_status" in want:
                     assert read["head"]["payload_status"] == want["payload_status"]
             case "viable_for_head_roots_and_weights":
-                # The order of the leaves depends on the walk, so the sets are compared.
-                found = [(e["root"], e["weight"], e["payload_status"]) for e in read[key]]
-                wanted = [(_hex(e["root"]), e["weight"], e["payload_status"]) for e in want]
-                assert sorted(found) == sorted(wanted)
+                found, wanted = _viable_leaves(read[key], want, gloas)
+                assert found == wanted
             case "payload_timeliness_vote" | "payload_data_availability_vote":
                 # The read asks for the votes on the block of the timeliness check.
                 asked = checks["payload_timeliness_vote"]["block_root"]
@@ -198,14 +219,23 @@ def _check(read: dict, checks: dict) -> None:
                 raise ValueError(f"no runner for the check {key}")
 
 
-def run_case(preset: str, fork: str, case: Path) -> None:
-    """Run every step of a case on one store, and compare each outcome with the case."""
+def run_case(preset: str, fork: str, case: Path, compliance: bool = False) -> None:
+    """Run every step of a case on one store, and compare each outcome with the case.
+
+    A compliance case runs as its own runner does.
+    That runner starts Gloas at epoch 0 without a configuration file.
+    It checks signatures only under setting 1, and it lets a carried handler fail.
+    """
     steps = _load(case / "steps.yaml")
     config_file = case / "config.yaml"
     config = replacements(_load(config_file), preset) if config_file.exists() else None
+    gloas = SPECIFIED.index(fork) >= SPECIFIED.index("gloas")
+    if compliance and gloas:
+        config = {"GLOAS_FORK_EPOCH": 0}
     meta = _load(case / "meta.yaml") if (case / "meta.yaml").exists() else {}
+    setting = (meta or {}).get("bls_setting", 0)
     # Setting 2 marks placeholder signatures, which the case must not check.
-    verify = (meta or {}).get("bls_setting", 0) != 2
+    verify = setting == 1 if compliance else setting != 2
     inputs = [_inputs(case, step) for step in steps]
     outcomes = iter(
         consensus.fork_choice(
@@ -220,13 +250,24 @@ def run_case(preset: str, fork: str, case: Path) -> None:
     )
     for index, step in enumerate(steps):
         # A fast confirmation and the read after it make one checks step.
-        reads = [next(outcomes) for _ in inputs[index]]
-        outcome = reads[0] if len(reads) == 1 else reads[0] | reads[1]
+        groups = [next(outcomes) for _ in inputs[index]]
+        assert all(groups), (index, groups)
+        reads = [group[0] for group in groups]
         if "checks" in step:
-            assert all(isinstance(read, dict) for read in reads), (index, reads)
-            _check(outcome, step["checks"])
+            assert all(len(group) == 1 for group in groups), (index, groups)
+            found = [read for read in reads if isinstance(read, dict)]
+            assert len(found) == len(reads), (index, reads)
+            _check(found[0] if len(found) == 1 else found[0] | found[1], step["checks"], gloas)
         else:
+            assert len(reads) == 1, (index, reads)
+            outcome = reads[0]
             assert (outcome is None) == step.get("valid", True), (index, step, outcome)
+            # The helper's valid block cases require every carried handler to succeed too.
+            if outcome is None and not compliance:
+                assert all(result is None for group in groups for result in group[1:]), (
+                    index,
+                    groups,
+                )
     assert next(outcomes, None) is None
 
 
@@ -297,7 +338,7 @@ def test_digests():
 @pytest.mark.parametrize("preset, fork, case", _cases())
 def test_case(preset, fork, case):
     assert runs(fork, case.parts[-4], case.parts[-3])
-    run_case(preset, fork, case)
+    run_case(preset, fork, case, case.parts[-4] == "fork_choice_compliance")
 
 
 @archives.parametrize("preset, fork, case", _archive_cases)
@@ -305,17 +346,234 @@ def test_archive_case(preset, fork, case):
     run_case(preset, fork, case)
 
 
+# A leaf of the store, which gives its payload status at every fork.
+_LEAF = {"root": bytes([1]) * 32, "weight": 32_000_000_000, "payload_status": 0}
+
+
+def test_viable_leaves_before_gloas():
+    # Before Gloas a check gives no payload status, so the root and the weight decide.
+    want = [{"root": "0x" + "01" * 32, "weight": 32_000_000_000}]
+    found, wanted = _viable_leaves([_LEAF], want, gloas=False)
+    assert found == wanted == [(_LEAF["root"], 32_000_000_000)]
+    found, wanted = _viable_leaves([{**_LEAF, "weight": 0}], want, gloas=False)
+    assert found != wanted
+
+
+def test_viable_leaves_from_gloas():
+    # From Gloas the payload status of each leaf is compared too.
+    want = [{"root": "0x" + "01" * 32, "weight": 32_000_000_000, "payload_status": 1}]
+    found, wanted = _viable_leaves([_LEAF], want, gloas=True)
+    assert found != wanted
+    found, wanted = _viable_leaves([{**_LEAF, "payload_status": 1}], want, gloas=True)
+    assert found == wanted
+
+
 def test_anchor_state_mismatch():
     # The anchor block must commit to the anchor state; its state root sits at bytes 48 to 80.
     case = next((FILES / "minimal" / "altair").rglob("steps.yaml")).parent
     block = bytearray(_read(case, "anchor_block"))
+    state_root = bytes(block[48:80])
     block[48] ^= 1
-    with raises(
-        consensus.ForkChoiceError,
-        "fork choice: EthLib.Consensus.ForkChoiceError.anchorStateMismatch",
-    ) as info:
+    message = (
+        f"fork choice: expected the anchor state root 0x{state_root.hex()}, "
+        f"got the block's state root 0x{bytes(block[48:80]).hex()}"
+    )
+    with raises(consensus.ForkChoiceError, message) as info:
         consensus.fork_choice("minimal", "altair", _read(case, "anchor_state"), bytes(block), [])
     assert info.value.code == 1
+
+
+# A case with blocks at slots 1, 2 and 3, each built on the one before.
+_CARRIED_CASE = (
+    FILES / "minimal/altair/fast_confirmation/current_epoch/pyspec_tests/fcr_current_epoch_02"
+)
+
+
+def _state_root(signed: dict, state: bytes) -> bytes:
+    """The root of the state after a signed block."""
+    encoded = consensus.api_ssz("minimal", "altair", "BeaconBlock", signed["message"])
+    return consensus.compute_new_state_root("minimal", "altair", state, encoded, verify=False)
+
+
+def _sealed(signed: dict, state: bytes, admitted: bool) -> bytes:
+    """A signed block with its true state root, or with the zero root that the store rejects."""
+    root = _state_root(signed, state)
+    signed["message"]["state_root"] = "0x" + (root if admitted else bytes(32)).hex()
+    return consensus.api_ssz("minimal", "altair", "SignedBeaconBlock", signed)
+
+
+def _carried_replay(
+    voted_admitted: bool, slashed_admitted: bool
+) -> tuple[list, bytes, tuple[bytes, bytes]]:
+    """The outcomes of a vote for block 1 and of a slashing of its voters, and their state roots."""
+    # The pinned slot-2 block moves onto the anchor, so block 1 stays a leaf with its own weight.
+    # Its first attestation is the vote of the four validators of the slot-1 committee.
+    # A copy with an unknown root follows: the transition accepts it and the fork choice rejects it.
+    # The slot-3 block moves onto the slot-2 block and carries a double vote of those four.
+    # Proposers in epoch 0 do not depend on the branch, so both blocks keep theirs.
+    case = _CARRIED_CASE
+    names = [step["block"] for step in _load(case / "steps.yaml") if "block" in step]
+    anchor_state, anchor_block = _read(case, "anchor_state"), _read(case, "anchor_block")
+    anchor_root = consensus.ssz_static("minimal", "altair", "BeaconBlock", anchor_block)[0]
+    first = _read(case, names[0])
+    first_root = _hex(names[0].removeprefix("block_"))
+    voted = consensus.api_json("minimal", "altair", "SignedBeaconBlock", _read(case, names[1]))
+    message = voted["message"]
+    assert message["slot"] == "2"
+    message["parent_root"] = "0x" + anchor_root.hex()
+    good = message["body"]["attestations"][0]
+    bad = {**good, "data": {**good["data"], "beacon_block_root": "0x" + "42" * 32}}
+    message["body"]["attestations"] = [good, bad]
+    committee = consensus.api_committees(
+        "minimal", "altair", anchor_state, epoch=0, slot=1, index=0
+    )["data"][0]["validators"]
+    assert len(committee) == 4
+    voted_block = _sealed(voted, anchor_state, True)
+    encoded = consensus.api_ssz("minimal", "altair", "BeaconBlock", message)
+    voted_root = consensus.ssz_static("minimal", "altair", "BeaconBlock", encoded)[0]
+    state = consensus.state_transitions(
+        "minimal", "altair", anchor_state, [voted_block], verify=False
+    )
+    voted_state_root = _state_root(voted, anchor_state)
+    if not voted_admitted:
+        voted_block = _sealed(voted, anchor_state, False)
+    slashed = consensus.api_json("minimal", "altair", "SignedBeaconBlock", _read(case, names[2]))
+    message = slashed["message"]
+    assert message["slot"] == "3"
+    message["parent_root"] = "0x" + voted_root.hex()
+    indexed = {
+        "attesting_indices": sorted(committee, key=int),
+        "data": good["data"],
+        "signature": good["signature"],
+    }
+    message["body"]["attestations"] = []
+    message["body"]["attester_slashings"] = [
+        {"attestation_1": indexed, "attestation_2": {**indexed, "data": bad["data"]}}
+    ]
+    slashed_state_root = _state_root(slashed, state)
+    slashed_block = _sealed(slashed, state, slashed_admitted)
+    outcomes = consensus.fork_choice(
+        "minimal",
+        "altair",
+        anchor_state,
+        anchor_block,
+        [
+            ("tick", 6),
+            ("block", first),
+            ("tick", 18),
+            ("checks", (False, True, None)),
+            ("block", voted_block),
+            ("checks", (False, True, None)),
+            ("block", slashed_block),
+            ("checks", (False, True, None)),
+        ],
+        verify=False,
+        config={"PROPOSER_SCORE_BOOST": 0},
+    )
+    return outcomes, first_root, (voted_state_root, slashed_state_root)
+
+
+def _weight(read: dict, root: bytes) -> int:
+    """The weight of a viable leaf of the block tree, from a read of the store."""
+    leaves = read["viable_for_head_roots_and_weights"]
+    return next(leaf["weight"] for leaf in leaves if leaf["root"] == root)
+
+
+def _wrong_state_root(outcome: object, expected: bytes) -> bool:
+    """Whether an outcome rejects a block whose state root is zero, not the expected root."""
+    return isinstance(outcome, consensus.ForkChoiceError) and str(outcome) == (
+        "the state transition fails: EthLib.Consensus.TransitionError.wrongStateRoot "
+        f"0x{'00' * 32} 0x{expected.hex()}"
+    )
+
+
+# The four votes for block 1 weigh four effective balances of 32 ETH, in Gwei.
+_FOUR_VOTES = 128_000_000_000
+
+
+def test_rejected_block_runs_no_carried_handlers():
+    # Had the carried votes run, block 1 would weigh 128 ETH.
+    outcomes, first, (voted_root, _) = _carried_replay(voted_admitted=False, slashed_admitted=True)
+    assert outcomes[4] == [outcomes[4][0]]
+    assert _wrong_state_root(outcomes[4][0], voted_root)
+    assert _weight(outcomes[5][0], first) == 0
+    # Had the carried slashing run, block 1 would weigh nothing.
+    outcomes, first, (_, slashed_root) = _carried_replay(
+        voted_admitted=True, slashed_admitted=False
+    )
+    assert outcomes[4][:2] == [None, None]
+    assert _weight(outcomes[5][0], first) == _FOUR_VOTES
+    assert outcomes[6] == [outcomes[6][0]]
+    assert _wrong_state_root(outcomes[6][0], slashed_root)
+    assert _weight(outcomes[7][0], first) == _FOUR_VOTES
+
+
+def test_carried_handlers_commit_independently():
+    outcomes, first, _ = _carried_replay(voted_admitted=True, slashed_admitted=True)
+    assert outcomes[3] == [{**outcomes[3][0]}]
+    assert _weight(outcomes[3][0], first) == 0
+    # The vote for an unknown block fails after the good vote, which keeps its weight.
+    assert len(outcomes[4]) == 3
+    assert outcomes[4][:2] == [None, None]
+    assert isinstance(outcomes[4][2], consensus.ForkChoiceError)
+    assert outcomes[4][2].code == 2  # unknownBlock
+    assert _weight(outcomes[5][0], first) == _FOUR_VOTES
+    # Slashing the four voters removes their weight.
+    assert outcomes[6] == [None, None]
+    assert _weight(outcomes[7][0], first) == 0
+
+
+def test_carried_handlers_run_on_each_receipt():
+    # Adapt the pinned slot-7 block, which carries two slot-6 votes, and keep its true state root.
+    # The transition accepts a vote for an unknown root, and the fork choice rejects it.
+    case = _CARRIED_CASE
+    name = "block_0x0431ca898066abec9f55aa1bd0e701d14292bd6010a2e747debea04e911ff273"
+    steps = _load(case / "steps.yaml")
+    index = next(i for i, step in enumerate(steps) if step.get("block") == name)
+    anchor_state, anchor_block = _read(case, "anchor_state"), _read(case, "anchor_block")
+    signed = consensus.api_json("minimal", "altair", "SignedBeaconBlock", _read(case, name))
+    message = signed["message"]
+    message["body"]["attestations"][0]["data"]["beacon_block_root"] = "0x" + "42" * 32
+    prior = [_read(case, step["block"]) for step in steps[:index] if "block" in step]
+    state = consensus.state_transitions("minimal", "altair", anchor_state, prior, verify=False)
+    block = _sealed(signed, state, True)
+    encoded = consensus.api_ssz("minimal", "altair", "BeaconBlock", message)
+    root = consensus.ssz_static("minimal", "altair", "BeaconBlock", encoded)[0]
+    inputs = [one for step in steps[:index] for one in _inputs(case, step)]
+    good_vote = consensus.api_ssz(
+        "minimal", "altair", "Attestation", message["body"]["attestations"][1]
+    )
+    # A known block is admitted again, and its carried operations run again.
+    # At epoch 3 the slot-6 vote is stale on the wire, but a vote from a block skips that check.
+    outcomes = consensus.fork_choice(
+        "minimal",
+        "altair",
+        anchor_state,
+        anchor_block,
+        [
+            *inputs,
+            ("block", block),
+            ("block", block),
+            ("checks", False),
+            ("tick", 144),
+            ("block", block),
+            ("attestation", good_vote),
+        ],
+        verify=False,
+    )
+    for group in [outcomes[-6], outcomes[-5], outcomes[-2]]:
+        assert len(group) == 3
+        assert group[0] is None
+        assert isinstance(group[1], consensus.ForkChoiceError)
+        assert group[1].code == 2  # unknownBlock
+        assert group[2] is None
+    assert len(outcomes[-1]) == 1
+    assert isinstance(outcomes[-1][0], consensus.ForkChoiceError)
+    read = outcomes[-4][0]
+    assert isinstance(read, dict)
+    head = read["head"]
+    assert head["slot"] == 7
+    assert head["root"] == root
 
 
 def test_fast_confirmation_discount_bound():
@@ -379,8 +637,13 @@ def test_fast_confirmation_discount_bound():
             config={"CONFIRMATION_BYZANTINE_THRESHOLD": 0, "PROPOSER_SCORE_BOOST": boost},
         )
         assert len(outcomes) == len(inputs) + 2
-        assert all(outcome is None or isinstance(outcome, dict) for outcome in outcomes[:-1])
-        return outcomes
+        assert all(
+            outcome is None or isinstance(outcome, dict)
+            for group in outcomes[:-1]
+            for outcome in group
+        )
+        assert len(outcomes[-1]) == 1
+        return [group[0] for group in outcomes]
 
     # With no adversary and no boost, the threshold is half of the maximum minus the discount.
     # A slot holds 8 validators of 32 ETH, so the votes of slots 3 to 6 give a 1024 ETH discount.
@@ -393,9 +656,9 @@ def test_fast_confirmation_discount_bound():
     error = confirm(6)[-1]
     assert isinstance(error, consensus.ForkChoiceError)
     assert error.code == 53
-    # The message wraps the root over several lines.
-    assert " ".join(str(error).split()) == (
-        f"EthLib.Consensus.ForkChoiceError.supportDiscountAboveMaximum #v{list(child_root)}"
+    assert str(error) == (
+        f"the support discount of the block 0x{child_root.hex()} "
+        "exceeds the committee weight since its parent"
     )
     # A boost of a full committee, 256 ETH, lifts the bound to the discount; the maximum stays.
     boosted = confirm(6, 100)[-1]

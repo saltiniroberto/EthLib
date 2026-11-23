@@ -18,9 +18,9 @@ namespace EthLib.Cryptography.Bls
 inductive BlsError where
   /-- The pubkey list was empty. -/
   | emptyPubkeyList
-  /-- A pubkey was not `BYTES_PER_PUBKEY` bytes long. -/
+  /-- A pubkey was not 48 bytes long. -/
   | badPubkeySize (actual : Nat)
-  /-- Pubkey bytes failed `KeyValidate`.
+  /-- Pubkey bytes failed key validation.
 
   The cause is a bad encoding, a point off the curve, the wrong subgroup, or the point at infinity.
 
@@ -30,7 +30,7 @@ inductive BlsError where
   | invalidG1Point
   /-- G2 point bytes could not be decompressed. -/
   | invalidG2Point
-  /-- `KeyValidate` rejected the point at infinity. -/
+  /-- Key validation rejected the point at infinity. -/
   | pointAtInfinity
   /-- A point was not in the prime-order subgroup. -/
   | notInSubgroup
@@ -38,9 +38,9 @@ inductive BlsError where
   | nonCanonicalFieldElement
   /-- A field element had no square root (not a quadratic residue). -/
   | notASquare
-  /-- `expand_message_xmd` was asked for more than 65535 bytes. -/
+  /-- The message expansion was asked for more than 65535 bytes. -/
   | expandMessageOutputTooLong (len : Nat)
-  /-- `expand_message_xmd` would need more than 255 hash blocks. -/
+  /-- The message expansion would need more than 255 hash blocks. -/
   | expandMessageTooManyBlocks (ell : Nat)
   /-- The aggregation got no signature. -/
   | emptySignatureList
@@ -99,22 +99,3 @@ def BlsError.code : BlsError → UInt32
   | .keyGenHkdf                   => 16
 
 end EthLib.Cryptography.Bls
-
-namespace EthLib.Cryptography
-
-/-- `panic!` with an explicit fallback value.
-
-Logically it equals `fallback`, so theorems about the surrounding definition are unaffected.
-
-When reached at runtime, it prints an error message.
-
-It also aborts when the process runs with `LEAN_ABORT_ON_PANIC=1`.
-
-It transcribes spec-level runtime assertions into proof-covered pure code. -/
-@[inline] def panicWith {α : Type _} (fallback : α) (msg : String) : α :=
-  @panic α ⟨fallback⟩ msg
-
-@[simp] theorem panicWith_eq {α : Type _} (fallback : α) (msg : String) :
-    panicWith fallback msg = fallback := rfl
-
-end EthLib.Cryptography

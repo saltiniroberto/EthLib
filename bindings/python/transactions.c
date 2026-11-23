@@ -49,7 +49,17 @@ eth_tx_check_in_block(
 );
 
 extern lean_object*
+eth_tx_admit_to_pool(
+  lean_object* args
+);
+
+extern lean_object*
 eth_tx_run(
+  lean_object* args
+);
+
+extern lean_object*
+eth_tx_trace_eip3155(
   lean_object* args
 );
 
@@ -155,11 +165,27 @@ py_tx_check_in_block(
 }
 
 PyObject*
+py_tx_admit_to_pool(
+  PyObject* self,
+  PyObject* args
+) {
+  return call_pyvalue_export(eth_tx_admit_to_pool, args, 4, TRANSACTION_ERROR);
+}
+
+PyObject*
 py_tx_run(
   PyObject* self,
   PyObject* args
 ) {
   return call_pyvalue_export(eth_tx_run, args, 5, TRANSACTION_ERROR);
+}
+
+PyObject*
+py_tx_trace_eip3155(
+  PyObject* self,
+  PyObject* args
+) {
+  return call_pyvalue_export(eth_tx_trace_eip3155, args, 5, TRANSACTION_ERROR);
 }
 
 PyObject*

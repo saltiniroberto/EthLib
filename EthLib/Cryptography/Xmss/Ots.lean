@@ -12,19 +12,19 @@ Revealing a chain at position `k` lets anyone reach the positions above `k`.
 
 It reveals nothing about the positions below.
 
-The chains of key `e` on layer `l`, for `i < 58` and `mu < 3`:
-
-```text
-    C_{i,0}      = H_{i mod 2}(P | A_prf(l, e, floor(i / 2)) | S)
-    C_{i,mu+1}   = Th(P, A_chain(l, e, mu), C_{i,mu} | LE_128(i))
-    leaf X_{0,e} = Th(P, A_leaf(l, e), C_{0,3} | ... | C_{57,3})
-```
+Key `e` on layer `l` has the chains `C_{i,mu}`, for `i < 58` and positions `mu <= 3`.
 
 Every definition takes the hash `H` and makes its calls in a fixed order.
 
 Chains go by index, and each chain is walked step by step from its start.
 
 Source: the leanXMSS specification draft, section "WOTS+C".
+
+The chains are the hash chains of Construction 2 of [ePrint 2025/055][hbms], §4.2.
+
+The chain index sits in the payload, where Construction 2 puts it in the tweak.
+
+[hbms]: https://eprint.iacr.org/2025/055
 -/
 
 @[expose] public section
@@ -33,7 +33,7 @@ namespace EthLib.Cryptography.Xmss
 
 open EthLib.Cryptography.Xmss.Constants
 
-variable {m : Type → Type} [Monad m] (H : ByteArray → m (Vector UInt8 32))
+variable {m : Type → Type} [Monad m] (H : Array UInt64 → m Lanes4)
 
 /-! ## Chains -/
 
@@ -43,7 +43,9 @@ Chains `2j` and `2j + 1` start at the two halves of derivation `j`, whose suffix
 def chainStarts (pp : PublicParam) (prf : SeedPrf m) (layer : Layer) (e : UInt32) :
     m (Vector Digest V) := do
   -- One derivation per pair of chains, so 29 derivations for 58 chains.
-  let pairs ← ofFnInOrder (V / 2) fun j => prf pp (addrPrf layer e j) .empty
+  let pairs ← ofFnInOrder (V / 2) fun j => prf pp (addrPrf layer e j) #[]
+  -- `C_{i,0} = H_{i mod 2}(P | A_prf(l, e, floor(i / 2)) | S)`.
+  --
   -- Chain `i` takes half `i mod 2` of derivation `floor(i / 2)`.
   return Vector.ofFn fun i =>
     halfOf ⟨i.val % 2, Nat.mod_lt _ (by decide)⟩
@@ -51,10 +53,13 @@ def chainStarts (pp : PublicParam) (prf : SeedPrf m) (layer : Layer) (e : UInt32
 
 /-- One step of chain `i`, from position `mu` to the next.
 
-The chain index follows the value, so every chain of a key shares the step's address. -/
+The chain index follows the value, so every chain of a key shares the step's address.
+
+`LE_128(i)` is two lanes: `i` in the first, below `2^64`, and zero in the second. -/
 def chainStep (pp : PublicParam) (layer : Layer) (e : UInt32) (i : Fin V)
     (mu : Fin (CHAIN_LENGTH - 1)) (value : Digest) : m Digest :=
-  th H pp (addrChain layer e mu) (packBytes value ++ packBytes (uintToBytes 16 i.val))
+  -- `C_{i,mu+1} = Th(P, A_chain(l, e, mu), C_{i,mu} | LE_128(i))`.
+  th H pp (addrChain layer e mu) #[value.lo, value.hi, i.val.toUInt64, 0]
 
 /-- Walk chain `i` for `steps` steps, starting at position `start`.
 
@@ -68,7 +73,8 @@ def chain (pp : PublicParam) (layer : Layer) (e : UInt32) (i : Fin V)
 /-- The Merkle leaf of a one-time key, from the ends of its 58 chains. -/
 def otsLeafHash (pp : PublicParam) (layer : Layer) (e : UInt32) (ends : Vector Digest V) :
     m Digest :=
-  th H pp (addrLeaf layer e) (packDigests ends)
+  -- `X_{0,e} = Th(P, A_leaf(l, e), C_{0,3} | ... | C_{57,3})`.
+  th H pp (addrLeaf layer e) (digestLanes ends)
 
 /-- `X_{0,e}`: the leaf of key `e`, computed from the derivations of the seed. -/
 def otsPublicLeaf (pp : PublicParam) (prf : SeedPrf m) (layer : Layer) (e : UInt32) :
@@ -83,9 +89,10 @@ def otsPublicLeaf (pp : PublicParam) (prf : SeedPrf m) (layer : Layer) (e : UInt
 /-- `D = Th(P, A_msg(l, e), M | rho)`: the digest key `e` signs under one randomizer.
 
 `M` is the 32-byte message on the bottom layer, and a 16-byte root on the top. -/
-def messageDigest (pp : PublicParam) (layer : Layer) (e : UInt32) (msg : ByteArray)
+def messageDigest (pp : PublicParam) (layer : Layer) (e : UInt32) (msg : Array UInt64)
     (rho : Randomizer) : m Digest :=
-  th H pp (addrMsg layer e) (msg ++ packBytes rho)
+  -- `D_c = Th(P, A_msg(l, e), M | rho_c)`.
+  th H pp (addrMsg layer e) (msg ++ rho.toArray)
 
 /-- `R_0`: the base every randomizer trial adds to, derived at `A_rnd(l, e)` with suffix `M`.
 
@@ -93,29 +100,120 @@ With the derivations from the scheme seed `S`, it is `Th(P, A_rnd(l, e), S | M)`
 
 Since `S` is in the input, the randomizers stay secret until signed. -/
 def randomizerBase (pp : PublicParam) (prf : SeedPrf m) (layer : Layer) (e : UInt32)
-    (msg : ByteArray) : m Randomizer := do
+    (msg : Array UInt64) : m Randomizer := do
+  -- `R_0 = Th(P, A_rnd(l, e), S | M)`.
   return halfOf 0 (← prf pp (addrRnd layer e) msg)
+
+/-! ## Randomizers as words
+
+A randomizer is two lanes, so a randomizer search adds to it on two 64-bit words. -/
 
 /-- `rho_c = LE_128(LE^-1(R_0) + c mod 2^128)`: the randomizer of trial `c`.
 
-A sum, not a hash, so each trial costs the one hash of its digest. -/
+A sum, not a hash, so each trial costs the one hash of its digest.
+
+The low lanes add modulo `2^64`, and the low lane wraps exactly when it ends below `R_0`'s.
+
+That wrap carries 1 into the high lane, which adds the rest of `c` and drops its own carry. -/
 def trialRandomizer (base : Randomizer) (c : Nat) : Randomizer :=
-  uintToBytes RANDOMIZER_LEN ((bytesToUint base + c) % 2 ^ 128)
+  let lo := base.lo + UInt64.ofNat c
+  let carry : UInt64 := if lo < base.lo then 1 else 0
+  ⟨lo, base.hi + UInt64.ofNat (c >>> 64) + carry⟩
+
+/-! ## Randomizer trials -/
+
+/-- The trials of one search: whether the digest of a randomizer is a codeword, and which.
+
+Every trial hashes the same lanes `P | A_msg(l, e) | M`, followed by its own randomizer.
+
+It is a structure, not a function, so a source does its per-search work once.
+
+The compiler merges a function that returns a function into one function of all the arguments.
+
+That merged function would redo, on every trial, the work meant for once per search. -/
+structure Trials (m : Type → Type) where
+  /-- The codeword the digest of a randomizer is, if any. -/
+  codeword : Randomizer → m (Option (Vector (Fin CHAIN_LENGTH) V))
+
+/-- The trials of every search, from the fixed lanes that start each trial's input.
+
+A search builds its trials once, so the work that only the fixed lanes need is done once.
+
+A source is the scheme's only when its trials give the codewords that `H` gives.
+
+Nothing checks it: the theorems are about the default source, which hashes each trial with `H`. -/
+abbrev TrialSource (m : Type → Type) :=
+  Array UInt64 → Trials m
+
+/-- The trials as `H` computes them: a trial hashes the fixed lanes followed by the randomizer. -/
+def hashTrials : TrialSource m :=
+  fun before => ⟨fun rho => codeword? <$> (do return halfOf 0 (← H (before ++ rho.toArray)))⟩
+
+/-- The trials as Keccak-256 computes them, with one permutation each.
+
+The randomizer is the last two lanes of the input.
+
+When the padding of the last block comes after them, only those two lanes change between trials.
+
+The state before the last permutation is then built once, with the randomizer lanes set to zero.
+
+A trial XORs its randomizer into the two lanes, permutes, and reads the digest from lanes 0 and 1.
+
+Otherwise each trial hashes its whole input.
+
+A theorem shows that they give the codewords of hashing each trial with Keccak-256. -/
+def keccakTrials : TrialSource Id := fun before =>
+  -- The padding of the last block comes after the randomizer's 16 bytes.
+  if (8 * before.size) % Hash.Keccak.RATE_256 + 16 < Hash.Keccak.RATE_256 then
+    -- The lanes past the fixed ones read as zero, so the randomizer lanes start at zero.
+    let S := Hash.Keccak.Internal.stateBeforeLastPermutation Hash.Keccak.keccakF
+      Hash.Keccak.RATE_256 (8 * (before.size + 2)) (Hash.Keccak.Internal.laneOfArray before)
+    -- The randomizer fills lanes k and k + 1 of the last block.
+    let k := (8 * before.size) % Hash.Keccak.RATE_256 / 8
+    ⟨fun rho =>
+      let T := Hash.Keccak.keccakF ((S.xorLane (k + 1) rho.hi).xorLane k rho.lo)
+      -- The digest is the first 16 bytes of the output: lanes 0 and 1.
+      pure (codeword? ⟨T.a0, T.a1⟩)⟩
+  else hashTrials hashId before
 
 namespace Internal
 
 /-- Try the trials from `c` onward, at most `fuel` of them.
 
-Returns the first trial's randomizer whose digest is a codeword, with the codeword. -/
-def findCodeword (pp : PublicParam) (layer : Layer) (e : UInt32) (msg : ByteArray)
-    (base : Randomizer) (c fuel : Nat) :
+Returns the first trial's randomizer whose digest is a codeword, with the codeword.
+
+With the default source, each trial hashes `P | A_msg(l, e) | M | rho_c` to get its digest.
+
+Only `rho_c` changes between trials, so the trials are built once from the lanes before it.
+
+The randomizer of trial `c` is the sum `rho_c` above. -/
+def findCodeword (pp : PublicParam) (layer : Layer) (e : UInt32) (msg : Array UInt64)
+    (base : Randomizer) (c fuel : Nat) (trials : TrialSource m := hashTrials H) :
     m (Option (Randomizer × Vector (Fin CHAIN_LENGTH) V)) :=
-  Wots.findFirst (trialRandomizer base)
-    (fun rho => codeword? <$> messageDigest H pp layer e msg rho) c fuel
+  -- The input of every trial starts with `P | A_msg(l, e) | M`.
+  let t := trials (thInput pp (addrMsg layer e) msg)
+  Wots.findFirst (trialRandomizer base) t.codeword c fuel
 
 end Internal
 
 /-! ## Signing and recovering the leaf -/
+
+namespace Internal
+
+/-- `Ots.sign(l, e, M)`, with the trials of its search taken from a source. -/
+def otsSignTrials (pp : PublicParam) (prf : SeedPrf m) (layer : Layer) (e : UInt32)
+    (msg : Array UInt64) (trials : TrialSource m) :
+    m (Option (Randomizer × Vector Digest V)) := do
+  -- Step 1: grind the randomizer until the digest is a codeword.
+  let base ← randomizerBase pp prf layer e msg
+  let some (rho, x) ← findCodeword H pp layer e msg base 0 MAX_RANDOMIZER_TRIALS trials
+    | return none
+  -- Step 2: reveal each chain at the position its digit names, chain 0 first.
+  let starts ← chainStarts pp prf layer e
+  let y ← ofFnInOrder V fun i => chain H pp layer e i 0 x[i] (by simp) starts[i]
+  return some (rho, y)
+
+end Internal
 
 /-- `Ots.sign(l, e, M)`: the randomizer and the 58 chain values that sign `M`.
 
@@ -125,22 +223,17 @@ Reveals chain `i` at position `x_i`.
 
 Returns nothing when no trial gives a codeword.
 
-Deterministic, so signing one message again gives the same signature. -/
+Deterministic, so signing one message again gives the same signature.
+
+Each trial of the search hashes its input with `H`. -/
 def otsSign (pp : PublicParam) (prf : SeedPrf m) (layer : Layer) (e : UInt32)
-    (msg : ByteArray) : m (Option (Randomizer × Vector Digest V)) := do
-  -- Step 1: grind the randomizer until the digest is a codeword.
-  let base ← randomizerBase pp prf layer e msg
-  let some (rho, x) ← Internal.findCodeword H pp layer e msg base 0 MAX_RANDOMIZER_TRIALS
-    | return none
-  -- Step 2: reveal each chain at the position its digit names, chain 0 first.
-  let starts ← chainStarts pp prf layer e
-  let y ← ofFnInOrder V fun i => chain H pp layer e i 0 x[i] (by simp) starts[i]
-  return some (rho, y)
+    (msg : Array UInt64) : m (Option (Randomizer × Vector Digest V)) :=
+  Internal.otsSignTrials H pp prf layer e msg (hashTrials H)
 
 /-- `Ots.leaf(l, e, M, rho, y)`: the leaf a claimed one-time signature leads to.
 
 Returns nothing when the digest is not a codeword. -/
-def otsLeaf (pp : PublicParam) (layer : Layer) (e : UInt32) (msg : ByteArray)
+def otsLeaf (pp : PublicParam) (layer : Layer) (e : UInt32) (msg : Array UInt64)
     (rho : Randomizer) (y : Vector Digest V) : m (Option Digest) := do
   -- Step 1: recompute the codeword.
   let some x := codeword? (← messageDigest H pp layer e msg rho) | return none

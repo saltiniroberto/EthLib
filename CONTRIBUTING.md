@@ -39,14 +39,94 @@ When the code and the specification disagree, the code is wrong until someone sh
 Cite the exact document and section in the code that implements it.
 For example: `RFC 9380 §5.3.1`, or `EIP-4844` with the name of its section.
 
-EthLib is a specification at the same level as `ethereum/execution-specs` and `ethereum/consensus-specs`.
-So do not cite them in the code.
+EthLib is a formal specification.
+`ethereum/execution-specs` and `ethereum/consensus-specs` are reference points, not formal specifications, so the code never cites them as the authority for a rule.
 You can read them to understand a rule and to check your work.
 If no primary source states a rule, state the rule itself in the doc comment.
-Test vectors keep their pinned origin, as [`ARCHITECTURE.md`](ARCHITECTURE.md#sources) explains.
+
+The Lean text never names or links execution-specs or consensus-specs, in a doc comment or in any other comment.
+The READMEs of the modules under `EthLib/` never name or link them either.
+Their pinned commits belong to the test suites that run their vectors, as [`ARCHITECTURE.md`](ARCHITECTURE.md#sources) explains.
+Where execution-specs or consensus-specs is the only text that states a rule, the doc comment or the README states the rule itself, formally.
+Where a reader needs context, one short line gives it in EthLib's own words, without naming either text.
+Some EIPs state a rule only through a link to consensus-specs at a pinned commit, as EIP-4844 does for its KZG functions.
+Such a rule cites the EIP.
 
 Do not cite another implementation as the authority for a behaviour.
 A byte-for-byte match with a client is a useful test, not a justification.
+
+### Step comments
+
+A definition that implements a step-by-step procedure marks each step of its source in a `--` comment, right above the line that computes that step.
+The comment names the step and states it formally, in ASCII, so that an auditor can match the two line by line.
+For example, the line that computes RFC 6979 §3.2 step d has the comment `` -- Step d: `K = HMAC_K(V || 0x00 || int2octets(x) || bits2octets(h1))`. `` above it.
+A step of the Keccak sponge of FIPS 202 Algorithm 8 reads `-- Steps 3 to 6 for i < n - 1: from S = 0^b, S = f(S ^ (P_i || 0^c)), with P_i read from N.`
+Its bound `i < n - 1` marks a departure from the source: the last block is absorbed apart.
+
+A step comment is formal, short and precise, like the text of an RFC or a FIPS standard.
+
+- Where the source states its steps as formulas, as an RFC, a FIPS standard, the Yellow Paper or a paper does, the comment uses the notation of the source.
+- Pseudo-code that the source itself writes, such as `v[a] := (v[a] + v[b] + x) mod 2**w` in RFC 7693 §3.1, is the notation of the source and stays as the source writes it.
+- Where the source states a step in words, or only in code, the comment states it in mathematical notation or in short, plain words.
+- A step comment never quotes code in a programming language.
+  That covers the Python of `ethereum/execution-specs`, of `ethereum/consensus-specs` and of the reference code in an EIP.
+  It also covers a loop, a condition or an assertion written in the syntax of a language, such as `for log in receipt.logs:` or `pubkey_size == 48 and amount_size == 8`.
+  The Lean line under the comment is already the code, and the same step in another programming language gives an auditor nothing new to check.
+- A step comment names things in plain words, never by the code identifiers of a source, such as the snake_case field names of EIP-7928.
+  It writes `-- A storage key of an account never appears both among its storage changes and among its storage reads.`
+  The notation of a formula, such as `V`, `P_i` or `int2octets`, stays.
+- A step that keeps the words of its source writes them as plain text, without quotation marks or Markdown emphasis such as bold.
+  EIP-7928 writes "Record **post-transaction nonces** for:", so the comment reads `-- Record post-transaction nonces for:`, followed by its list of accounts.
+
+Step comments never trace `ethereum/consensus-specs` or `ethereum/execution-specs`, and never name them or their functions.
+Where one of those texts is the only one that states a rule, the step comments state each step formally, in EthLib's own terms.
+A defect found while reading them is reported upstream, as [Defects found upstream](#defects-found-upstream) says, not copied into the code.
+
+Where EthLib departs from the steps of its source, the comment says how and why.
+Examples are a fork branch folded into one function, an overflow check, a loop bound, or a value computed once and reused.
+In the RFC 6979 code, one comment above the shared value says that steps d and f reuse it.
+When the step comments describe a step-by-step procedure, the doc comment of the definition states what the procedure computes and does not repeat its steps.
+
+## Defects found upstream
+
+Formal work often finds defects in the documents that EthLib specifies.
+A proof that does not close, a vector that disagrees, or a definition that contradicts its source can show a bug in an EIP, a specification, an API or a test suite.
+Such a defect must never stay only in EthLib: report it to the repository that owns the document.
+
+- Confirm the defect first.
+  Reproduce it at the head of the target repository's default branch, and search its open and closed issues and pull requests.
+- If the fix is clear, open one small pull request in the target repository for each defect, in that repository's style.
+  A minor defect, such as a wrong example or a broken constant, gets a pull request too.
+- If the fix needs a design decision, open an issue there with a concrete example instead.
+- If the defect is a security vulnerability, do not disclose it in public.
+  Report it privately through the target repository's security policy, or through the [Ethereum bug bounty program](https://ethereum.org/bug-bounty/) for the protocol specifications.
+- Describe the defect from the documents alone: never name an implementation.
+- Link the upstream pull request or issue from the related EthLib issue, and record any divergence that remains in `SOUNDNESS.md`.
+
+Bugs come from EthLib's own work.
+Do not search the upstream repositories for bugs outside of it.
+
+### Implementations of an affected rule
+
+EthLib is a specification, and no implementation of the protocol is a source for its rules, as [Sources of truth](#sources-of-truth) says.
+Their code is worth reading as a check on EthLib's own work.
+A defect in a specification often lives on in the code built from it.
+An edge case that an implementation handles with care can point to a proof or a test vector that EthLib lacks.
+
+When EthLib work finds a defect, or a rule with a subtle edge case, look at how the implementations of that rule handle it.
+For the protocol, these are the consensus and execution clients in production on Ethereum mainnet.
+For a shared component, such as libp2p, BLS signatures or KZG commitments, they are the libraries that those clients depend on for it.
+No other project is in scope.
+Look only at the implementations of the rule that the work touches: do not scan their repositories for other bugs.
+
+- If the flaw is a security vulnerability, do not disclose it in public.
+  Report it privately through the security policy of that repository, or through the [Ethereum bug bounty program](https://ethereum.org/bug-bounty/) when the program covers it.
+- Otherwise, confirm the flaw at the head of the default branch of that repository, and search its open and closed issues and pull requests.
+  Then open a pull request or an issue there, in its style, as for a defect in a document.
+- If an implementation shows a case that EthLib does not prove or test, open an EthLib issue for the missing proof or vector.
+  Take the expected result from the specification, never from the implementation.
+  Describe the case from the documents alone: EthLib's own issues, pull requests and code never name an implementation.
+- Keep reports to an implementation out of EthLib: a link to one names the implementation, and a link to a private report discloses it.
 
 ## Layout
 
@@ -64,10 +144,16 @@ The library code never imports the proofs.
 Proofs live in their own Lake library, so the library code builds and links without them.
 
 The C exports live in a third library, `Exports`, so a Lean project that imports the specification gets no `@[export]` symbol.
-A new domain with exports adds its export root to the `Exports` library.
+A new domain with exports adds its export tree to the `globs` of the `Exports` library in `lakefile.lean`.
+A new module under `Base/Exports/` is listed there by name, since the conversion core of that tree belongs to another library.
+Keep `EthLib.Exports` as its only root so that it remains a native plugin.
 
-These three libraries form one package, `EthLib`.
+The Python conversion core and its law proofs form `PythonConversions`, which both the exports and the remaining proofs can import without a cycle between native libraries.
+Its law module lives under `Base/Proofs/Exports/` and enters the exports through `meta import`, so its object does not link into the Python extension.
+
+These four libraries form one package, `EthLib`.
 A property or a model may import Mathlib, Batteries or VCVio, and it goes in `EthLib/<Domain>/Proofs/<Module>/` like any other property.
+Among the properties, only a refinement module imports a model directly, as [`ARCHITECTURE.md`](ARCHITECTURE.md#three-kinds-of-content) explains.
 The specification and the exports import nothing beyond the Lean toolchain.
 [`ARCHITECTURE.md`](ARCHITECTURE.md#packages) describes the package.
 
@@ -79,7 +165,10 @@ The specification and the exports import nothing beyond the Lean toolchain.
   Clarity wins over speed unless speed is the point of the change.
 - Name things after the specification.
   If the paper calls it the randomizer, the code does too.
-  If `consensus-specs` calls it `process_slots`, so does the code, in Lean's casing.
+  Where consensus-specs is the only text that states a rule, a definition may keep the name of that rule, such as `process_slots`, in Lean's casing.
+- Write the digits of a new name in ASCII, such as `h1`, `x0` and `w2`, not `h₁`, `x₀` and `w₂`.
+  Names that Lean, Mathlib or VCVio define, such as `mul_inv_cancel₀`, keep their own spelling.
+  Prose writes powers and indices in ASCII too, as [WRITING.md](WRITING.md#mathematical-and-technical-conventions) says.
 - Reject malformed input at the boundary with a typed error.
   Do not truncate or pad it, and do not replace it silently with a default.
 - Put invariants in types, such as `Vector` lengths and `Fin` bounds.
@@ -88,11 +177,55 @@ The specification and the exports import nothing beyond the Lean toolchain.
 - Do not use `panic!` or the `!` accessors, such as `xs[i]!`, `get!` and `set!`.
   Each one hides a failure: it returns a default value, or it changes nothing.
   Index with `Fin` or a `Vector`, walk arrays of equal length together with `zip`, or return a typed error.
-  Older modules still use these accessors, and pull requests remove them module by module.
-  #106 tracks the ones in KZG.
+  No module of the specification uses them, and `lake exe check-accessors` fails on a new one.
+- Remove such an accessor even when no input that the source accepts reaches its default.
+  A caller of a public function can still reach it, with arguments that break a precondition the type does not state.
+  Change the definition in place, and keep no copy of the old one beside it.
+  Wherever the old index was in range, the result must not change.
+  Existing theorems and tests keep their meaning, and change their statements only where the type of the result changes.
+  If any input reached a default where the source gives another outcome, the change is a `fix`.
+  It cites the rule of the source that it restores.
+  Take its test vectors from the source's own suite when one holds them.
+  Otherwise take the expected value of each one from that rule, never from EthLib.
+  Describe what each vector pins, and record its origin next to it, as [Known answers](#known-answers) asks.
 - Prefer structural recursion, `map` and folds to `Id.run do` with mutable variables.
   A proof then follows the shape of the definition.
+  A theorem about a `do` loop restates its elaborated body, so any edit of the loop breaks the statement.
+  For a loop that can stop early, prefer `foldlM` in `Option` or `Except`.
   This is advice, not a rule: a loop whose speed matters can keep `do`.
+- Prefer an `Except` `do` block for a chain of steps that can fail, so that it reads like the source.
+  In proofs, prefer the success and failure lemmas to unfolding the chain into nested `match` expressions.
+  `bind_ok_iff` is in `EthLib.Base.Except`, and the other lemmas are in `EthLib.Base.Proofs.Except`.
+- A small decidable fact that [Known answers](#known-answers) allows, such as a constant checked against its algorithm, evaluates a definition in the kernel.
+  That definition needs a recursion that the kernel can reduce.
+  `decide` and `rfl` need structural recursion or fuel, because Lean makes a well-founded definition irreducible.
+  `decide +kernel` also reduces a well-founded recursion whose measure is a single `Nat`, which Lean builds on `WellFounded.Nat.fix`.
+  Do not count on it for a lexicographic measure, such as a pair, which Lean builds on `WellFounded.fix`.
+  Lean documents only `WellFounded.Nat.fix` as reducing on closed terms.
+
+### Failure at an entry point
+
+An entry point is a public operation that a client or another layer calls.
+Examples are a state transition, a gossip validation and an Engine API method.
+What an entry point does with a wrong input is part of the protocol, so its source often says what it returns.
+
+- Where the source defines the outcomes of an operation, return them as a type.
+  For example, the Engine API answers a payload with one of five statuses, and gossip validation returns a `ValidationResult`: accept, ignore or reject.
+  Map the internal errors to that type with total functions, close to the entry point.
+  For example, after the checks of a payload, `newPayloadOnChain` maps an execution that aborts to `.syncing`, and any other failed transition to `.invalid`.
+- Return a `Bool` only where the source defines one.
+  A caller that the source requires to tell outcomes apart, for example to import or to queue a block, receives the richer type.
+- Where the source fixes the order of its checks, and the order changes the outcome, follow that order.
+  Pin it with a theorem, or with a test whose input fails two checks.
+  Elsewhere, the source fixes only that the operation rejects the input.
+  The consensus specification, for example, says only which state transitions are invalid.
+  This guide does not say whether EthLib also promises which error such an input gets.
+  Many proofs and Python tests pin the exact error today, and `bindings/contract/contract.json` lists the error codes of its methods.
+- Where the source requires the state to be unchanged on failure, state that in a theorem.
+  When the operation returns its input state on failure, state it as equality of the returned state.
+  Inside a step, such as an EVM call that fails, state it over the values a caller can read: balances, nonces, code, storage and transient storage.
+  Do not state it over the fields of the representation, since a new representation would break the statement.
+  `processMessage_sameWrites_of_error` states it over the fields of `SameWrites`; a new theorem states it over readable values.
 
 ### Proofs
 
@@ -102,8 +235,15 @@ The specification and the exports import nothing beyond the Lean toolchain.
 - Do not use a tactic that trusts compiled code, such as `native_decide`, `bv_decide` or `decide +native`.
   Their computed results are justified by compiler-trusting axioms rather than kernel evaluation.
   `lake exe check-decls` fails on any use.
+- Do not use `vcgen` or `mvcgen` in library proofs while `vcgen` is marked experimental.
+  The reason is stability across toolchains, not soundness: the kernel checks a proof that `vcgen` builds like any other proof.
+  In Lean v4.36.0, `mvcgen` is deprecated in favour of `vcgen`, and `vcgen` warns that it is experimental unless the option `experimental.vcgen` is set.
+  Check this rule again at each update of the toolchain.
 - After a proof change, check its axioms with `lake exe check-decls`.
   The goal is `propext`, `Classical.choice` and `Quot.sound`, nothing else.
+- Do not leave a command such as `#print axioms`, `#eval` or `#check` in a module under `EthLib/`.
+  It runs at every build of the module, and `lake exe check-decls` already fails on any theorem that depends on an axiom beyond the three standard ones.
+  `scripts/check_lean_commands.py` fails on one, unless `scripts/check_lean_commands_allowlist.txt` lists it with the reason it must run at build time.
 - Name each theorem by the [naming conventions of Mathlib](https://leanprover-community.github.io/contribute/naming.html).
   The name is in `snake_case` and describes the statement: the conclusion first, then `_of_` and the hypotheses.
 - Prove what a reader cares about: round trips, injectivity, the rejection of bad input and the invariants of a state transition.
@@ -112,7 +252,15 @@ The specification and the exports import nothing beyond the Lean toolchain.
 ### Known answers
 
 A known answer pins one input to one output, byte for byte.
-Known answers belong in the Python test suite, in `bindings/python/tests/`, and never in Lean.
+Known answers never enter the default build: the libraries `EthLib`, `Proofs` and `Exports`, which `lake build` builds.
+They may run in three places outside it:
+
+- The Python test suite, in `bindings/python/tests/`, runs them through the bindings, which are the surface that clients call.
+- A fixture runner, a Lean executable that no default target builds, may run pinned fixtures through the definitions of the specification.
+  It reaches an internal step that has no C export, and it runs compiled code, as the Python suite does.
+- A Lean library of kernel vectors, which no default target imports, may prove known answers.
+  CI must build it in its own step on every pull request, so that a failure points at the pull request that caused it.
+  It is `KernelVectors`, in `tests/kernel/`, and `lake build KernelVectors` builds it.
 
 In Lean, a known answer is a theorem or an `example` that evaluates a definition on concrete inputs.
 It compares the result with an expected value, by `rfl`, `decide`, `decide +kernel` or `simp`.
@@ -120,11 +268,16 @@ The build must then run the definition on those inputs.
 One such proof can need several gigabytes of memory and minutes of build time.
 It also checks only one input.
 
-So state each Lean theorem for all inputs.
-Test concrete inputs from Python, through the bindings.
-If a function has no C export yet, add the export and its binding.
+So the library of kernel vectors holds such a proof only under a budget.
+Each proof takes its input from the specification's own vectors, or covers every value of a finite type.
+Each file of the library elaborates in under 20 s of CPU, with a peak memory under 2 GiB.
+The budget is for the whole file, run alone with `lake env lean` after its imports are built, as `scripts/check_memory.py` runs it.
 
-Lean keeps one kind of concrete fact: a small decidable fact that a definition needs to be correct.
+State each theorem of the default build for all inputs.
+Test concrete inputs from Python, through the bindings, or through a fixture runner.
+If a function that clients call has no C export yet, add the export and its binding.
+
+The default build keeps one kind of concrete fact: a small decidable fact that a definition needs to be correct.
 Examples are a constant checked against the algorithm that generates it, or a Pratt certificate.
 The order of the fork timeline is another example.
 Each such proof must take a few seconds at most.
@@ -135,6 +288,8 @@ For example: "one honest signature at epoch 7", or "one empty slot processed".
 Next to the vectors, record their pinned origin, such as the commit they come from.
 
 Never regenerate an expected value from the code under test and call it a check.
+A snapshot of values that the code computes, compared in CI, is a change detector and not a check.
+A pull request that changes such a snapshot names the source of each changed line.
 
 ### No examples
 
@@ -318,6 +473,67 @@ A new finding is fixed, never added to the list.
 
 When you change the check, also run `scripts/test_check_decls.sh`.
 
+Then check the defaulting accessors of the specification:
+
+```bash
+lake exe check-accessors
+```
+
+It lists each use of a `!` accessor, such as `xs[i]!`, `get!` or `set!`, or of `panic`, in the elaborated declarations of the specification, with its count.
+`scripts/check_accessors_baseline.txt` is the exact list of sites, and it is empty.
+A new site is fixed, never added to the list.
+
+When you change the check, also run `scripts/test_check_accessors.sh`.
+
+Then check the values of the rules that forks change:
+
+```bash
+lake exe rule-history --check
+```
+
+It fails when, at some fork, a rule of the execution layer computes a value other than the one that `tests/execution/history/rules.tsv` records.
+The [README](tests/execution/history/README.md) next to that file says how to update it.
+
+When you change the tool, also run `scripts/test_rule_history.sh`.
+
+Then check which theorems the specification keeps:
+
+```bash
+lake exe check-theorems
+uv run --no-project --python 3.12 python scripts/check_theorems_baseline.py --base origin/master
+```
+
+The check follows the dependencies of definitions, instances and persistent `@[simp]` theorems.
+It reads private proof terms and resolved references from Lean's `.ilean` files, including named lemmas that simplification erases from a proof term.
+Helpers of retained theorems stay with their consumers.
+The `.ilean` references can miss a lemma named only in a tactic macro; review those dependencies before moving a reported theorem.
+The attribute guard permits `simp`, `deprecated` and `inherit_doc`.
+Deprecation and documentation metadata do not retain an otherwise unused theorem.
+An unsupported persistent attribute written on a theorem or in an `attribute` command stops the check.
+Review custom command macros for attributes they generate, since the source guard does not expand them.
+Other theorems belong under `Proofs/`, as [`ARCHITECTURE.md`](ARCHITECTURE.md#where-a-new-module-goes) explains.
+
+To inspect the findings and their source locations, run `lake exe check-theorems --list`.
+It prints tab-separated columns for the defining module, theorem name, source path and first and last lines.
+
+`scripts/check_theorems_baseline.txt` lists the findings awaiting migration, and may only shrink.
+A new finding or a stale baseline entry fails the check.
+The baseline check rejects entries added since the base revision, after the initial creation of the file.
+It also rejects removing a baseline that the base revision has.
+For a stacked branch, compare with its actual parent instead of `origin/master`.
+Moving a public theorem can change the imports a downstream project needs, so review that public surface too.
+
+On pull requests, CI compares with the first parent of the merge commit.
+On pushes to an existing branch, it compares with the revision before the whole push and fetches that commit if the checkout lacks it.
+Other runs use `HEAD^1`.
+
+When you change either check, also run its tests:
+
+```bash
+scripts/test_check_theorems.sh
+uv run --no-project --python 3.12 python -m unittest scripts/test_check_theorems_baseline.py
+```
+
 Then check that `SOUNDNESS.md` still holds:
 
 ```bash
@@ -352,7 +568,10 @@ uv run --no-project --python 3.12 python scripts/check_layers.py
 
 It fails on an import that breaks a rule of [`ARCHITECTURE.md`](ARCHITECTURE.md#rules), and on a module that no library root imports.
 An import that must break a rule goes in `scripts/check_layers_baseline.txt`, with the reason in a comment and in the pull request.
-An entry that no longer breaks a rule fails the check, so remove it with the import.
+Each entry starts with the label of the rule that the import breaks, and it allows the import to break only that rule.
+The file lists the labels.
+An entry whose import no longer breaks its rule fails the check, so remove it with the import.
+A new model directory or a new refinement module goes in `coverage/kinds.toml`, which the same check reads, and an entry leaves with its module.
 
 When you add or change a C export that reads a fork name, check that it rejects the forks whose rules EthLib lacks:
 
@@ -376,6 +595,17 @@ uv run --no-project --python 3.12 python scripts/check_fixture_pins.py
 The check fails when a test cites another commit, and when a directory with a `SHA256SUMS` file does not name its sources.
 The file also pins each release archive that is too large to vendor, by its URL, its size and its sha256.
 The check fails when no test names an archive.
+
+`tests/generators.toml` records which program computed the expected values of each pinned directory and archive.
+Where no record names the program, it says so, with what was read.
+It also lists the modules that the Python tests import, and the version of each one that computes expected values while the tests run.
+The check fails when a directory or an archive has no entry, and when a pinned file belongs to no group of cases.
+It also fails when a test imports a module that the file does not list.
+A module that computes no expected value is a tool, and it needs a reason.
+So a new vector directory, or a new library in the tests, comes with its generator.
+
+The check downloads no archive.
+With `ETHLIB_ARCHIVES` set, it also checks the groups of each archive against the member list in that cache.
 
 Then check the layout of the Lean lines that your branch changes:
 
@@ -422,6 +652,7 @@ The `vectors-slow` workflow runs these tests every Monday.
 
 The parity tests in `bindings/python/tests/parity` are archive tests too.
 They run every case of execution-spec-tests and consensus-spec-tests at the forks in scope.
+They also run the fork choice compliance tests of the pinned release of consensus-specs.
 A case passes, fails, waits for a runner, or disagrees for a reason listed in `tests/parity/disagreements.toml`.
 Set `ETHLIB_PARITY_REPORT` to a file name to get the report of these outcomes for each fork and runner.
 
@@ -572,6 +803,43 @@ Rules for every body:
 
 Read the body aloud before you post it.
 If it sounds like a report, cut it.
+
+### Labels
+
+Workflows label issues and pull requests, so you do not need to set these labels yourself.
+
+- The paths that a pull request changes give its area labels, such as `crypto` and `crypto: keccak`.
+  [`.github/labeler.yml`](.github/labeler.yml) maps the paths to the labels.
+  After each push, the workflow also removes an area label whose paths the pull request no longer changes.
+- The type of a [title](#titles) gives a label such as `type: proof`, and a `!` before the colon gives `statement-change`.
+  On an issue, the scope also gives the area labels, since an issue changes no paths.
+  On an issue, the older prefixes `proofs:`, `specs:`, `specs+proofs:`, `bindings:` and `meta:` also give labels; `meta:` gives `meta`, for a tracking issue.
+  [`.github/workflows/labeler.yml`](.github/workflows/labeler.yml) holds the tables of scopes and prefixes.
+  It sets the title labels after the path labels, so that neither overwrites the other.
+- [`.github/labels.yml`](.github/labels.yml) defines each label with its color and description.
+  A change to it on `master` creates or updates labels, and never deletes one.
+
+Other labels, such as `leanVM` and `bug`, stay manual.
+
+## leanVM work
+
+The leanVM specification is large, and people review it one small pull request at a time.
+[`EthLib/Cryptography/LeanVm/README.md`](EthLib/Cryptography/LeanVm/README.md) records what it covers, its security model and its layout.
+These rules hold for every leanVM issue and pull request:
+
+- Each leanVM issue becomes exactly one pull request, which closes it.
+  If the work outgrows the issue, split the issue first.
+- Issues carry the title prefix `[leanVM]` and the label `leanVM`.
+- Pull requests carry the label `leanVM` and a title in the form of [Titles](#titles), with the scope `leanvm`:
+  `feat(leanvm): ...` for definitions, `proof(leanvm): ...` for theorems, `test(leanvm): ...` for vectors, `docs(leanvm): ...` for documentation.
+- Definitions and their theorems land in separate pull requests.
+  A definitions pull request contains no `sorry`, and its theorems have their own issue.
+- Each pull request needs two approvals: a cryptographer's, for its definitions and statements, and a Lean reviewer's, for its proofs.
+- Automated review agents do not review anything labelled `leanVM`, unless a person asks them to.
+- The description links the section of the leanVM whitepaper and the leanVM code it was compared with, at the commit that `tests/sources.toml` pins.
+  Doc comments cite the papers, never leanVM.
+- If EthLib and leanVM disagree, report it on the issue, with the file and line on both sides.
+  Do not change either side to make them agree.
 
 ## Licence
 

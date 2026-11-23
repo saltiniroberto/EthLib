@@ -2,34 +2,62 @@ module
 
 public import EthLib.Networking.Proofs.Noise
 public import EthLib.Networking.Proofs.Noise.Identity
+public import EthLib.Networking.Proofs.Noise.Handshake
+public import EthLib.Networking.Proofs.Noise.Libp2pHandshake
 
 public import EthLib.Networking.Proofs.Discv5.Distance
+public import EthLib.Networking.Proofs.Discv5.Exchange
 public import EthLib.Networking.Proofs.Discv5.Handshake
 public import EthLib.Networking.Proofs.Discv5.Identity
 public import EthLib.Networking.Proofs.Discv5.Message
+public import EthLib.Networking.Proofs.Discv5.Node
 public import EthLib.Networking.Proofs.Discv5.Packet
 public import EthLib.Networking.Proofs.Discv5.Session
 public import EthLib.Networking.Proofs.Devp2p.ForkId
 public import EthLib.Networking.Proofs.Devp2p.P2p
+public import EthLib.Networking.Proofs.Devp2p.Session
+public import EthLib.Networking.Proofs.Discv4.Exchange
+public import EthLib.Networking.Proofs.DnsDisc
 public import EthLib.Networking.Proofs.Discv4.Packet
+public import EthLib.Networking.Proofs.Encoding.Base32
+public import EthLib.Networking.Proofs.Encoding.ByteReader
 public import EthLib.Networking.Proofs.Encoding.Protobuf
 public import EthLib.Networking.Proofs.Encoding.Uvarint
 public import EthLib.Networking.Proofs.Encoding.Varint
+public import EthLib.Networking.Proofs.Enr.Address
 public import EthLib.Networking.Proofs.Enr.Consensus
 public import EthLib.Networking.Proofs.Enr.Eth
 public import EthLib.Networking.Proofs.Enr.Record
 public import EthLib.Networking.Proofs.Enr.Security
 public import EthLib.Networking.Proofs.Enr.V4
+public import EthLib.Networking.Proofs.Exports.ForkId
+public import EthLib.Networking.Proofs.Gossip.Cache
+public import EthLib.Networking.Proofs.Gossip.Heartbeat
+public import EthLib.Networking.Proofs.Gossip.Membership
 public import EthLib.Networking.Proofs.Gossip.MessageId
 public import EthLib.Networking.Proofs.Gossip.Payload
+public import EthLib.Networking.Proofs.Gossip.Router
 public import EthLib.Networking.Proofs.Gossip.Rpc
+public import EthLib.Networking.Proofs.Gossip.Steps
 public import EthLib.Networking.Proofs.Gossip.Subnet
 public import EthLib.Networking.Proofs.Gossip.Topic
 public import EthLib.Networking.Proofs.Gossip.Validation
 public import EthLib.Networking.Proofs.Libp2p.Mplex
+public import EthLib.Networking.Proofs.Libp2p.MplexSession
 public import EthLib.Networking.Proofs.Libp2p.Multistream
+public import EthLib.Networking.Proofs.Libp2p.Upgrade
 public import EthLib.Networking.Proofs.Libp2p.PeerId
+public import EthLib.Networking.Proofs.Libp2p.Tls
 public import EthLib.Networking.Proofs.Libp2p.Yamux
+public import EthLib.Networking.Proofs.Libp2p.YamuxSession
+public import EthLib.Networking.Proofs.Quic.Keys
+public import EthLib.Networking.Proofs.Quic.Protection
+public import EthLib.Networking.Proofs.Quic.Tls
+public import EthLib.Networking.Proofs.Quic.Tls.Extensions
+public import EthLib.Networking.Proofs.Quic.Tls.Crypto
+public import EthLib.Networking.Proofs.Quic.Tls.Handshake
+public import EthLib.Networking.Proofs.Quic.Tls.Transcript
+public import EthLib.Networking.Proofs.Quic.Varint
 public import EthLib.Networking.Proofs.ReqResp.Bounds
 public import EthLib.Networking.Proofs.ReqResp.Encoding
 public import EthLib.Networking.Proofs.Rlpx.Ecies
@@ -41,6 +69,9 @@ public import EthLib.Networking.Proofs.Snappy.CompressSize
 public import EthLib.Networking.Proofs.Snappy.Encode
 public import EthLib.Networking.Proofs.Snappy.Frame
 public import EthLib.Networking.Proofs.Snappy.FrameEncode
+public import EthLib.Networking.Proofs.Snappy.Read
+
+public import EthLib.Networking.Proofs.Quic.Frame
 
 /-!
 # `EthLib.Networking.Proofs`

@@ -60,7 +60,7 @@ theorem staticStep_runPrecompile {address : Nat} {evm after : Evm fork Meter}
     · cases h
       exact staticStep_exceptionalHalt _ _
     · cases h
-      exact ⟨StateKept.refl _, rfl, rfl, rfl, rfl, rfl, rfl⟩
+      exact ⟨.refl _, rfl, rfl, rfl, rfl, rfl, rfl⟩
 
 omit [GasMeter Meter] in
 /-- The frame that starts a static message is a static frame. -/
@@ -430,22 +430,21 @@ theorem staticTouchResult_genericCall {evm : Evm fork Meter} {message : Message 
     (h : genericCall evm message newAccount outputStart outputSize = .ok result) :
     StaticTouchResult evm result := by
   unfold genericCall at h
-  dsimp only at h
   split at h
-  · cases hs : skipCall (refillStateGas { evm with returnData := .empty } newAccount)
+  · cases hs : skipCall (refillStateGas evm newAccount)
         message.gas message.reservoir with
     | error e => simp [hs, Functor.map, Except.map] at h
     | ok after =>
       simp only [hs, Functor.map, Except.map, Except.ok.injEq] at h
       subst h
-      exact (⟨StateKept.refl _, rfl, rfl, rfl, rfl, rfl, rfl⟩ : StaticStep evm
-        (refillStateGas { evm with returnData := .empty } newAccount)).trans
+      exact (⟨.refl _, rfl, rfl, rfl, rfl, rfl, rfl⟩ : StaticStep evm
+        (refillStateGas evm newAccount)).trans
         (staticStep_skipCall hs)
   · cases h
-    refine ⟨⟨StateKept.refl _, rfl, rfl, rfl, rfl, rfl, rfl⟩, hmsg, ?_⟩
+    refine ⟨⟨.refl _, rfl, rfl, rfl, rfl, rfl, rfl⟩, hmsg, ?_⟩
     intro touched child after hres kept parent hrec
-    have pre : StaticStep evm { evm with returnData := .empty } :=
-      ⟨StateKept.refl _, rfl, rfl, rfl, rfl, rfl, rfl⟩
+    have pre : StaticStep evm evm :=
+      ⟨.refl _, rfl, rfl, rfl, rfl, rfl, rfl⟩
     exact pre.trans_touchStep (staticTouchStep_resumeCall hres kept parent hrec)
 
 /-- A paid call in a static frame gives a static step, or a static touch child.
@@ -466,30 +465,25 @@ theorem staticTouchResult_finishCall {kind : CallKind} {call : CallOperands} {ca
   · cases h
   rename_i hnot
   dsimp only at h
-  have pre : StaticStep evm (recordAccountRead { evm with
-      memory := memoryExtend evm.memory expandBy, gas := GasMeter.drain evm.gas }
-      evm.message.currentTarget) := ⟨StateKept.refl _, rfl, rfl, rfl, rfl, rfl, rfl⟩
+  have pre : StaticStep evm (callerFrame evm expandBy) :=
+    ⟨.recordAccountRead _ _, rfl, rfl, rfl, rfl, rfl, rfl⟩
   split at h
-  · cases hs : skipCall (refillStateGas (recordAccountRead { evm with
-        memory := memoryExtend evm.memory expandBy, gas := GasMeter.drain evm.gas }
-        evm.message.currentTarget) newAccount) subCall (GasMeter.reservoir evm.gas) with
+  · cases hs : skipCall (refillStateGas (callerFrame evm expandBy) newAccount) subCall
+        (GasMeter.reservoir evm.gas) with
     | error e => simp [hs, Functor.map, Except.map] at h
     | ok after =>
       simp only [hs, Functor.map, Except.map, Except.ok.injEq] at h
       subst h
-      have refill : StaticStep (recordAccountRead { evm with
-          memory := memoryExtend evm.memory expandBy, gas := GasMeter.drain evm.gas }
-          evm.message.currentTarget)
-          (refillStateGas (recordAccountRead { evm with
-          memory := memoryExtend evm.memory expandBy, gas := GasMeter.drain evm.gas }
-          evm.message.currentTarget) newAccount) := ⟨StateKept.refl _, rfl, rfl, rfl, rfl, rfl, rfl⟩
+      have refill : StaticStep (callerFrame evm expandBy)
+          (refillStateGas (callerFrame evm expandBy) newAccount) :=
+        ⟨.refl _, rfl, rfl, rfl, rfl, rfl, rfl⟩
       exact (pre.trans refill).trans (staticStep_skipCall hs)
   · refine StaticTouchResult.lift pre (staticTouchResult_genericCall ?_ h)
     have hcall : kind = .call → call.value = 0 := by
       intro hk
       exact Decidable.byContradiction fun hne => hnot ⟨hk, static, hne⟩
     refine ⟨?_, rfl, ?_, ?_⟩
-    · simp only [Bool.or_eq_true, beq_iff_eq]
+    · simp only [isStatic_callMessage, Bool.or_eq_true, beq_iff_eq]
       exact Or.inr static
     · intro nonempty
       cases kind
@@ -615,7 +609,7 @@ variable {step : Evm fork Meter → Except EvmError (StepResult fork Meter)}
 The step must give static steps and static touch children from a static frame.
 
 The runner must end each static child with a state that differs from its caller's by touches. -/
-theorem staticTouchStep_runFrame
+theorem staticTouchStep_runFrame [LawfulGasMeter Meter]
     (next : ∀ {evm after : Evm fork Meter}, StaticFrame evm → step evm = .ok (.next after) →
       StaticStep evm after)
     (child : ∀ {evm caller : Evm fork Meter} {message : Message fork}
@@ -647,7 +641,7 @@ theorem staticTouchStep_runFrame
     (fun hf ⟨_, hab⟩ => StaticFrame.of_touchStep hab hf)
     (fun _ _ _ => ⟨[], .of_staticStep (staticStep_exceptionalHalt _ _)⟩) ?_
     (fun _ _ _ _ hf hrun hmsg => runs hf hmsg hrun) hf h
-  intro evm' result hf' hstep
+  intro evm' result hf' _ hstep
   cases result with
   | next after' => exact ⟨[], .of_staticStep (next hf' hstep)⟩
   | child caller message resume =>
@@ -678,7 +672,7 @@ theorem processMessage_touchesOnly_static [LawfulGasMeter Meter] :
   induction n using Nat.strongRecOn with
   | _ n ih =>
     intro message state substate meter held hn hmsg ended h
-    rw [processMessage] at h
+    rw [processMessage_unfold] at h
     obtain ⟨ended0, hdo, rolled⟩ := Base.map_ok_iff.mp h
     obtain ⟨t0, ht0, hpar0, hrec0⟩ := touchesOnly_startState message state
     have hmsg0 : StaticMessage (startState fork message state) message :=
@@ -752,7 +746,7 @@ theorem processMessage_touchesOnly_static [LawfulGasMeter Meter] :
           split at hdo
           · cases hdo
             exact stepCore h1 hp1
-              (.of_staticStep ⟨TransactionState.SameOutside.refl _ _, rfl, rfl, rfl, rfl, rfl, rfl⟩)
+              (.of_staticStep ⟨.refl _, rfl, rfl, rfl, rfl, rfl, rfl⟩)
           · split at hdo
             · rename_i after hrp
               cases hdo
@@ -760,7 +754,7 @@ theorem processMessage_touchesOnly_static [LawfulGasMeter Meter] :
             · cases hdo
               exact stepCore h1 hp1
                 (.of_staticStep
-                  ⟨TransactionState.SameOutside.refl _ _, rfl, rfl, rfl, rfl, rfl, rfl⟩)
+                  ⟨.refl _, rfl, rfl, rfl, rfl, rfl, rfl⟩)
     have hval := congrArg Subtype.val rolled
     simp only at hval
     rw [← hval]

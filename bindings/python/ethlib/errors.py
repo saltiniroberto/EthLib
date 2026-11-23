@@ -1,5 +1,7 @@
 """The exceptions that the specification raises through the bindings."""
 
+from collections.abc import Callable
+
 
 # Each primitive has one exception class.
 # `KeyDerivationError` alone subclasses another, `BlsError`, so a BLS handler also catches it.
@@ -33,6 +35,20 @@ class EthLibError(Exception):
         super().__init__(message)
         self.code = code
         self.message = message
+
+    def __reduce__(
+        self,
+    ) -> tuple[
+        Callable[..., object], tuple[type["EthLibError"], tuple[object, ...]], dict[str, object]
+    ]:
+        """Rebuild the error from its class, arguments and attributes, without `__init__`."""
+        # As for `BaseException`, a subclass with another constructor signature still copies.
+        return _rebuild, (type(self), self.args), self.__dict__
+
+
+def _rebuild(cls: type[EthLibError], args: tuple[object, ...]) -> EthLibError:
+    """Create an error of the class with these arguments, as `BaseException` does when unpickled."""
+    return cls.__new__(cls, *args)
 
 
 class KzgError(EthLibError, RuntimeError):
@@ -110,7 +126,15 @@ class ProposerError(EthLibError, ValueError):
 
 
 class SlashingProtectionError(EthLibError, ValueError):
-    """An interchange file does not read, or a signer must refuse a message."""
+    """An interchange file does not read, or a signer must refuse a file or a message."""
+
+
+class KeymanagerError(EthLibError, ValueError):
+    """A value or a request of the Keymanager API does not read."""
+
+
+class RemoteSigningError(EthLibError, ValueError):
+    """A document is not a request of the Remote-signing API."""
 
 
 class LightClientError(EthLibError, ValueError):
@@ -123,6 +147,18 @@ class ForkChoiceError(EthLibError, ValueError):
 
 class HkdfError(EthLibError, ValueError):
     """HKDF rejected its input."""
+
+
+class TlsHandshakeError(EthLibError, ValueError):
+    """A TLS handshake codec or transcript rejected its input."""
+
+
+class TlsStepError(EthLibError, ValueError):
+    """A TLS handshake step failed, with its QUIC error code, or 0 for a malformed argument."""
+
+
+class Tls13Error(EthLibError, ValueError):
+    """A TLS 1.3 key derivation rejected its input."""
 
 
 class Pbkdf2Error(EthLibError, ValueError):
@@ -185,16 +221,40 @@ class UvarintError(EthLibError, ValueError):
     """The bytes do not start with a multiformats unsigned varint, or a value is out of range."""
 
 
+class QuicError(EthLibError, ValueError):
+    """A QUIC header, packet number or frame is malformed, out of range, or not allowed there."""
+
+
+class QuicProtectionError(EthLibError, ValueError):
+    """A QUIC packet or Retry fails a check; code 8 is a reserved bit in an authenticated packet."""
+
+
+class QuicVarintError(EthLibError, ValueError):
+    """The bytes end before the QUIC integer they start, or a value is not below 2^62."""
+
+
 class MultistreamError(EthLibError, ValueError):
     """The bytes do not start with a multistream-select message."""
 
 
 class MplexError(EthLibError, ValueError):
-    """The bytes do not start with an mplex frame, or a frame is outside the format."""
+    """
+    The bytes do not start with an mplex frame, a frame is outside the format, or a side refuses it.
+
+    Stream errors have codes from 101.
+    """
 
 
 class YamuxError(EthLibError, ValueError):
-    """The bytes do not start with a yamux frame, or a frame is outside the format."""
+    """
+    The bytes do not start with a yamux frame, a frame is outside the format, or a side refuses it.
+
+    Stream errors have codes from 101.
+    """
+
+
+class TlsCertificateError(EthLibError, ValueError):
+    """A libp2p TLS certificate or its peer authentication was rejected."""
 
 
 class Libp2pIdentityError(EthLibError, ValueError):
@@ -221,6 +281,10 @@ class Discv4Error(EthLibError, ValueError):
     """A discv4 packet was rejected, with the code of its error, or 0 for a bad argument."""
 
 
+class DnsDiscError(EthLibError, ValueError):
+    """An entry or a URL of an EIP-1459 node list was rejected."""
+
+
 class ForkIdError(EthLibError, ValueError):
     """A node refused the fork identifier of a peer, or an input was malformed, with code 0."""
 
@@ -231,7 +295,9 @@ class EthWireError(EthLibError, ValueError):
 
     Message errors have codes from 1, and Status errors codes from 101.
 
-    Header errors have codes from 201, and transaction errors codes from 301.
+    Header errors have codes from 201, and transaction errors codes from 302.
+
+    Session errors have codes from 701.
 
     A bad argument has code 0.
     """
@@ -290,12 +356,20 @@ class EngineError(EthLibError, ValueError):
     """An Engine API method returned a JSON-RPC error, whose code is the negative of this code."""
 
 
+class RpcError(EthLibError, ValueError):
+    """
+    An execution JSON-RPC parameter was rejected, with the JSON-RPC code without its sign.
+
+    An unknown schema has code 0.
+    """
+
+
 class JwtError(EthLibError, ValueError):
     """An Engine API authentication token could not be built or checked."""
 
 
 class ChainError(EthLibError, ValueError):
-    """A chain configuration was malformed, with code 0."""
+    """A chain configuration was malformed, with code 0, or a configuration file was refused."""
 
 
 class BindingError(EthLibError, ValueError):
@@ -325,9 +399,14 @@ __all__ = [
     "ValidatorDutyError",
     "ProposerError",
     "SlashingProtectionError",
+    "KeymanagerError",
+    "RemoteSigningError",
     "LightClientError",
     "ForkChoiceError",
     "HkdfError",
+    "Tls13Error",
+    "TlsHandshakeError",
+    "TlsStepError",
     "Pbkdf2Error",
     "ScryptError",
     "X25519Error",
@@ -342,15 +421,20 @@ __all__ = [
     "SszError",
     "VarintError",
     "UvarintError",
+    "QuicVarintError",
+    "QuicProtectionError",
+    "QuicError",
     "MultistreamError",
     "MplexError",
     "YamuxError",
     "Libp2pIdentityError",
+    "TlsCertificateError",
     "GossipError",
     "Discv5Error",
     "RlpxError",
     "Devp2pError",
     "Discv4Error",
+    "DnsDiscError",
     "ForkIdError",
     "EthWireError",
     "SnapError",
@@ -362,6 +446,7 @@ __all__ = [
     "EvmError",
     "FeesError",
     "EngineError",
+    "RpcError",
     "JwtError",
     "ChainError",
 ]

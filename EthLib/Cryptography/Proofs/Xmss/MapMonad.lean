@@ -3,7 +3,8 @@ module
 public import EthLib.Cryptography.Xmss.Sign
 public import EthLib.Cryptography.Proofs.HashSig
 public import EthLib.Cryptography.Proofs.Wots
-public import EthLib.Cryptography.Proofs.Merkle.Completeness
+public import EthLib.Cryptography.Proofs.Merkle.Build
+public import EthLib.Cryptography.Proofs.Xmss.Ots
 
 /-!
 # Proofs: the leanXMSS algorithms commute with maps of monads
@@ -11,6 +12,8 @@ public import EthLib.Cryptography.Proofs.Merkle.Completeness
 Take a map of monads that keeps `pure` and `bind`.
 
 It sends each algorithm over a hash `H` and a seed function to the algorithm over their images.
+
+Most signing algorithms also need both monads to be lawful.
 
 Simulating the oracle queries of a computation is such a map.
 
@@ -26,14 +29,14 @@ open EthLib.Cryptography.Xmss.Constants
 variable {m m' : Type → Type} [Monad m] [Monad m'] (φ : ∀ {β : Type}, m β → m' β)
   (map_pure : ∀ {β : Type} (b : β), φ (pure b) = pure b)
   (map_bind : ∀ {β γ : Type} (x : m β) (f : β → m γ), φ (x >>= f) = φ x >>= fun b => φ (f b))
-  (H : ByteArray → m (Vector UInt8 32)) (prf : SeedPrf m)
+  (H : Array UInt64 → m Lanes4) (prf : SeedPrf m)
 
 include map_pure map_bind
 
 /-! ## Hashing and chains -/
 
 /-- A tweakable hash call, over the image of `H`. -/
-theorem th_map_monad (pp : PublicParam) (address : Address) (payload : ByteArray) :
+theorem th_map_monad (pp : PublicParam) (address : Address) (payload : Array UInt64) :
     φ (th H pp address payload) = th (fun x => φ (H x)) pp address payload := by
   simp only [th, map_bind, map_pure]
 
@@ -70,6 +73,14 @@ theorem node_map_monad (pp : PublicParam) (layer : Layer) (level j : Nat) :
     th_map_monad φ map_pure map_bind, otsPublicLeaf_map_monad φ map_pure map_bind]
   rfl
 
+/-- A build of a layer, over the images of `H` and of the seed function. -/
+theorem build_map_monad (pp : PublicParam) (layer : Layer) (level j : Nat) :
+    φ (build H pp prf layer level j) =
+      build (fun x => φ (H x)) pp (fun pp a suffix => φ (prf pp a suffix)) layer level j := by
+  simp only [build, Merkle.build_map _ φ map_pure map_bind, nodeHash, leaves,
+    th_map_monad φ map_pure map_bind, otsPublicLeaf_map_monad φ map_pure map_bind]
+  rfl
+
 /-- The path of a key, over the images of `H` and of the seed function. -/
 theorem path_map_monad (pp : PublicParam) (layer : Layer) (e : Nat) :
     φ (path H pp prf layer e) =
@@ -89,7 +100,7 @@ theorem fold_map_monad (pp : PublicParam) (layer : Layer) (e : Nat) (leaf : Dige
 /-! ## Verification -/
 
 /-- The leaf a one-time signature leads to, over the image of `H`. -/
-theorem otsLeaf_map_monad (pp : PublicParam) (layer : Layer) (e : UInt32) (msg : ByteArray)
+theorem otsLeaf_map_monad (pp : PublicParam) (layer : Layer) (e : UInt32) (msg : Array UInt64)
     (rho : Randomizer) (y : Vector Digest V) :
     φ (otsLeaf H pp layer e msg rho y) = otsLeaf (fun x => φ (H x)) pp layer e msg rho y := by
   simp only [otsLeaf, map_bind, messageDigest, th_map_monad φ map_pure map_bind]
@@ -101,7 +112,7 @@ theorem otsLeaf_map_monad (pp : PublicParam) (layer : Layer) (e : UInt32) (msg :
       chain_map_monad φ map_pure map_bind, otsLeafHash, th_map_monad φ map_pure map_bind]
 
 /-- The root one layer's signature leads to, over the image of `H`. -/
-theorem layerRoot_map_monad (pp : PublicParam) (layer : Layer) (e : Nat) (msg : ByteArray)
+theorem layerRoot_map_monad (pp : PublicParam) (layer : Layer) (e : Nat) (msg : Array UInt64)
     (sig : LayerSignature) :
     φ (layerRoot H pp layer e msg sig) = layerRoot (fun x => φ (H x)) pp layer e msg sig := by
   simp only [layerRoot, map_bind, otsLeaf_map_monad φ map_pure map_bind]
@@ -112,35 +123,35 @@ theorem layerRoot_map_monad (pp : PublicParam) (layer : Layer) (e : Nat) (msg : 
 
 /-! ## Signing
 
-The codeword test maps a digest, so these lemmas also ask that the map keep `map`. -/
+The codeword test maps a digest.
+
+From the codeword search on, the lemmas assume both monads lawful, so the map also keeps `map`. -/
 
 section Sign
 
-variable (map_map : ∀ {β γ : Type} (f : β → γ) (x : m β), φ (f <$> x) = f <$> φ x)
-
 /-- The base of the randomizer trials, over the image of the seed function. -/
 theorem randomizerBase_map_monad (pp : PublicParam) (layer : Layer) (e : UInt32)
-    (msg : ByteArray) :
+    (msg : Array UInt64) :
     φ (randomizerBase pp prf layer e msg) =
       randomizerBase pp (fun pp a suffix => φ (prf pp a suffix)) layer e msg :=
   (map_bind _ _).trans (bind_congr fun _ => map_pure _)
 
-include map_map
+variable [LawfulMonad m] [LawfulMonad m']
 
 /-- The codeword search, over the image of `H`. -/
 theorem findCodeword_map_monad (pp : PublicParam) (layer : Layer) (e : UInt32)
-    (msg : ByteArray) (base : Randomizer) (c fuel : Nat) :
+    (msg : Array UInt64) (base : Randomizer) (c fuel : Nat) :
     φ (Internal.findCodeword H pp layer e msg base c fuel) =
       Internal.findCodeword (fun x => φ (H x)) pp layer e msg base c fuel := by
-  simp only [Internal.findCodeword, Wots.findFirst_map_monad φ map_pure map_bind, map_map,
-    messageDigest, th_map_monad φ map_pure map_bind]
+  simp only [Internal.findCodeword_eq, Wots.findFirst_map_monad φ map_pure map_bind,
+    HashSig.map_monad_map φ map_pure map_bind, messageDigest, th_map_monad φ map_pure map_bind]
 
 /-- A one-time signature, over the images of `H` and of the seed function. -/
-theorem otsSign_map_monad (pp : PublicParam) (layer : Layer) (e : UInt32) (msg : ByteArray) :
+theorem otsSign_map_monad (pp : PublicParam) (layer : Layer) (e : UInt32) (msg : Array UInt64) :
     φ (otsSign H pp prf layer e msg) =
       otsSign (fun x => φ (H x)) pp (fun pp a suffix => φ (prf pp a suffix)) layer e msg := by
-  simp only [otsSign, map_bind, randomizerBase_map_monad φ map_pure map_bind,
-    findCodeword_map_monad φ map_pure map_bind H map_map]
+  simp only [otsSign, Internal.otsSignTrials, map_bind,
+    randomizerBase_map_monad φ map_pure map_bind, findCodeword_map_monad φ map_pure map_bind H]
   refine bind_congr fun base => bind_congr fun r => ?_
   cases r with
   | none => exact map_pure _
@@ -148,15 +159,52 @@ theorem otsSign_map_monad (pp : PublicParam) (layer : Layer) (e : UInt32) (msg :
     simp only [map_bind, map_pure, chainStarts_map_monad φ map_pure map_bind,
       HashSig.ofFnInOrder_map_monad φ map_pure map_bind, chain_map_monad φ map_pure map_bind]
 
-/-- One layer's signature, over the images of `H` and of the seed function. -/
-theorem signLayer_map_monad (pp : PublicParam) (layer : Layer) (e : Nat) (msg : ByteArray) :
-    φ (signLayer H pp prf layer e msg) =
-      signLayer (fun x => φ (H x)) pp (fun pp a suffix => φ (prf pp a suffix)) layer e msg := by
-  simp only [signLayer, map_bind, otsSign_map_monad φ map_pure map_bind H prf map_map]
+/-- The top key's signature of a root, over the images of `H` and of the derivations. -/
+theorem signRootWith_map_monad (sk : SecretKey) (b : Nat) (root : Digest) :
+    φ (Internal.signRootWith H prf sk b root) =
+      Internal.signRootWith (fun x => φ (H x)) (fun pp a suffix => φ (prf pp a suffix)) sk b
+        root := by
+  simp only [Internal.signRootWith, Internal.otsSignTrials_hashTrials, map_bind,
+    otsSign_map_monad φ map_pure map_bind H prf]
   refine bind_congr fun r => ?_
   cases r with
   | none => exact map_pure _
-  | some r => simp only [map_bind, map_pure, path_map_monad φ map_pure map_bind]
+  | some r => exact map_pure _
+
+/-- A bottom tree with its top signature, over the images of `H` and of the derivations. -/
+theorem cacheTreeWith_map_monad (sk : SecretKey) (b : Nat) :
+    φ (Internal.cacheTreeWith H prf sk b) =
+      Internal.cacheTreeWith (fun x => φ (H x)) (fun pp a suffix => φ (prf pp a suffix)) sk b := by
+  simp only [Internal.cacheTreeWith, map_bind, map_pure, build_map_monad φ map_pure map_bind,
+    signRootWith_map_monad φ map_pure map_bind H prf]
+
+/-- A fetched bottom tree and the updated key, over the images of `H` and of the derivations. -/
+theorem fetchTreeWith_map_monad (sk : SecretKey) (b : Nat) :
+    φ (Internal.fetchTreeWith H prf sk b) =
+      Internal.fetchTreeWith (fun x => φ (H x)) (fun pp a suffix => φ (prf pp a suffix)) sk b := by
+  unfold Internal.fetchTreeWith
+  split
+  · exact map_pure _
+  · simp only [map_bind, map_pure, cacheTreeWith_map_monad φ map_pure map_bind H prf]
+
+/-- A signature and the updated key, over the images of `H` and of the derivations. -/
+theorem signWithTrials_map_monad (sk : SecretKey) (idx : LeafIndex) (msg : Message) :
+    φ (Internal.signWithTrials H prf sk idx msg (hashTrials H)) =
+      Internal.signWithTrials (fun x => φ (H x)) (fun pp a suffix => φ (prf pp a suffix)) sk idx
+        msg (hashTrials fun x => φ (H x)) := by
+  simp only [Internal.signWithTrials, Internal.otsSignTrials_hashTrials, map_bind,
+    otsSign_map_monad φ map_pure map_bind H prf]
+  refine bind_congr fun r => ?_
+  cases r with
+  | none => exact map_pure _
+  | some r =>
+    simp only [map_bind, fetchTreeWith_map_monad φ map_pure map_bind H prf]
+    refine bind_congr fun r => ?_
+    obtain ⟨t, sk'⟩ := r
+    dsimp only
+    cases t.top with
+    | error err => exact map_pure _
+    | ok top => exact map_pure _
 
 end Sign
 
@@ -166,31 +214,6 @@ end Sign
 theorem publicParamOf_map_monad :
     φ (publicParamOf prf) = publicParamOf fun pp a suffix => φ (prf pp a suffix) := by
   exact (map_bind _ _).trans (bind_congr fun _ => map_pure _)
-
-/-- The public key, over the images of `H` and of the seed function. -/
-theorem publicKeyOf_map_monad :
-    φ (publicKeyOf H prf) =
-      publicKeyOf (fun x => φ (H x)) fun pp a suffix => φ (prf pp a suffix) := by
-  simp only [publicKeyOf, map_bind, map_pure, publicParamOf_map_monad φ map_pure map_bind,
-    node_map_monad φ map_pure map_bind]
-
-/-- A signature from the derivations, over the images of `H` and of the seed function. -/
-theorem signDerived_map_monad
-    (map_map : ∀ {β γ : Type} (f : β → γ) (x : m β), φ (f <$> x) = f <$> φ x)
-    (pp : PublicParam) (idx : LeafIndex) (msg : Message) :
-    φ (signDerived H prf pp idx msg) =
-      signDerived (fun x => φ (H x)) (fun pp a suffix => φ (prf pp a suffix)) pp idx msg := by
-  simp only [signDerived, map_bind, signLayer_map_monad φ map_pure map_bind H prf map_map]
-  refine bind_congr fun r => ?_
-  cases r with
-  | error err => exact map_pure _
-  | ok bottom =>
-    simp only [map_bind, map_pure, node_map_monad φ map_pure map_bind,
-      signLayer_map_monad φ map_pure map_bind H prf map_map]
-    refine bind_congr fun _ => bind_congr fun _ => bind_congr fun r => ?_
-    cases r with
-    | error err => exact map_pure _
-    | ok top => simp only [map_bind, map_pure]
 
 /-- Verification, over the image of `H`. -/
 theorem verifyWith_map_monad (pk : PublicKey) (msg : Message) (sig : Signature) :

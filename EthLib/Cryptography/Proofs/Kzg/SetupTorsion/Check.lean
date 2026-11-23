@@ -2,7 +2,8 @@ module
 
 public import EthLib.Cryptography.Kzg.TrustedSetup
 public import EthLib.Cryptography.Proofs.Bls.G1TorsionCheck
-public meta import Lean.Elab.Term
+public import EthLib.Cryptography.Proofs.Kzg.TrustedSetup
+public meta import Lean.Elab.Command
 
 /-!
 # Proofs: the check that reads one point of the embedded setup
@@ -22,6 +23,8 @@ The kernel decodes a string slowly, since it reads its UTF-8 bytes one at a time
 So a proof first replaces each string by the list of its codes.
 
 The kernel checks that step by unfolding the literal, which is cheap.
+
+The file also declares the checks of many strings, one theorem each, and a term that gathers them.
 -/
 
 @[expose] public section
@@ -65,42 +68,48 @@ def checkCodes (ns : List Nat) : Bool :=
   | some l => G1.TorsionCheck.check (xOf l)
   | none => false
 
-theorem nibble?_eq (c : Char) : TrustedSetup.nibble? c = (digit c.toNat).map UInt8.ofNat := by
-  unfold TrustedSetup.nibble? digit
-  dsimp only
-  split_ifs <;> rfl
+/-- The hex reader of Base reads a digit as the decoder of its code does. -/
+theorem hexValue?_eq (c : Char) : Base.hexValue? c = (digit c.toNat).map UInt8.ofNat := by
+  have e0 : ('0' : Char).val.toNat = 48 := rfl
+  have e9 : ('9' : Char).val.toNat = 57 := rfl
+  have ea : ('a' : Char).val.toNat = 97 := rfl
+  have ef : ('f' : Char).val.toNat = 102 := rfl
+  have eA : ('A' : Char).val.toNat = 65 := rfl
+  have eF : ('F' : Char).val.toNat = 70 := rfl
+  unfold Base.hexValue? digit
+  simp only [Char.le_def, Char.toNat, UInt32.le_iff_toNat_le, e0, e9, ea, ef, eA, eF]
+  split_ifs <;> simp only [Option.map_some, Option.map_none, Nat.toUInt8_eq]
+  all_goals (congr 2; omega)
 
 theorem digit_lt {n d : Nat} (h : digit n = some d) : d < 16 := by
   unfold digit at h
   split_ifs at h <;> cases h <;> omega
 
-private theorem byte_eq_aux :
-    ∀ a b : Fin 16,
-      (UInt8.ofNat a.val <<< 4 ||| UInt8.ofNat b.val) = UInt8.ofNat (a.val * 16 + b.val) := by
-  decide
+/-- Two digits make one byte, as the hex reader of Base combines them.
 
-/-- Two digits make one byte, as the decoder of the setup combines them. -/
-theorem byte_eq {a b : Nat} (ha : a < 16) (hb : b < 16) :
-    (UInt8.ofNat a <<< 4 ||| UInt8.ofNat b) = UInt8.ofNat (a * 16 + b) :=
-  byte_eq_aux ⟨a, ha⟩ ⟨b, hb⟩
+Byte arithmetic is modulo 256, so the equation holds for any two numbers. -/
+theorem byte_eq (a b : Nat) : 16 * UInt8.ofNat a + UInt8.ofNat b = UInt8.ofNat (a * 16 + b) := by
+  apply UInt8.toNat_inj.mp
+  simp [UInt8.toNat_add, UInt8.toNat_mul, UInt8.toNat_ofNat]
+  omega
 
-/-- The decoder of the setup reads the bytes that the digit codes give. -/
-theorem hexToBytesAux_eq : ∀ (cs : List Char) (acc : ByteArray),
-    TrustedSetup.hexToBytesAux cs acc =
+/-- The hex reader of Base reads the bytes that the digit codes give. -/
+theorem hexBytesFrom?_eq : ∀ (cs : List Char) (acc : ByteArray),
+    Base.hexBytesFrom? cs acc =
       (hexBytes (cs.map Char.toNat)).map fun l => ⟨acc.data ++ (l.map UInt8.ofNat).toArray⟩
-  | [], acc => by simp [TrustedSetup.hexToBytesAux, hexBytes]
-  | [_], acc => by simp [TrustedSetup.hexToBytesAux, hexBytes]
+  | [], acc => by simp [Base.hexBytesFrom?, hexBytes]
+  | [_], acc => by simp [Base.hexBytesFrom?, hexBytes]
   | hi :: lo :: rest, acc => by
-    rw [TrustedSetup.hexToBytesAux, List.map_cons, List.map_cons, hexBytes, nibble?_eq,
-      nibble?_eq]
+    rw [Base.hexBytesFrom?, List.map_cons, List.map_cons, hexBytes, hexValue?_eq, hexValue?_eq]
     cases hh : digit hi.toNat with
     | none => rfl
     | some h =>
       cases hl : digit lo.toNat with
       | none => rfl
       | some l =>
-        simp only [Option.map_some, Option.bind_eq_bind, Option.bind_some, hexToBytesAux_eq rest,
-          byte_eq (digit_lt hh) (digit_lt hl)]
+        simp only [Option.map_some, Option.bind_eq_bind, Option.bind_some]
+        rw [byte_eq]
+        rw [hexBytesFrom?_eq rest]
         cases hexBytes (rest.map Char.toNat) with
         | none => rfl
         | some r =>
@@ -120,7 +129,7 @@ theorem fromBytesBE_eq {l : List Nat} {x : Fp}
   | nil => rfl
   | cons a t =>
     simp [ByteArray.set!, ByteArray.get!, xOf]
-    -- Both sides fold over the same bytes: a byte of value `u` adds `acc * 256 + u % 256`.
+    -- Both sides fold over the same bytes: a byte `u` maps `acc` to `256 acc + (u mod 256)`.
     rw [Base.bytesToNat, List.foldl_cons, List.foldl_map]
     refine congrArg₂ (fun f i => List.foldl f i t) ?_ ?_
     · funext acc u
@@ -132,17 +141,18 @@ theorem fromBytesBE_eq {l : List Nat} {x : Fp}
 
 /-- If the check of a string passes, each point that it decodes to has order dividing `r`. -/
 theorem modulus_smul_eq_zero {s : String} {b : ByteArray} {q : G1}
-    (hc : checkCodes (codes s) = true) (hb : TrustedSetup.hexToBytes? s = some b)
-    (hq : G1.uncompress b = .ok q) : Fr.modulus • G1.toPoint q = 0 := by
+    (hc : checkCodes (codes s) = true) (hb : Base.hexBytes? s.toList = some b)
+    (hq : TrustedSetup.decodeG1 b = .ok q) : Fr.modulus • G1.toPoint q = 0 := by
   unfold checkCodes codes at hc
-  rw [TrustedSetup.hexToBytes?, hexToBytesAux_eq] at hb
+  rw [Base.hexBytes?, hexBytesFrom?_eq] at hb
   cases hl : hexBytes (s.toList.map Char.toNat) with
   | none => rw [hl] at hc; cases hc
   | some l =>
     rw [hl] at hc
     rw [hl, Option.map_some, Option.some.injEq] at hb
     subst hb
-    rcases G1.uncompress_eq_zero_or hq with rfl | ⟨x, y, hx, hy, rfl⟩
+    obtain ⟨v, hv, hq⟩ := TrustedSetup.decodeG1_eq_ok.mp hq
+    rcases G1.uncompress_eq_zero_or_bytes hv hq with rfl | ⟨x, y, hx, hy, rfl⟩
     · rw [G1.toPoint_zero, nsmul_zero]
     · have he : ByteArray.empty.data ++ (l.map UInt8.ofNat).toArray =
           (l.map UInt8.ofNat).toArray := Array.empty_append
@@ -241,5 +251,55 @@ theorem all_of_chunks {α : Type} (p : α → Bool) (c : Nat) :
       omega
     · rw [List.drop_drop, show c + c * k = c * (k + 1) by rw [Nat.mul_succ, Nat.add_comm]]
       exact h (k + 1) (by omega)
+
+/-! ## Declaring the checks -/
+
+open Lean Elab Command in
+/-- Declares the checks of the chunks `a` to `b - 1` of the strings `xs`.
+
+Chunk `k` holds the 16 strings from index `16 * k`.
+
+Its check is the theorem `name_k`, closed by a kernel check. -/
+elab "torsion_checks " name:ident xs:ident a:num b:num : command => do
+  for k in [a.getNat:b.getNat] do
+    let id := mkIdent (name.getId.appendAfter s!"_{k}")
+    let start := Syntax.mkNumLit (toString (16 * k))
+    elabCommand (← `(command|
+      theorem $id:ident :
+          (((($xs).toList.map codes).drop $start).take 16).all checkCodes = true := by
+        rw [codes_chunk% $xs $start 16]
+        decide +kernel))
+
+/-- A predicate holds below `a + b` if it holds below `a`, and at `a + k` for each `k` below `b`. -/
+theorem forall_lt_add {p : Nat → Prop} {a b : Nat} (ha : ∀ k < a, p k)
+    (hb : ∀ k < b, p (a + k)) : ∀ k < a + b, p k := fun k hk =>
+  if h : k < a then ha k h else Nat.add_sub_cancel' (Nat.le_of_not_lt h) ▸ hb (k - a) (by omega)
+
+/-- A predicate holds below 1 if it holds at 0. -/
+theorem forall_lt_one {p : Nat → Prop} (h : p 0) : ∀ k < 1, p k := fun _ hk =>
+  Nat.lt_one_iff.mp hk ▸ h
+
+open Lean in
+/-- A proof of `∀ k < n, p (lo + k)` from the theorems for `lo` to `lo + n - 1`.
+
+It splits the range in halves, so the proof has depth logarithmic in `n`. -/
+meta def checksBelow (leaf : Nat → MacroM Term) (lo n : Nat) : MacroM Term :=
+  if n = 0 then `(fun _ h => absurd h (Nat.not_lt_zero _))
+  else if n = 1 then do `(forall_lt_one $(← leaf lo))
+  else do
+    `(forall_lt_add (a := $(quote (n / 2))) (b := $(quote (n - n / 2)))
+      $(← checksBelow leaf lo (n / 2)) $(← checksBelow leaf (lo + n / 2) (n - n / 2)))
+termination_by n
+decreasing_by all_goals omega
+
+open Lean in
+/-- A proof of `∀ k < n, p k` from the theorems `name_0` to `name_(n - 1)`.
+
+With two bounds `n m`, it proves `∀ k < n, ∀ l < m, p k l` from the theorems `name_k_l`. -/
+macro "checks_of% " name:ident bounds:num+ : term => do
+  let rec go (pre : Name) : List Nat → MacroM Term
+    | [] => return mkIdent pre
+    | n :: rest => checksBelow (fun k => go (pre.appendAfter s!"_{k}") rest) 0 n
+  go name.getId (bounds.map (·.getNat)).toList
 
 end EthLib.Cryptography.Kzg.SetupTorsion

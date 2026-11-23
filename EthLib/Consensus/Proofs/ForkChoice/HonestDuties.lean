@@ -34,7 +34,7 @@ An honest validator signs a vote of its own only as its duty allows.
 
 It votes at the attestation deadline of a slot of its assignment, with an up-to-date store.
 
-The vote holds the data that the guide of the honest validator builds from the head.
+The vote holds the data that an honest validator builds from the head.
 
 It cannot be slashed together with a vote of the validator that its view holds.
 
@@ -128,7 +128,7 @@ variable (config checks)
 
 The state of the head block goes through the empty slots up to the slot, when it is older.
 
-The data then follows the guide of the honest validator. -/
+The data is then that of an honest validator. -/
 def HonestVoteData (store : Store preset fork) (slot : Slot) (committeeIndex : CommitteeIndex)
     (data : AttestationData) : Prop :=
   ∃ head block headState state, store.getHead config = .ok head ∧
@@ -261,6 +261,36 @@ def Votes {J : Set ValidatorIndex} (stable : ℕ)
     stable ≤ time →
     ∃ n attestation indexed, VoteAt e v slot committeeIndex time n attestation indexed
 
+/-- The committee check succeeds whenever the store successfully reads the target state.
+
+This condition does not require the target cache operations themselves to succeed. -/
+def VoteCommittees (store : Store preset fork)
+    (attestation : Attestation preset fork) : Prop :=
+  ∀ withTarget targetState,
+    store.storeTargetCheckpointState config checks attestation.data.target = .ok withTarget →
+    withTarget.checkpointState attestation.data.target = .ok targetState →
+    checkAttestationCommittees targetState attestation = .ok ()
+
+/-- Assigned honest validators vote in the half-open slot interval `[first, last)`.
+
+The selected vote also passes the committee check in its target state.
+
+Both conditions concern the same attestation at the same event, not separate witnesses.
+
+No vote is required outside the interval, or before the execution starts. -/
+def VotesInSlots {J : Set ValidatorIndex}
+    (e : Execution (honestForkChoice config checks sources anchorState anchorBlock assignment
+      genesisTimeMs) J) (first last : Slot) : Prop :=
+  ∀ v ∈ J, ∀ slot committeeIndex deadline,
+    first ≤ slot → slot < last →
+    assignment.committee v slot = some committeeIndex →
+    IsAttestationDeadline fork config genesisTimeMs slot deadline →
+    e.startTime ≤ deadline →
+    ∃ n attestation indexed,
+      VoteAt e v slot committeeIndex deadline n attestation indexed ∧
+      VoteCommittees (config := config) (checks := checks)
+        ((e.world n).state v) attestation
+
 /-- Under synchrony with delay `Δ`, a vote of a duty reaches every honest validator `Δ` later. -/
 theorem VoteAt.mem_view {J : Set ValidatorIndex}
     {e : Execution (honestForkChoice config checks sources anchorState anchorBlock assignment
@@ -285,19 +315,14 @@ private theorem computeSlotAtTimeMs_inside {config : Config} {genesisTimeMs due 
       genesisTimeMs.toNat + due.toNat := by
     simp only [Nat.toUInt64_eq, UInt64.toNat_ofNat']
     exact Nat.mod_eq_of_lt fits
-  have elapsed :
-      Uint64.subChecked (genesisTimeMs.toNat + due.toNat).toUInt64 genesisTimeMs = .ok due :=
-    Uint64.subChecked_ok_iff.mpr ⟨by omega, by omega⟩
-  have below := UInt64.lt_iff_toNat_lt.mp inSlot
-  have quotient : Uint64.divChecked due config.SLOT_DURATION_MS = .ok 0 :=
-    Uint64.divChecked_ok_iff.mpr ⟨fun zero => by simp [zero] at below,
-      by simp [Nat.div_eq_of_lt below]⟩
-  simp only [computeSlotAtTimeMs, elapsed, quotient, bind, Except.bind]
+  exact EthLib.Consensus.computeSlotAtTimeMs_inside
+    (by simp [computeTimeAtSlotMs, Uint64.mulChecked, Uint64.addChecked,
+      bind, Except.bind, genesisTimeMs.toNat_lt]) round inSlot
 
 /-- Before Gloas, a store that holds only an anchor block at slot zero has that block as head.
 
 The clock of the store is at slot zero, and both checkpoints are the anchor. -/
-private theorem getHead_anchor {config : Config} {store : Store preset fork}
+theorem getHead_anchor {config : Config} {store : Store preset fork}
     {anchorState : BeaconState preset fork} {anchorBlock : BeaconBlock preset fork}
     {anchorRoot : Root} (before : fork < .glamsterdam)
     (blocks : store.blocks =
@@ -396,8 +421,7 @@ private theorem readsAttestation_firstSeat {config : Config} {store : Store pres
       (mem_getActiveValidatorIndices_of_getBeaconCommittee committeeOk
         (member ▸ Array.getElem_mem seated))
   obtain ⟨domain, domainOk⟩ := computeDomain_total config DOMAIN_BEACON_ATTESTER
-    (if indexed.data.target.epoch < state.forkVersions.epoch then
-      state.forkVersions.previousVersion else state.forkVersions.currentVersion)
+    (state.forkVersions.versionAt indexed.data.target.epoch)
     state.genesisValidatorsRoot
   obtain ⟨root, rootOk⟩ := computeSigningRoot_total indexed.data domain
   have sortedOne : sortedSet [v] = [v] := by

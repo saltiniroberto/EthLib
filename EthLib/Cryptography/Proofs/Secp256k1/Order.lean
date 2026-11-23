@@ -22,7 +22,7 @@ A group of `2 n` points would hold a point of order 2, which is `(x, 0)` with `x
 
 No such `x` exists, because `-7` is not a cube mod `p`.
 
-The kernel checks that by Euler's criterion: `(-7)^((p - 1) / 3) != 1`, since `p = 1 mod 3`.
+The kernel checks that by Euler's criterion: `(-7)^((p - 1) / 3)` is not 1, since `p = 1 mod 3`.
 
 With `n` points, `n X = 0` for every point `X`, so the scalars of `Fn` act on the group.
 
@@ -49,7 +49,9 @@ namespace Point
 theorem isOnCurve_generator : generator.isOnCurve = true := by decide +kernel
 
 /-- `n G = O`, as the kernel computes it by double and add. -/
-theorem mulBits_order_generator : mulBits 256 Fn.modulus generator = infinity := by decide +kernel
+theorem mulBits_order_generator : mulBits 256 Fn.modulus generator = infinity := by
+  rw [mulBits_eq_jacobian]
+  decide +kernel
 
 /-- `G` is not the point at infinity. -/
 theorem toPoint_generator_ne_zero : toPoint generator ≠ 0 := fun h =>
@@ -130,7 +132,7 @@ theorem cube_ne_neg_seven (x : ZMod Fp.modulus) : x * x * x ≠ -7 := by
       show 3 * ((Fp.modulus - 1) / 3) = Fp.modulus - 1 by decide]
     exact ZMod.pow_card_sub_one_eq_one hx
   -- The kernel computes that power, and it is not `1`.
-  rw [PowMod.natCast_pow_eq_one_iff _ 256 _ _ (by decide)] at hpow
+  rw [PowMod.natCast_pow_eq_one_iff] at hpow
   exact absurd hpow (by decide)
 
 /-- No point has order 2. -/

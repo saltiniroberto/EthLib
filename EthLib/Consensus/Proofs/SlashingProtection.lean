@@ -5,6 +5,8 @@ public import EthLib.Consensus.SlashingProtection
 public import EthLib.Consensus.Proofs.Transition.Block
 public import EthLib.Serialization.Proofs.Ssz.Codec.JsonHex
 public import EthLib.Serialization.Proofs.Ssz.Codec.JsonLaws
+public import Std.Data.TreeMap.Lemmas
+import EthLib.Base.Proofs.Bytes
 
 /-!
 # Proofs: slashing protection
@@ -34,6 +36,32 @@ So no valid proposer slashing pairs an older block with a signed block.
 No vote that it signs is slashable with an older vote.
 
 Each of these needs the file to keep one or more such messages of the key.
+
+An import keeps only the greatest slot and epochs of each key.
+
+After any sequence of imports, an accepted message meets every condition of each imported file.
+
+A signer that also imports files signs no two headers of one slot with different signing roots.
+
+Each block that it signs meets conditions 1 and 2 of its starting file.
+
+If that file holds a block of the key, each signed block is after any slot before all its blocks.
+
+Each block that it signs after an import is after every block of the imported file.
+
+So it meets conditions 1 and 2 of that file too.
+
+A signer of votes that imports files signs a slashable pair only when the two share a signing root.
+
+Each vote that it signs meets conditions 3, 4 and 5 of its starting file.
+
+If that file holds a vote of the key, no signed vote is slashable with an older vote.
+
+Each vote that it signs after an import is after every vote of the imported file.
+
+So it meets conditions 3, 4 and 5 of that file too.
+
+The signer without imports is the case of a run that imports no file.
 
 An interchange file reads back as itself from the document that writes it.
 -/
@@ -141,13 +169,13 @@ theorem readSigningRoot_signingRootFields (path : String) (base : List (String �
     readSigningRoot path (Json.mkObj (base ++ signingRootFields root)) = .ok root := by
   cases root with
   | none =>
-    have absent := Serialization.Ssz.getObjVal?_mkObj_of_not_mem
+    have absent := Base.Json.getObjVal?_mkObj_of_not_mem
       (pairs := base ++ signingRootFields none) (name := "signing_root") (by
         simp only [signingRootFields, List.append_nil, List.mem_map, not_exists, not_and]
         exact fun pair mem eq => named pair mem eq)
     simp [readSigningRoot, absent]
   | some root =>
-    have found := Serialization.Ssz.getObjVal?_mkObj
+    have found := Base.Json.getObjVal?_mkObj
       (pairs := base ++ signingRootFields (some root)) (name := "signing_root")
       (value := bytesJson root) (by
         simp only [signingRootFields, List.pairwise_append, distinct, List.mem_singleton,
@@ -158,7 +186,7 @@ theorem readSigningRoot_signingRootFields (path : String) (base : List (String �
 /-- A block that the file writes reads back as itself. -/
 theorem readBlock_blockJson (path : String) (block : SignedBlockRecord) :
     readBlock path (blockJson block) = .ok block := by
-  have slot := Serialization.Ssz.getObjVal?_mkObj
+  have slot := Base.Json.getObjVal?_mkObj
     (pairs := [("slot", uint64Json block.slot)] ++ signingRootFields block.signingRoot)
     (name := "slot") (value := uint64Json block.slot)
     (by cases block.signingRoot <;> simp [signingRootFields]) (by simp)
@@ -175,13 +203,13 @@ theorem readAttestation_attestationJson (path : String) (attestation : SignedAtt
         fun a b => a.1 ≠ b.1 := by
     intro root
     cases root <;> simp [signingRootFields]
-  have source := Serialization.Ssz.getObjVal?_mkObj
+  have source := Base.Json.getObjVal?_mkObj
     (pairs := [("source_epoch", uint64Json attestation.sourceEpoch),
       ("target_epoch", uint64Json attestation.targetEpoch)] ++
         signingRootFields attestation.signingRoot)
     (name := "source_epoch") (value := uint64Json attestation.sourceEpoch)
     (distinct _) (by simp)
-  have target := Serialization.Ssz.getObjVal?_mkObj
+  have target := Base.Json.getObjVal?_mkObj
     (pairs := [("source_epoch", uint64Json attestation.sourceEpoch),
       ("target_epoch", uint64Json attestation.targetEpoch)] ++
         signingRootFields attestation.signingRoot)
@@ -217,11 +245,11 @@ theorem readEntry_entryJson (path : String) (entry : InterchangeEntry) :
       ("signed_blocks", Json.arr (entry.signedBlocks.map blockJson).toArray),
       ("signed_attestations", Json.arr (entry.signedAttestations.map attestationJson).toArray)] :
         List (String × Json)).Pairwise fun a b => a.1 ≠ b.1 := by simp
-  have pubkey := Serialization.Ssz.getObjVal?_mkObj distinct
+  have pubkey := Base.Json.getObjVal?_mkObj distinct
     (name := "pubkey") (value := bytesJson entry.pubkey) (by simp)
-  have blocks := Serialization.Ssz.getObjVal?_mkObj distinct (name := "signed_blocks")
+  have blocks := Base.Json.getObjVal?_mkObj distinct (name := "signed_blocks")
     (value := Json.arr (entry.signedBlocks.map blockJson).toArray) (by simp)
-  have attestations := Serialization.Ssz.getObjVal?_mkObj distinct (name := "signed_attestations")
+  have attestations := Base.Json.getObjVal?_mkObj distinct (name := "signed_attestations")
     (value := Json.arr (entry.signedAttestations.map attestationJson).toArray) (by simp)
   simp only [readEntry, entryJson, field, pubkey, blocks, attestations, readBytes_bytesJson,
     readArray_arr _ readBlock blockJson readBlock_blockJson,
@@ -234,10 +262,10 @@ theorem ofJson_toJson (interchange : Interchange) :
   have metadataDistinct : ([("interchange_format_version", Json.str INTERCHANGE_FORMAT_VERSION),
       ("genesis_validators_root", bytesJson interchange.genesisValidatorsRoot)] :
         List (String × Json)).Pairwise fun a b => a.1 ≠ b.1 := by simp
-  have version := Serialization.Ssz.getObjVal?_mkObj metadataDistinct
+  have version := Base.Json.getObjVal?_mkObj metadataDistinct
     (name := "interchange_format_version") (value := Json.str INTERCHANGE_FORMAT_VERSION)
     (by simp)
-  have root := Serialization.Ssz.getObjVal?_mkObj metadataDistinct
+  have root := Base.Json.getObjVal?_mkObj metadataDistinct
     (name := "genesis_validators_root") (value := bytesJson interchange.genesisValidatorsRoot)
     (by simp)
   have distinct : ([("metadata", Json.mkObj [
@@ -245,11 +273,11 @@ theorem ofJson_toJson (interchange : Interchange) :
       ("genesis_validators_root", bytesJson interchange.genesisValidatorsRoot)]),
       ("data", Json.arr (interchange.data.map entryJson).toArray)] :
         List (String × Json)).Pairwise fun a b => a.1 ≠ b.1 := by simp
-  have metadata := Serialization.Ssz.getObjVal?_mkObj distinct (name := "metadata")
+  have metadata := Base.Json.getObjVal?_mkObj distinct (name := "metadata")
     (value := Json.mkObj [
       ("interchange_format_version", Json.str INTERCHANGE_FORMAT_VERSION),
       ("genesis_validators_root", bytesJson interchange.genesisValidatorsRoot)]) (by simp)
-  have data := Serialization.Ssz.getObjVal?_mkObj distinct (name := "data")
+  have data := Base.Json.getObjVal?_mkObj distinct (name := "data")
     (value := Json.arr (interchange.data.map entryJson).toArray) (by simp)
   simp only [ofJson, toJson, field, metadata, data, version, root, readString,
     readBytes_bytesJson, readArray_arr _ readEntry entryJson readEntry_entryJson,
@@ -276,6 +304,33 @@ theorem blocksOf_recordBlock (interchange : Interchange) (pubkey : BLSPubkey) (s
       interchange.blocksOf pubkey ++ [⟨slot, some signingRoot⟩] := by
   simp [Interchange.blocksOf, Interchange.recordBlock, List.filter_append]
 
+/-- Recording a block of a key leaves the blocks of every other key as they were. -/
+theorem blocksOf_recordBlock_of_ne {record : Interchange} {pubkey other : BLSPubkey}
+    {slot : Slot} {root : Root} (differ : other ≠ pubkey) :
+    (record.recordBlock pubkey slot root).blocksOf other = record.blocksOf other := by
+  simp [Interchange.blocksOf, Interchange.recordBlock, List.filter_append, Ne.symm differ]
+
+/-- Recording a vote of a key leaves the votes of every other key as they were. -/
+theorem attestationsOf_recordAttestation_of_ne {record : Interchange} {pubkey other : BLSPubkey}
+    {source target : Epoch} {root : Root} (differ : other ≠ pubkey) :
+    (record.recordAttestation pubkey source target root).attestationsOf other =
+      record.attestationsOf other := by
+  simp [Interchange.attestationsOf, Interchange.recordAttestation, List.filter_append,
+    Ne.symm differ]
+
+/-- Recording a block leaves the votes of every key as they were. -/
+theorem attestationsOf_recordBlock {record : Interchange} {pubkey other : BLSPubkey}
+    {slot : Slot} {root : Root} :
+    (record.recordBlock pubkey slot root).attestationsOf other = record.attestationsOf other := by
+  simp [Interchange.attestationsOf, Interchange.recordBlock, List.filter_append]
+
+/-- Recording a vote leaves the blocks of every key as they were. -/
+theorem blocksOf_recordAttestation {record : Interchange} {pubkey other : BLSPubkey}
+    {source target : Epoch} {root : Root} :
+    (record.recordAttestation pubkey source target root).blocksOf other =
+      record.blocksOf other := by
+  simp [Interchange.blocksOf, Interchange.recordAttestation, List.filter_append]
+
 /-- A vote is a vote of a key exactly when an entry of that key holds it. -/
 theorem mem_attestationsOf {interchange : Interchange} {pubkey : BLSPubkey}
     {attestation : SignedAttestationRecord} :
@@ -290,6 +345,30 @@ theorem mem_blocksOf {interchange : Interchange} {pubkey : BLSPubkey}
     block ∈ interchange.blocksOf pubkey ↔
       ∃ entry ∈ interchange.data, entry.pubkey = pubkey ∧ block ∈ entry.signedBlocks := by
   simp [Interchange.blocksOf, and_assoc]
+
+/-- The entries that name the keys of a list hold all the blocks of each of those keys. -/
+theorem blocksOf_entriesOf {interchange : Interchange} {keys : List BLSPubkey}
+    {pubkey : BLSPubkey} (kept : pubkey ∈ keys) :
+    (interchange.entriesOf keys).blocksOf pubkey = interchange.blocksOf pubkey := by
+  simp only [Interchange.blocksOf, Interchange.entriesOf, List.filter_filter]
+  congr 1
+  apply List.filter_congr
+  intro entry _
+  by_cases same : entry.pubkey = pubkey
+  · simp [same, kept]
+  · simp [same]
+
+/-- The entries that name the keys of a list hold all the votes of each of those keys. -/
+theorem attestationsOf_entriesOf {interchange : Interchange} {keys : List BLSPubkey}
+    {pubkey : BLSPubkey} (kept : pubkey ∈ keys) :
+    (interchange.entriesOf keys).attestationsOf pubkey = interchange.attestationsOf pubkey := by
+  simp only [Interchange.attestationsOf, Interchange.entriesOf, List.filter_filter]
+  congr 1
+  apply List.filter_congr
+  intro entry _
+  by_cases same : entry.pubkey = pubkey
+  · simp [same, kept]
+  · simp [same]
 
 /-! ## A signer's history -/
 
@@ -355,17 +434,18 @@ theorem checked_of_signBlocks {signingRootOf : BeaconBlockHeader → Root} {pubk
       rw [blocksOf_recordBlock]
       exact List.mem_append_left _ kept
 
-/-- Two votes slashable either way round have one signing root, if the record check passed.
+/-- Two votes slashable either way round have one root, if the record check passed.
 
-The check compares the record of the earlier vote with the later vote. -/
-theorem signingRoot_eq_of_isSlashableWith_eq_false {signingRootOf : AttestationData → Root}
-    {earlier later : AttestationData}
-    (passed : (⟨earlier.source.epoch, earlier.target.epoch, some (signingRootOf earlier)⟩ :
+The check compares the record of the earlier vote, with its root, with the later vote and its root.
+-/
+theorem root_eq_of_isSlashableWith_eq_false {earlier later : AttestationData}
+    {earlierRoot laterRoot : Root}
+    (passed : (⟨earlier.source.epoch, earlier.target.epoch, some earlierRoot⟩ :
       SignedAttestationRecord).isSlashableWith later.source.epoch later.target.epoch
-        (signingRootOf later) = false)
+        laterRoot = false)
     (slashable : isSlashableAttestationData earlier later = true ∨
       isSlashableAttestationData later earlier = true) :
-    signingRootOf earlier = signingRootOf later := by
+    earlierRoot = laterRoot := by
   apply Classical.byContradiction
   intro distinct
   simp only [SignedAttestationRecord.isSlashableWith, Bool.or_eq_false_iff] at passed
@@ -378,101 +458,18 @@ theorem signingRoot_eq_of_isSlashableWith_eq_false {signingRootOf : AttestationD
   · simp [same, distinct] at double
   · simp [below, above] at around
 
-/-- Two signed votes that Casper FFG forbids together have the same signing root.
+/-- Two votes slashable either way round have one signing root, if the record check passed.
 
-So such a pair is a collision of the signing root, since the two votes are different. -/
-theorem signingRoot_eq_of_signAttestations {signingRootOf : AttestationData → Root}
-    {pubkey : BLSPubkey} {start finish : Interchange} {votes : List AttestationData}
-    (signed : signAttestations signingRootOf pubkey start votes = .ok finish)
-    {data1 data2 : AttestationData} (member1 : data1 ∈ votes) (member2 : data2 ∈ votes)
-    (slashable : isSlashableAttestationData data1 data2 = true) :
-    signingRootOf data1 = signingRootOf data2 := by
-  induction votes generalizing start with
-  | nil => simp at member1
-  | cons first rest ih =>
-    obtain ⟨_, later⟩ := bind_unit_ok_iff.mp signed
-    -- A later vote passed its check against a record that holds the first vote.
-    have against : ∀ data ∈ rest,
-        (⟨first.source.epoch, first.target.epoch, some (signingRootOf first)⟩ :
-          SignedAttestationRecord).isSlashableWith data.source.epoch data.target.epoch
-            (signingRootOf data) = false := by
-      intro data member
-      obtain ⟨record, holds, check⟩ := checked_of_signAttestations later data member
-      have kept := holds _ (by
-        rw [attestationsOf_recordAttestation]
-        exact List.mem_append_right _ (List.mem_singleton_self _))
-      exact (checkAttestationSigning_eq_ok_iff.mp check).1 _ kept
-    rcases List.mem_cons.mp member1 with head1 | inRest1 <;>
-      rcases List.mem_cons.mp member2 with head2 | inRest2
-    · rw [head1, head2]
-    · subst head1
-      exact signingRoot_eq_of_isSlashableWith_eq_false (against data2 inRest2) (.inl slashable)
-    · subst head2
-      exact (signingRoot_eq_of_isSlashableWith_eq_false (against data1 inRest1)
-        (.inr slashable)).symm
-    · exact ih later inRest1 inRest2
-
-/-- Each vote that a signer signs is not slashable with a vote of the file it started from.
-
-The comparison is the one the record allows: by epochs, and by signing root for a double vote. -/
-theorem isSlashableWith_eq_false_of_signAttestations {signingRootOf : AttestationData → Root}
-    {pubkey : BLSPubkey} {start finish : Interchange} {votes : List AttestationData}
-    (signed : signAttestations signingRootOf pubkey start votes = .ok finish)
-    {attestation : SignedAttestationRecord} (imported : attestation ∈ start.attestationsOf pubkey)
-    {data : AttestationData} (member : data ∈ votes) :
-    attestation.isSlashableWith data.source.epoch data.target.epoch (signingRootOf data) =
-      false := by
-  obtain ⟨record, holds, check⟩ := checked_of_signAttestations signed data member
-  exact (checkAttestationSigning_eq_ok_iff.mp check).1 _ (holds _ imported)
-
-/-- Blocks that a signer signs from a record never share a slot with another signing root.
-
-Two signed block headers of one slot have the same signing root. -/
-theorem signingRoot_eq_of_signBlocks {signingRootOf : BeaconBlockHeader → Root}
-    {pubkey : BLSPubkey} {start finish : Interchange} {headers : List BeaconBlockHeader}
-    (signed : signBlocks signingRootOf pubkey start headers = .ok finish)
-    {header1 header2 : BeaconBlockHeader} (member1 : header1 ∈ headers)
-    (member2 : header2 ∈ headers) (sameSlot : header1.slot = header2.slot) :
-    signingRootOf header1 = signingRootOf header2 := by
-  induction headers generalizing start with
-  | nil => simp at member1
-  | cons first rest ih =>
-    obtain ⟨_, later⟩ := bind_unit_ok_iff.mp signed
-    -- A later block passed its check against a record that holds the first block.
-    have against : ∀ header ∈ rest, header.slot = first.slot →
-        signingRootOf first = signingRootOf header := by
-      intro header member same
-      obtain ⟨record, holds, check⟩ := checked_of_signBlocks later header member
-      have kept := holds _ (by
-        rw [blocksOf_recordBlock]
-        exact List.mem_append_right _ (List.mem_singleton_self _))
-      have passed := (checkBlockSigning_eq_ok_iff.mp check).1 _ kept
-      simpa [SignedBlockRecord.conflictsWith, same] using passed
-    rcases List.mem_cons.mp member1 with head1 | inRest1 <;>
-      rcases List.mem_cons.mp member2 with head2 | inRest2
-    · rw [head1, head2]
-    · subst head1
-      exact against header2 inRest2 sameSlot.symm
-    · subst head2
-      exact (against header1 inRest1 sameSlot).symm
-    · exact ih later inRest1 inRest2
-
-/-- If such a signer signed both headers of a valid proposer slashing, they differ and share a root.
-
-So the pair is a collision of the signing root. -/
-theorem signingRoot_eq_of_processProposerSlashing {signingRootOf : BeaconBlockHeader → Root}
-    {pubkey : BLSPubkey} {start finish : Interchange} {headers : List BeaconBlockHeader}
-    (signed : signBlocks signingRootOf pubkey start headers = .ok finish) {config : Config}
-    {checks : SignatureChecks} {state after : BeaconState preset fork}
-    {slashing : ProposerSlashing}
-    (valid : processProposerSlashing config checks state slashing = .ok after)
-    (member1 : slashing.signedHeader1.message ∈ headers)
-    (member2 : slashing.signedHeader2.message ∈ headers) :
-    slashing.signedHeader1.message ≠ slashing.signedHeader2.message ∧
-      signingRootOf slashing.signedHeader1.message =
-        signingRootOf slashing.signedHeader2.message := by
-  obtain ⟨sameSlot, -, distinct, -⟩ := processProposerSlashing_checks valid
-  exact ⟨distinct, signingRoot_eq_of_signBlocks signed member1 member2 sameSlot⟩
+The check compares the record of the earlier vote with the later vote. -/
+theorem signingRoot_eq_of_isSlashableWith_eq_false {signingRootOf : AttestationData → Root}
+    {earlier later : AttestationData}
+    (passed : (⟨earlier.source.epoch, earlier.target.epoch, some (signingRootOf earlier)⟩ :
+      SignedAttestationRecord).isSlashableWith later.source.epoch later.target.epoch
+        (signingRootOf later) = false)
+    (slashable : isSlashableAttestationData earlier later = true ∨
+      isSlashableAttestationData later earlier = true) :
+    signingRootOf earlier = signingRootOf later :=
+  root_eq_of_isSlashableWith_eq_false passed slashable
 
 /-! ## A file that drops older messages -/
 
@@ -540,6 +537,800 @@ theorem isSlashableAttestationData_eq_false_of_le_of_lt {old data : AttestationD
   simp [isSlashableAttestationData, UInt64.ne_of_lt target, (UInt64.ne_of_lt target).symm,
     notAbove, notBelow]
 
+/-! ## Imports with the minimal strategy -/
+
+/-- A slot limit covers a slot when it exists and is at least that slot. -/
+private abbrev CoversSlot (limit : Option Slot) (slot : Slot) : Prop :=
+  ∃ maximum, limit = some maximum ∧ slot ≤ maximum
+
+/-- Epoch limits cover a vote when they exist and are at least its source and its target. -/
+private abbrev CoversEpochs (limits : Option (Epoch × Epoch))
+    (attestation : SignedAttestationRecord) : Prop :=
+  ∃ source target, limits = some (source, target) ∧
+    attestation.sourceEpoch ≤ source ∧ attestation.targetEpoch ≤ target
+
+/-- A property that every step of a fold keeps holds at its end. -/
+private theorem foldl_keeps {α β : Type} {f : β → α → β} {P : β → Prop}
+    (keep : ∀ b a, P b → P (f b a)) : ∀ (xs : List α) (b : β), P b → P (xs.foldl f b)
+  | [], _, holds => holds
+  | x :: xs, b, holds => foldl_keeps keep xs (f b x) (keep b x holds)
+
+/-- A property that every step keeps, and that one step makes, holds at the end of a fold. -/
+private theorem foldl_makes {α β : Type} {f : β → α → β} {P : β → Prop}
+    (keep : ∀ b a, P b → P (f b a)) {x : α} (make : ∀ b, P (f b x)) :
+    ∀ (xs : List α) (b : β), x ∈ xs → P (xs.foldl f b)
+  | [], _, member => nomatch member
+  | y :: xs, b, member => by
+    rcases List.mem_cons.mp member with rfl | member
+    · exact foldl_keeps keep xs _ (make b)
+    · exact foldl_makes keep make xs (f b y) member
+
+/-- Raising a slot limit keeps every slot it covers, and covers the new block. -/
+private theorem coversSlot_raiseSlotLimit {limit : Option Slot} {block : SignedBlockRecord} :
+    (∀ slot, CoversSlot limit slot → CoversSlot (raiseSlotLimit limit block) slot) ∧
+      CoversSlot (raiseSlotLimit limit block) block.slot := by
+  cases limit with
+  | none =>
+    refine ⟨?_, block.slot, rfl, UInt64.le_refl _⟩
+    rintro _ ⟨_, found, _⟩
+    cases found
+  | some maximum =>
+    refine ⟨fun slot ⟨_, same, below⟩ => ?_, _, rfl, Std.right_le_max⟩
+    cases same
+    exact ⟨_, rfl, UInt64.le_trans below Std.left_le_max⟩
+
+/-- Raising epoch limits keeps every vote they cover, and covers the new vote. -/
+private theorem coversEpochs_raiseEpochLimits {limits : Option (Epoch × Epoch)}
+    {attestation : SignedAttestationRecord} :
+    (∀ old, CoversEpochs limits old → CoversEpochs (raiseEpochLimits limits attestation) old) ∧
+      CoversEpochs (raiseEpochLimits limits attestation) attestation := by
+  cases limits with
+  | none =>
+    refine ⟨?_, _, _, rfl, UInt64.le_refl _, UInt64.le_refl _⟩
+    rintro _ ⟨_, _, found, _⟩
+    cases found
+  | some limits =>
+    obtain ⟨source, target⟩ := limits
+    refine ⟨fun old ⟨_, _, same, sourceBelow, targetBelow⟩ => ?_,
+      _, _, rfl, Std.right_le_max, Std.right_le_max⟩
+    cases same
+    exact ⟨_, _, rfl, UInt64.le_trans sourceBelow Std.left_le_max,
+      UInt64.le_trans targetBelow Std.left_le_max⟩
+
+/-- The slot limit of a key in a map of limits, none when the key has none. -/
+private def slotLimit (limits : Std.TreeMap BLSPubkey (Option Slot × Option (Epoch × Epoch)))
+    (key : BLSPubkey) : Option Slot :=
+  (limits.getD key (none, none)).1
+
+/-- The epoch limits of a key in a map of limits, none when the key has none. -/
+private def epochLimits (limits : Std.TreeMap BLSPubkey (Option Slot × Option (Epoch × Epoch)))
+    (key : BLSPubkey) : Option (Epoch × Epoch) :=
+  (limits.getD key (none, none)).2
+
+/-- One more entry keeps each slot that the slot limit of a key covers. -/
+private theorem coversSlot_insert {key : BLSPubkey} {slot : Slot}
+    (limits : Std.TreeMap BLSPubkey (Option Slot × Option (Epoch × Epoch)))
+    (entry : InterchangeEntry) (covered : CoversSlot (slotLimit limits key) slot) :
+    CoversSlot (slotLimit (limits.insert entry.pubkey
+      (entry.raiseLimits (limits.getD entry.pubkey (none, none)))) key) slot := by
+  unfold slotLimit at covered ⊢
+  rw [Std.TreeMap.getD_insert]
+  split
+  · rename_i same
+    rw [Std.LawfulEqCmp.compare_eq_iff_eq.mp same]
+    exact foldl_keeps (f := raiseSlotLimit) (P := fun limit => CoversSlot limit slot)
+      (fun _ _ holds => coversSlot_raiseSlotLimit.1 _ holds) _ _ covered
+  · exact covered
+
+/-- One more entry keeps each vote that the epoch limits of a key cover. -/
+private theorem coversEpochs_insert {key : BLSPubkey} {old : SignedAttestationRecord}
+    (limits : Std.TreeMap BLSPubkey (Option Slot × Option (Epoch × Epoch)))
+    (entry : InterchangeEntry) (covered : CoversEpochs (epochLimits limits key) old) :
+    CoversEpochs (epochLimits (limits.insert entry.pubkey
+      (entry.raiseLimits (limits.getD entry.pubkey (none, none)))) key) old := by
+  unfold epochLimits at covered ⊢
+  rw [Std.TreeMap.getD_insert]
+  split
+  · rename_i same
+    rw [Std.LawfulEqCmp.compare_eq_iff_eq.mp same]
+    exact foldl_keeps (f := raiseEpochLimits) (P := fun limits => CoversEpochs limits old)
+      (fun _ _ holds => coversEpochs_raiseEpochLimits.1 _ holds) _ _ covered
+  · exact covered
+
+/-- The slot limit of a key covers each of its blocks. -/
+private theorem coversSlot_limits {record : Interchange} {key : BLSPubkey}
+    {old : SignedBlockRecord} (member : old ∈ record.blocksOf key) :
+    CoversSlot (slotLimit record.limits key) old.slot := by
+  obtain ⟨entry, kept, same, signed⟩ := mem_blocksOf.mp member
+  subst same
+  refine foldl_makes (P := fun limits => CoversSlot (slotLimit limits entry.pubkey) old.slot)
+    (fun limits entry holds => coversSlot_insert limits entry holds)
+    (fun limits => ?_) record.data ∅ kept
+  unfold slotLimit
+  rw [Std.TreeMap.getD_insert_self]
+  exact foldl_makes (f := raiseSlotLimit) (P := fun limit => CoversSlot limit old.slot)
+    (fun _ _ holds => coversSlot_raiseSlotLimit.1 _ holds)
+    (fun _ => coversSlot_raiseSlotLimit.2) entry.signedBlocks _ signed
+
+/-- The epoch limits of a key cover each of its votes. -/
+private theorem coversEpochs_limits {record : Interchange} {key : BLSPubkey}
+    {old : SignedAttestationRecord} (member : old ∈ record.attestationsOf key) :
+    CoversEpochs (epochLimits record.limits key) old := by
+  obtain ⟨entry, kept, same, signed⟩ := mem_attestationsOf.mp member
+  subst same
+  refine foldl_makes (P := fun limits => CoversEpochs (epochLimits limits entry.pubkey) old)
+    (fun limits entry holds => coversEpochs_insert limits entry holds)
+    (fun limits => ?_) record.data ∅ kept
+  unfold epochLimits
+  rw [Std.TreeMap.getD_insert_self]
+  exact foldl_makes (f := raiseEpochLimits) (P := fun limits => CoversEpochs limits old)
+    (fun _ _ holds => coversEpochs_raiseEpochLimits.1 _ holds)
+    (fun _ => coversEpochs_raiseEpochLimits.2) entry.signedAttestations _ signed
+
+/-- The blocks of a key after compaction are exactly its slot limit, without a root. -/
+private theorem blocksOf_toMinimal {record : Interchange} {key : BLSPubkey} {maximum : Slot}
+    (limit : slotLimit record.limits key = some maximum) :
+    ∀ block, block ∈ record.toMinimal.blocksOf key ↔ block = ⟨maximum, none⟩ := by
+  intro block
+  rw [mem_blocksOf]
+  unfold slotLimit at limit
+  rw [Std.TreeMap.getD_eq_getD_getElem?] at limit
+  cases found : record.limits[key]? with
+  | none => simp [found] at limit
+  | some value =>
+    rw [found, Option.getD_some] at limit
+    constructor
+    · rintro ⟨entry, kept, same, member⟩
+      obtain ⟨⟨k, v⟩, listed, rfl⟩ := List.mem_map.mp kept
+      change k = key at same
+      subst same
+      rw [Std.TreeMap.mem_toList_iff_getElem?_eq_some, found, Option.some.injEq] at listed
+      subst listed
+      simpa [limit] using member
+    · rintro rfl
+      refine ⟨_, List.mem_map.mpr ⟨(key, value),
+        Std.TreeMap.mem_toList_iff_getElem?_eq_some.mpr found, rfl⟩, rfl, ?_⟩
+      simp [limit]
+
+/-- The votes of a key after compaction are exactly its epoch limits, without a root. -/
+private theorem attestationsOf_toMinimal {record : Interchange} {key : BLSPubkey}
+    {source target : Epoch} (limits : epochLimits record.limits key = some (source, target)) :
+    ∀ attestation, attestation ∈ record.toMinimal.attestationsOf key ↔
+      attestation = ⟨source, target, none⟩ := by
+  intro attestation
+  rw [mem_attestationsOf]
+  unfold epochLimits at limits
+  rw [Std.TreeMap.getD_eq_getD_getElem?] at limits
+  cases found : record.limits[key]? with
+  | none => simp [found] at limits
+  | some value =>
+    rw [found, Option.getD_some] at limits
+    constructor
+    · rintro ⟨entry, kept, same, member⟩
+      obtain ⟨⟨k, v⟩, listed, rfl⟩ := List.mem_map.mp kept
+      change k = key at same
+      subst same
+      rw [Std.TreeMap.mem_toList_iff_getElem?_eq_some, found, Option.some.injEq] at listed
+      subst listed
+      simpa [limits] using member
+    · rintro rfl
+      refine ⟨_, List.mem_map.mpr ⟨(key, value),
+        Std.TreeMap.mem_toList_iff_getElem?_eq_some.mpr found, rfl⟩, rfl, ?_⟩
+      simp [limits]
+
+/-- The least value of a field over a list where it is constant is that value. -/
+private theorem minimum_of_constant {α : Type} {xs : List α} (field : α → UInt64)
+    {value : UInt64} (present : ∃ x ∈ xs, field x = value)
+    (same : ∀ x ∈ xs, field x = value) : (xs.map field).min? = some value := by
+  apply List.min?_eq_some_iff.mpr
+  refine ⟨List.mem_map.mpr present, ?_⟩
+  intro y mapped
+  obtain ⟨x, kept, rfl⟩ := List.mem_map.mp mapped
+  rw [same x kept]
+  exact UInt64.le_refl _
+
+/-- After compaction, a block that passes the second condition is after every block of the key. -/
+private theorem lt_slot_of_toMinimal {record : Interchange} {key : BLSPubkey}
+    {slot : Slot} {root : Root} {old : SignedBlockRecord}
+    (passed : checkBlockSlot (record.toMinimal.blocksOf key) slot root = .ok ())
+    (member : old ∈ record.blocksOf key) : old.slot < slot := by
+  obtain ⟨maximum, limit, bound⟩ := coversSlot_limits member
+  have shape := blocksOf_toMinimal limit
+  have minimum : minBlockSlot (record.toMinimal.blocksOf key) = some maximum :=
+    minimum_of_constant SignedBlockRecord.slot ⟨_, (shape _).mpr rfl, rfl⟩
+      (fun block member => by rw [(shape block).mp member])
+  -- The limit has no signing root, so it cannot make an old block a permitted repeat.
+  have repeated : isRepeatBlock (record.toMinimal.blocksOf key) slot root = false := by
+    simp only [isRepeatBlock, List.any_eq_false]
+    intro block member
+    rw [(shape block).mp member]
+    simp
+  have after := checkBlockSlot_eq_ok_iff.mp passed maximum minimum
+  simp only [repeated, Bool.false_eq_true, or_false] at after
+  have bound := UInt64.le_iff_toNat_le.mp bound
+  have after := UInt64.lt_iff_toNat_lt.mp after
+  exact UInt64.lt_iff_toNat_lt.mpr (by omega)
+
+/-- After compaction, a vote that passes the last two conditions is after every vote of the key.
+
+Its source is at least, and its target after, those of each vote. -/
+private theorem epochs_of_toMinimal {record : Interchange} {key : BLSPubkey}
+    {source target : Epoch} {root : Root} {old : SignedAttestationRecord}
+    (sourcePassed : checkSourceEpoch (record.toMinimal.attestationsOf key) source = .ok ())
+    (targetPassed : checkTargetEpoch (record.toMinimal.attestationsOf key) source target root =
+      .ok ()) (member : old ∈ record.attestationsOf key) :
+    old.sourceEpoch ≤ source ∧ old.targetEpoch < target := by
+  -- The source and target limits may come from different votes of the key.
+  obtain ⟨maxSource, maxTarget, limits, sourceBound, targetBound⟩ := coversEpochs_limits member
+  have shape := attestationsOf_toMinimal limits
+  have present := (shape ⟨maxSource, maxTarget, none⟩).mpr rfl
+  have leastSource : minSourceEpoch (record.toMinimal.attestationsOf key) = some maxSource :=
+    minimum_of_constant SignedAttestationRecord.sourceEpoch ⟨_, present, rfl⟩
+      (fun vote member => by rw [(shape vote).mp member])
+  have leastTarget : minTargetEpoch (record.toMinimal.attestationsOf key) = some maxTarget :=
+    minimum_of_constant SignedAttestationRecord.targetEpoch ⟨_, present, rfl⟩
+      (fun vote member => by rw [(shape vote).mp member])
+  have repeated : isRepeatAttestation (record.toMinimal.attestationsOf key)
+      source target root = false := by
+    simp only [isRepeatAttestation, List.any_eq_false]
+    intro vote member
+    rw [(shape vote).mp member]
+    simp
+  have sourceAfter := checkSourceEpoch_eq_ok_iff.mp sourcePassed maxSource leastSource
+  have targetAfter := checkTargetEpoch_eq_ok_iff.mp targetPassed maxTarget leastTarget
+  simp only [repeated, Bool.false_eq_true, or_false] at targetAfter
+  refine ⟨UInt64.le_trans sourceBound sourceAfter, ?_⟩
+  have bound := UInt64.le_iff_toNat_le.mp targetBound
+  have after := UInt64.lt_iff_toNat_lt.mp targetAfter
+  exact UInt64.lt_iff_toNat_lt.mpr (by omega)
+
+/-- A block after every recorded block passes the second condition. -/
+private theorem blockSlot_of_all_lt {blocks : List SignedBlockRecord} {slot : Slot}
+    {root : Root} (after : ∀ block ∈ blocks, block.slot < slot) :
+    checkBlockSlot blocks slot root = .ok () := by
+  apply checkBlockSlot_eq_ok_iff.mpr
+  intro minimum computed
+  obtain ⟨block, member, rfl⟩ := List.mem_map.mp (List.min?_mem computed)
+  exact Or.inl (after block member)
+
+/-- A vote with a source at least every recorded source passes the fourth condition. -/
+private theorem sourceEpoch_of_all_le {votes : List SignedAttestationRecord} {source : Epoch}
+    (after : ∀ vote ∈ votes, vote.sourceEpoch ≤ source) :
+    checkSourceEpoch votes source = .ok () := by
+  apply checkSourceEpoch_eq_ok_iff.mpr
+  intro minimum computed
+  obtain ⟨vote, member, rfl⟩ := List.mem_map.mp (List.min?_mem computed)
+  exact after vote member
+
+/-- A vote with a target after every recorded target passes the fifth condition. -/
+private theorem targetEpoch_of_all_lt {votes : List SignedAttestationRecord}
+    {source target : Epoch} {root : Root} (after : ∀ vote ∈ votes, vote.targetEpoch < target) :
+    checkTargetEpoch votes source target root = .ok () := by
+  apply checkTargetEpoch_eq_ok_iff.mpr
+  intro minimum computed
+  obtain ⟨vote, member, rfl⟩ := List.mem_map.mp (List.min?_mem computed)
+  exact Or.inl (after vote member)
+
+/-- The record before one import, as the held file and the file one after the other. -/
+private theorem blocksOf_append {held file : Interchange} {key : BLSPubkey} :
+    ({held with data := held.data ++ file.data} : Interchange).blocksOf key =
+      held.blocksOf key ++ file.blocksOf key := by
+  simp [Interchange.blocksOf, List.filter_append]
+
+/-- The votes before one import, as those of the held file and then those of the file. -/
+private theorem attestationsOf_append {held file : Interchange} {key : BLSPubkey} :
+    ({held with data := held.data ++ file.data} : Interchange).attestationsOf key =
+      held.attestationsOf key ++ file.attestationsOf key := by
+  simp [Interchange.attestationsOf, List.filter_append]
+
+/-- After one import, an accepted block is after every block of the held file and the file.
+
+So the block meets conditions 1 and 2 of the held record and of the file. -/
+theorem lt_slot_of_importFile {held file : Interchange} {key : BLSPubkey} {slot : Slot}
+    {root : Root} (passed : (held.importFile file).checkBlock key slot root = .ok ()) :
+    ∀ old ∈ held.blocksOf key ++ file.blocksOf key, old.slot < slot := by
+  intro old member
+  rw [← blocksOf_append] at member
+  exact lt_slot_of_toMinimal (bind_unit_ok_iff.mp passed).2 member
+
+/-- After one import, an accepted vote has a source at least each source of the two files. -/
+theorem le_sourceEpoch_of_importFile {held file : Interchange} {key : BLSPubkey}
+    {source target : Epoch} {root : Root}
+    (passed : (held.importFile file).checkAttestation key source target root = .ok ()) :
+    ∀ old ∈ held.attestationsOf key ++ file.attestationsOf key, old.sourceEpoch ≤ source := by
+  intro old member
+  rw [← attestationsOf_append] at member
+  have checks := (bind_unit_ok_iff.mp (bind_unit_ok_iff.mp passed).2)
+  exact (epochs_of_toMinimal checks.1 checks.2 member).1
+
+/-- After one import, an accepted vote has a target after each target of the two files. -/
+theorem lt_targetEpoch_of_importFile {held file : Interchange} {key : BLSPubkey}
+    {source target : Epoch} {root : Root}
+    (passed : (held.importFile file).checkAttestation key source target root = .ok ()) :
+    ∀ old ∈ held.attestationsOf key ++ file.attestationsOf key, old.targetEpoch < target := by
+  intro old member
+  rw [← attestationsOf_append] at member
+  have checks := (bind_unit_ok_iff.mp (bind_unit_ok_iff.mp passed).2)
+  exact (epochs_of_toMinimal checks.1 checks.2 member).2
+
+/-- A block after every recorded block passes the first two conditions. -/
+private theorem checkBlockSigning_of_all_lt {blocks : List SignedBlockRecord} {slot : Slot}
+    {root : Root} (after : ∀ block ∈ blocks, block.slot < slot) :
+    checkBlockSigning blocks slot root = .ok () := by
+  refine checkBlockSigning_eq_ok_iff.mpr ⟨fun block member => ?_, ?_⟩
+  · simp [SignedBlockRecord.conflictsWith, UInt64.ne_of_lt (after block member)]
+  · exact checkBlockSlot_eq_ok_iff.mp (blockSlot_of_all_lt after)
+
+/-- A vote with a source at least, and a target after, every recorded vote passes the last three.
+
+No recorded vote has its target, and none surrounds it or is surrounded by it. -/
+private theorem checkAttestationSigning_of_all {votes : List SignedAttestationRecord}
+    {source target : Epoch} {root : Root} (above : ∀ vote ∈ votes, vote.sourceEpoch ≤ source)
+    (after : ∀ vote ∈ votes, vote.targetEpoch < target) :
+    checkAttestationSigning votes source target root = .ok () := by
+  refine checkAttestationSigning_eq_ok_iff.mpr ⟨fun vote member => ?_,
+    checkSourceEpoch_eq_ok_iff.mp (sourceEpoch_of_all_le above),
+    checkTargetEpoch_eq_ok_iff.mp (targetEpoch_of_all_lt after)⟩
+  have notAbove : ¬source < vote.sourceEpoch := UInt64.not_lt.mpr (above vote member)
+  have notBelow : ¬target < vote.targetEpoch :=
+    UInt64.not_lt.mpr (UInt64.le_of_lt (after vote member))
+  simp [SignedAttestationRecord.isSlashableWith, UInt64.ne_of_lt (after vote member), notAbove,
+    notBelow]
+
+/-- After any sequence of imports, an accepted block meets conditions 1 and 2 of each input file.
+
+The initial held file is included, and imported files may repeat or contain duplicate keys. -/
+theorem checkBlockSigning_of_foldl_importFile {files : List Interchange} {held : Interchange}
+    {key : BLSPubkey} {slot : Slot} {root : Root}
+    (passed : (files.foldl Interchange.importFile held).checkBlock key slot root = .ok ()) :
+    ∀ file ∈ held :: files, checkBlockSigning (file.blocksOf key) slot root = .ok () := by
+  induction files generalizing held with
+  | nil => simpa [Interchange.checkBlock] using passed
+  | cons first rest ih =>
+    have all := ih passed
+    have current := lt_slot_of_importFile (all _ (List.mem_cons_self ..))
+    intro file member
+    rcases List.mem_cons.mp member with rfl | member
+    · exact checkBlockSigning_of_all_lt fun old kept => current old (List.mem_append_left _ kept)
+    rcases List.mem_cons.mp member with rfl | member
+    · exact checkBlockSigning_of_all_lt fun old kept => current old (List.mem_append_right _ kept)
+    · exact all file (List.mem_cons_of_mem _ member)
+
+/-- After any sequence of imports, an accepted vote meets conditions 3, 4 and 5 of each input file.
+
+The initial held file is included, and imported files may repeat or contain duplicate keys. -/
+theorem checkAttestationSigning_of_foldl_importFile {files : List Interchange}
+    {held : Interchange} {key : BLSPubkey} {source target : Epoch} {root : Root}
+    (passed : (files.foldl Interchange.importFile held).checkAttestation key source target root =
+      .ok ()) :
+    ∀ file ∈ held :: files,
+      checkAttestationSigning (file.attestationsOf key) source target root = .ok () := by
+  induction files generalizing held with
+  | nil => simpa [Interchange.checkAttestation] using passed
+  | cons first rest ih =>
+    have all := ih passed
+    have above := le_sourceEpoch_of_importFile (all _ (List.mem_cons_self ..))
+    have after := lt_targetEpoch_of_importFile (all _ (List.mem_cons_self ..))
+    intro file member
+    rcases List.mem_cons.mp member with rfl | member
+    · exact checkAttestationSigning_of_all
+        (fun old kept => above old (List.mem_append_left _ kept))
+        (fun old kept => after old (List.mem_append_left _ kept))
+    rcases List.mem_cons.mp member with rfl | member
+    · exact checkAttestationSigning_of_all
+        (fun old kept => above old (List.mem_append_right _ kept))
+        (fun old kept => after old (List.mem_append_right _ kept))
+    · exact all file (List.mem_cons_of_mem _ member)
+
+/-- After one import, the record accepts a block only if the record before it accepts it. -/
+theorem checkBlock_of_importFile {held file : Interchange} {pubkey : BLSPubkey} {slot : Slot}
+    {root : Root} (passed : (held.importFile file).checkBlock pubkey slot root = .ok ()) :
+    held.checkBlock pubkey slot root = .ok () :=
+  checkBlockSigning_of_foldl_importFile (files := [file]) passed held (List.mem_cons_self ..)
+
+/-- After one import, the record accepts a vote only if the record before it accepts it. -/
+theorem checkAttestation_of_importFile {held file : Interchange} {pubkey : BLSPubkey}
+    {source target : Epoch} {root : Root}
+    (passed : (held.importFile file).checkAttestation pubkey source target root = .ok ()) :
+    held.checkAttestation pubkey source target root = .ok () :=
+  checkAttestationSigning_of_foldl_importFile (files := [file]) passed held
+    (List.mem_cons_self ..)
+
+/-! ## Imports of one chain -/
+
+/-- A file of another chain is refused with the two roots, so the signer keeps its record. -/
+theorem importChecked_wrongChain {held file : Interchange}
+    (other : file.genesisValidatorsRoot ≠ held.genesisValidatorsRoot) :
+    held.importChecked file =
+      .error (.wrongChain held.genesisValidatorsRoot file.genesisValidatorsRoot) := by
+  simp [Interchange.importChecked, ensure, other, Functor.map, Except.map]
+
+/-- An import succeeds exactly when the two roots are equal, and then it is the minimal import. -/
+theorem importChecked_eq_ok_iff {held file result : Interchange} :
+    held.importChecked file = .ok result ↔
+      file.genesisValidatorsRoot = held.genesisValidatorsRoot ∧
+        result = held.importFile file := by
+  unfold Interchange.importChecked
+  by_cases same : file.genesisValidatorsRoot = held.genesisValidatorsRoot <;>
+    simp [ensure, same, eq_comm, Functor.map, Except.map]
+
+/-! ## Imports between signed blocks -/
+
+/-- One step of a signer of blocks: it imports a file, or signs a block header. -/
+inductive BlockSignerStep where
+  /-- A file is imported with the minimal strategy. -/
+  | importFile (file : Interchange)
+  /-- A block header is checked against the record, then recorded. -/
+  | signBlock (header : BeaconBlockHeader)
+
+/-- A signer of blocks that also imports files, in any order with its blocks.
+
+A function gives the signing root of a header, so the statements below hold for any one. -/
+def importAndSignBlocks (signingRootOf : BeaconBlockHeader → Root) (pubkey : BLSPubkey) :
+    Interchange → List BlockSignerStep → Except SlashingProtectionError Interchange
+  | interchange, [] => .ok interchange
+  | interchange, .importFile file :: rest =>
+    importAndSignBlocks signingRootOf pubkey (interchange.importFile file) rest
+  | interchange, .signBlock header :: rest => do
+    interchange.checkBlock pubkey header.slot (signingRootOf header)
+    importAndSignBlocks signingRootOf pubkey
+      (interchange.recordBlock pubkey header.slot (signingRootOf header)) rest
+
+/-- A slot is at most a limit without a signing root, the least slot of the blocks of a key. -/
+private abbrev UnderLimit (interchange : Interchange) (key : BLSPubkey) (slot : Slot) : Prop :=
+  ∃ limit, (⟨limit, none⟩ : SignedBlockRecord) ∈ interchange.blocksOf key ∧ slot ≤ limit ∧
+    ∀ block ∈ interchange.blocksOf key, limit ≤ block.slot
+
+/-- A block that passes the first two conditions is after a least limit without a root. -/
+private theorem lt_slot_of_least_limit {blocks : List SignedBlockRecord} {limit slot : Slot}
+    {root : Root} (kept : (⟨limit, none⟩ : SignedBlockRecord) ∈ blocks)
+    (least : ∀ block ∈ blocks, limit ≤ block.slot)
+    (passed : checkBlockSigning blocks slot root = .ok ()) : limit < slot := by
+  obtain ⟨free, after⟩ := checkBlockSigning_eq_ok_iff.mp passed
+  have minimum : minBlockSlot blocks = some limit := by
+    unfold minBlockSlot
+    apply List.min?_eq_some_iff.mpr
+    refine ⟨List.mem_map.mpr ⟨_, kept, rfl⟩, ?_⟩
+    intro value mapped
+    obtain ⟨block, member, rfl⟩ := List.mem_map.mp mapped
+    exact least block member
+  -- The limit has no signing root, so it conflicts with every block at its slot.
+  have other : limit ≠ slot := by
+    intro same
+    simpa [SignedBlockRecord.conflictsWith, same] using free _ kept
+  rcases after limit minimum with above | repeated
+  · exact above
+  · -- A repeat has the slot of a recorded block, which is at least the limit.
+    simp only [isRepeatBlock, List.any_eq_true, Bool.and_eq_true, beq_iff_eq] at repeated
+    obtain ⟨block, member, sameSlot, -⟩ := repeated
+    have bound : limit ≤ slot := by
+      rw [← sameSlot]
+      exact least block member
+    exact UInt64.lt_of_le_of_ne bound other
+
+/-- Recording a block that passed its check keeps a slot under a limit. -/
+private theorem underLimit_recordBlock {interchange : Interchange} {key : BLSPubkey}
+    {old slot : Slot} {root : Root} (under : UnderLimit interchange key old)
+    (passed : interchange.checkBlock key slot root = .ok ()) :
+    UnderLimit (interchange.recordBlock key slot root) key old := by
+  obtain ⟨limit, kept, below, least⟩ := under
+  have after := lt_slot_of_least_limit kept least passed
+  refine ⟨limit, ?_, below, fun block member => ?_⟩
+  · rw [blocksOf_recordBlock]
+    exact List.mem_append_left _ kept
+  · rw [blocksOf_recordBlock, List.mem_append, List.mem_singleton] at member
+    rcases member with member | rfl
+    · exact least block member
+    · exact UInt64.le_of_lt after
+
+/-- After an import, each block of the two inputs is under a limit. -/
+private theorem underLimit_importFile {held file : Interchange} {key : BLSPubkey}
+    {old : SignedBlockRecord} (member : old ∈ held.blocksOf key ++ file.blocksOf key) :
+    UnderLimit (held.importFile file) key old.slot := by
+  rw [← blocksOf_append] at member
+  obtain ⟨maximum, limit, bound⟩ := coversSlot_limits member
+  have shape := blocksOf_toMinimal limit
+  refine ⟨maximum, (shape _).mpr rfl, bound, fun block kept => ?_⟩
+  rw [(shape block).mp kept]
+  exact UInt64.le_refl _
+
+/-- An import keeps a slot under a limit. -/
+private theorem underLimit_importFile_of_underLimit {held file : Interchange}
+    {key : BLSPubkey} {old : Slot} (under : UnderLimit held key old) :
+    UnderLimit (held.importFile file) key old := by
+  obtain ⟨limit, kept, below, -⟩ := under
+  obtain ⟨maximum, inside, above, least⟩ :=
+    underLimit_importFile (file := file) (List.mem_append_left _ kept)
+  exact ⟨maximum, inside, UInt64.le_trans below above, least⟩
+
+/-- A slot under a limit is before each header that the signer signs from then on. -/
+private theorem lt_slot_of_underLimit {signingRootOf : BeaconBlockHeader → Root}
+    {pubkey : BLSPubkey} {start finish : Interchange} {steps : List BlockSignerStep}
+    {old : Slot} (signed : importAndSignBlocks signingRootOf pubkey start steps = .ok finish)
+    (under : UnderLimit start pubkey old) {header : BeaconBlockHeader}
+    (member : .signBlock header ∈ steps) : old < header.slot := by
+  induction steps generalizing start with
+  | nil => simp at member
+  | cons step rest ih =>
+    cases step with
+    | importFile file =>
+      exact ih (start := start.importFile file) signed
+        (underLimit_importFile_of_underLimit under) (by simpa using member)
+    | signBlock first =>
+      obtain ⟨checked, later⟩ := bind_unit_ok_iff.mp signed
+      rcases List.mem_cons.mp member with same | inRest
+      · cases same
+        obtain ⟨limit, kept, below, least⟩ := under
+        exact UInt64.lt_of_le_of_lt below (lt_slot_of_least_limit kept least checked)
+      · exact ih later (underLimit_recordBlock under checked) inRest
+
+/-- A block of the starting file holds the signing root of each header signed at its slot.
+
+So a block of that file without a signing root leaves its slot unsigned. -/
+theorem signingRoot_eq_some_of_importAndSignBlocks {signingRootOf : BeaconBlockHeader → Root}
+    {pubkey : BLSPubkey} {start finish : Interchange} {steps : List BlockSignerStep}
+    {old : SignedBlockRecord}
+    (signed : importAndSignBlocks signingRootOf pubkey start steps = .ok finish)
+    (kept : old ∈ start.blocksOf pubkey) {header : BeaconBlockHeader}
+    (member : .signBlock header ∈ steps) (sameSlot : old.slot = header.slot) :
+    old.signingRoot = some (signingRootOf header) := by
+  induction steps generalizing start with
+  | nil => simp at member
+  | cons step rest ih =>
+    cases step with
+    | importFile file =>
+      -- The import puts the block under a limit, so each later header is after its slot.
+      have after := lt_slot_of_underLimit (start := start.importFile file) signed
+        (underLimit_importFile (List.mem_append_left _ kept)) (by simpa using member)
+      exact absurd sameSlot (UInt64.ne_of_lt after)
+    | signBlock first =>
+      obtain ⟨checked, later⟩ := bind_unit_ok_iff.mp signed
+      rcases List.mem_cons.mp member with same | inRest
+      · cases same
+        have free := (checkBlockSigning_eq_ok_iff.mp checked).1 old kept
+        simpa [SignedBlockRecord.conflictsWith, sameSlot] using free
+      · refine ih later ?_ inRest
+        rw [blocksOf_recordBlock]
+        exact List.mem_append_left _ kept
+
+/-- Two headers of one slot that the signer signed have one signing root.
+
+Files imported between the two do not change this. -/
+theorem signingRoot_eq_of_importAndSignBlocks {signingRootOf : BeaconBlockHeader → Root}
+    {pubkey : BLSPubkey} {start finish : Interchange} {steps : List BlockSignerStep}
+    (signed : importAndSignBlocks signingRootOf pubkey start steps = .ok finish)
+    {header1 header2 : BeaconBlockHeader} (member1 : .signBlock header1 ∈ steps)
+    (member2 : .signBlock header2 ∈ steps) (sameSlot : header1.slot = header2.slot) :
+    signingRootOf header1 = signingRootOf header2 := by
+  induction steps generalizing start with
+  | nil => simp at member1
+  | cons step rest ih =>
+    cases step with
+    | importFile file =>
+      exact ih (start := start.importFile file) signed (by simpa using member1)
+        (by simpa using member2)
+    | signBlock first =>
+      obtain ⟨_, later⟩ := bind_unit_ok_iff.mp signed
+      -- A later header of the slot of the first has the root that the first was recorded with.
+      have against : ∀ header : BeaconBlockHeader, .signBlock header ∈ rest →
+          first.slot = header.slot → signingRootOf first = signingRootOf header := by
+        intro header member same
+        have recorded := signingRoot_eq_some_of_importAndSignBlocks
+          (old := ⟨first.slot, some (signingRootOf first)⟩) later
+          (by
+            rw [blocksOf_recordBlock]
+            exact List.mem_append_right _ (List.mem_singleton_self _))
+          member same
+        simpa using recorded
+      rcases List.mem_cons.mp member1 with head1 | inRest1 <;>
+        rcases List.mem_cons.mp member2 with head2 | inRest2
+      · cases head1
+        cases head2
+        rfl
+      · cases head1
+        exact against header2 inRest2 sameSlot
+      · cases head2
+        exact (against header1 inRest1 sameSlot.symm).symm
+      · exact ih later inRest1 inRest2
+
+/-- If the signer signed both headers of a valid proposer slashing, they differ and share a root.
+
+So the pair is a collision of the signing root. -/
+theorem signingRoot_eq_of_importAndSignBlocks_of_processProposerSlashing
+    {signingRootOf : BeaconBlockHeader → Root} {pubkey : BLSPubkey}
+    {start finish : Interchange} {steps : List BlockSignerStep}
+    (signed : importAndSignBlocks signingRootOf pubkey start steps = .ok finish)
+    {config : Config} {checks : SignatureChecks} {state after : BeaconState preset fork}
+    {slashing : ProposerSlashing}
+    (valid : processProposerSlashing config checks state slashing = .ok after)
+    (member1 : .signBlock slashing.signedHeader1.message ∈ steps)
+    (member2 : .signBlock slashing.signedHeader2.message ∈ steps) :
+    slashing.signedHeader1.message ≠ slashing.signedHeader2.message ∧
+      signingRootOf slashing.signedHeader1.message =
+        signingRootOf slashing.signedHeader2.message := by
+  obtain ⟨sameSlot, -, distinct, -⟩ := processProposerSlashing_checks valid
+  exact ⟨distinct, signingRoot_eq_of_importAndSignBlocks signed member1 member2 sameSlot⟩
+
+/-- If each block of the starting file is after a slot, so is each block that the signer signs.
+
+The starting file holds one or more blocks of the key. -/
+theorem lt_slot_of_importAndSignBlocks {signingRootOf : BeaconBlockHeader → Root}
+    {pubkey : BLSPubkey} {start finish : Interchange} {steps : List BlockSignerStep}
+    (signed : importAndSignBlocks signingRootOf pubkey start steps = .ok finish)
+    (nonempty : start.blocksOf pubkey ≠ []) {old : Slot}
+    (older : ∀ block ∈ start.blocksOf pubkey, old < block.slot) {header : BeaconBlockHeader}
+    (member : .signBlock header ∈ steps) : old < header.slot := by
+  induction steps generalizing start with
+  | nil => simp at member
+  | cons step rest ih =>
+    cases step with
+    | importFile file =>
+      -- The import puts a held block under a limit, so each later header is after its slot.
+      obtain ⟨block, kept⟩ := List.exists_mem_of_ne_nil _ nonempty
+      exact UInt64.lt_trans (older block kept)
+        (lt_slot_of_underLimit (start := start.importFile file) signed
+          (underLimit_importFile (List.mem_append_left _ kept)) (by simpa using member))
+    | signBlock first =>
+      obtain ⟨checked, later⟩ := bind_unit_ok_iff.mp signed
+      have after := lt_slot_of_checkBlockSlot nonempty older (bind_unit_ok_iff.mp checked).2
+      rcases List.mem_cons.mp member with same | inRest
+      · cases same
+        exact after
+      · -- The block just signed is after the old slot too, so the grown record keeps the bound.
+        refine ih later (by simp [blocksOf_recordBlock]) ?_ inRest
+        intro block kept
+        rw [blocksOf_recordBlock, List.mem_append, List.mem_singleton] at kept
+        rcases kept with kept | rfl
+        · exact older block kept
+        · exact after
+
+/-- No valid proposer slashing pairs a signed header with an older header.
+
+An older header is before each block of the starting file.
+
+The starting file holds one or more blocks of the key.
+
+The signed header may be the first or the second header of the slashing.
+
+The two headers of a valid proposer slashing have one slot. -/
+theorem processProposerSlashing_ne_ok_of_importAndSignBlocks
+    {signingRootOf : BeaconBlockHeader → Root} {pubkey : BLSPubkey}
+    {start finish : Interchange} {steps : List BlockSignerStep}
+    (signed : importAndSignBlocks signingRootOf pubkey start steps = .ok finish)
+    (nonempty : start.blocksOf pubkey ≠ []) {old : BeaconBlockHeader}
+    (older : ∀ block ∈ start.blocksOf pubkey, old.slot < block.slot) {header : BeaconBlockHeader}
+    (member : .signBlock header ∈ steps) {config : Config} {checks : SignatureChecks}
+    {state after : BeaconState preset fork} {slashing : ProposerSlashing}
+    (pair : slashing.signedHeader1.message = old ∧ slashing.signedHeader2.message = header ∨
+      slashing.signedHeader1.message = header ∧ slashing.signedHeader2.message = old) :
+    processProposerSlashing config checks state slashing ≠ .ok after := by
+  intro valid
+  have sameSlot := (processProposerSlashing_checks valid).1
+  have before := UInt64.ne_of_lt (lt_slot_of_importAndSignBlocks signed nonempty older member)
+  rcases pair with ⟨first, second⟩ | ⟨first, second⟩
+  · exact before (by rw [← first, ← second, sameSlot])
+  · exact before (by rw [← first, ← second, sameSlot])
+
+/-- A header signed after an import is after each block of the file and of the starting file.
+
+So it meets conditions 1 and 2 of both, whatever the signer recorded or imported in between. -/
+theorem lt_slot_of_importAndSignBlocks_of_importFile {signingRootOf : BeaconBlockHeader → Root}
+    {pubkey : BLSPubkey} {start finish : Interchange} {steps : List BlockSignerStep}
+    (signed : importAndSignBlocks signingRootOf pubkey start steps = .ok finish)
+    {file : Interchange} {header : BeaconBlockHeader}
+    (order : List.Sublist [.importFile file, .signBlock header] steps) :
+    ∀ old ∈ start.blocksOf pubkey ++ file.blocksOf pubkey, old.slot < header.slot := by
+  induction steps generalizing start with
+  | nil => simp at order
+  | cons step rest ih =>
+    intro old member
+    rcases List.sublist_cons_iff.mp order with inRest | ⟨tail, equal, inTail⟩
+    · have later : .signBlock header ∈ rest := inRest.subset (by simp)
+      cases step with
+      | importFile other =>
+        rcases List.mem_append.mp member with held | imported
+        · -- An earlier import already puts the blocks of the starting file under a limit.
+          exact lt_slot_of_underLimit (start := start.importFile other) signed
+            (underLimit_importFile (List.mem_append_left _ held)) later
+        · exact ih (start := start.importFile other) signed inRest old
+            (List.mem_append_right _ imported)
+      | signBlock first =>
+        obtain ⟨_, signedRest⟩ := bind_unit_ok_iff.mp signed
+        refine ih signedRest inRest old ?_
+        rw [blocksOf_recordBlock]
+        rcases List.mem_append.mp member with held | imported
+        · exact List.mem_append_left _ (List.mem_append_left _ held)
+        · exact List.mem_append_right _ imported
+    · -- This step imports the file itself, which puts both lists of blocks under a limit.
+      cases equal
+      exact lt_slot_of_underLimit (start := start.importFile file) signed
+        (underLimit_importFile member) (List.singleton_sublist.mp inTail)
+
+/-- Each header that the signer signs meets conditions 1 and 2 of its starting file. -/
+theorem checkBlockSigning_of_importAndSignBlocks {signingRootOf : BeaconBlockHeader → Root}
+    {pubkey : BLSPubkey} {start finish : Interchange} {steps : List BlockSignerStep}
+    (signed : importAndSignBlocks signingRootOf pubkey start steps = .ok finish)
+    {header : BeaconBlockHeader} (member : .signBlock header ∈ steps) :
+    checkBlockSigning (start.blocksOf pubkey) header.slot (signingRootOf header) = .ok () := by
+  refine checkBlockSigning_eq_ok_iff.mpr ⟨fun old kept => ?_, fun minimum computed => ?_⟩
+  · by_cases sameSlot : old.slot = header.slot
+    · simp [SignedBlockRecord.conflictsWith,
+        signingRoot_eq_some_of_importAndSignBlocks signed kept member sameSlot]
+    · simp [SignedBlockRecord.conflictsWith, sameSlot]
+  · unfold minBlockSlot at computed
+    obtain ⟨mapped, least⟩ := List.min?_eq_some_iff.mp computed
+    obtain ⟨lowest, kept, rfl⟩ := List.mem_map.mp mapped
+    by_cases after : lowest.slot < header.slot
+    · exact .inl after
+    · -- No signed header is before each block of the file, so this one is at the least slot.
+      have notBefore : ¬header.slot < lowest.slot := fun before =>
+        UInt64.lt_irrefl _ (lt_slot_of_importAndSignBlocks signed (List.ne_nil_of_mem kept)
+          (fun block inFile => UInt64.lt_of_lt_of_le before
+            (least _ (List.mem_map.mpr ⟨block, inFile, rfl⟩))) member)
+      have sameSlot := UInt64.le_antisymm (UInt64.not_lt.mp notBefore) (UInt64.not_lt.mp after)
+      refine .inr (List.any_eq_true.mpr ⟨lowest, kept, ?_⟩)
+      simp [sameSlot, signingRoot_eq_some_of_importAndSignBlocks signed kept member sameSlot]
+
+/-- Each header that the signer signs after an import meets conditions 1 and 2 of that file. -/
+theorem checkBlockSigning_of_importAndSignBlocks_of_importFile
+    {signingRootOf : BeaconBlockHeader → Root} {pubkey : BLSPubkey}
+    {start finish : Interchange} {steps : List BlockSignerStep}
+    (signed : importAndSignBlocks signingRootOf pubkey start steps = .ok finish)
+    {file : Interchange} {header : BeaconBlockHeader}
+    (order : List.Sublist [.importFile file, .signBlock header] steps) :
+    checkBlockSigning (file.blocksOf pubkey) header.slot (signingRootOf header) = .ok () :=
+  checkBlockSigning_of_all_lt fun old kept =>
+    lt_slot_of_importAndSignBlocks_of_importFile signed order old (List.mem_append_right _ kept)
+
+/-- Importing a file without entries puts the held record in its minimal form.
+
+So a signer that prunes its record with the minimal strategy imports an empty file. -/
+theorem importFile_of_data_eq_nil {held file : Interchange} (empty : file.data = []) :
+    held.importFile file = held.toMinimal := by
+  simp [Interchange.importFile, empty]
+
+/-! ## A signer of blocks without imports -/
+
+/-- A signer of blocks that imports no file is the signer of blocks without imports. -/
+theorem importAndSignBlocks_map_signBlock (signingRootOf : BeaconBlockHeader → Root)
+    (pubkey : BLSPubkey) (start : Interchange) (headers : List BeaconBlockHeader) :
+    importAndSignBlocks signingRootOf pubkey start (headers.map .signBlock) =
+      signBlocks signingRootOf pubkey start headers := by
+  induction headers generalizing start with
+  | nil => rfl
+  | cons first rest ih => simp only [List.map_cons, importAndSignBlocks, signBlocks, ih]
+
+/-- Blocks that a signer signs from a record never share a slot with another signing root.
+
+Two signed block headers of one slot have the same signing root. -/
+theorem signingRoot_eq_of_signBlocks {signingRootOf : BeaconBlockHeader → Root}
+    {pubkey : BLSPubkey} {start finish : Interchange} {headers : List BeaconBlockHeader}
+    (signed : signBlocks signingRootOf pubkey start headers = .ok finish)
+    {header1 header2 : BeaconBlockHeader} (member1 : header1 ∈ headers)
+    (member2 : header2 ∈ headers) (sameSlot : header1.slot = header2.slot) :
+    signingRootOf header1 = signingRootOf header2 :=
+  signingRoot_eq_of_importAndSignBlocks
+    ((importAndSignBlocks_map_signBlock ..).trans signed)
+    (List.mem_map_of_mem member1) (List.mem_map_of_mem member2) sameSlot
+
+/-- If such a signer signed both headers of a valid proposer slashing, they differ and share a root.
+
+So the pair is a collision of the signing root. -/
+theorem signingRoot_eq_of_processProposerSlashing {signingRootOf : BeaconBlockHeader → Root}
+    {pubkey : BLSPubkey} {start finish : Interchange} {headers : List BeaconBlockHeader}
+    (signed : signBlocks signingRootOf pubkey start headers = .ok finish) {config : Config}
+    {checks : SignatureChecks} {state after : BeaconState preset fork}
+    {slashing : ProposerSlashing}
+    (valid : processProposerSlashing config checks state slashing = .ok after)
+    (member1 : slashing.signedHeader1.message ∈ headers)
+    (member2 : slashing.signedHeader2.message ∈ headers) :
+    slashing.signedHeader1.message ≠ slashing.signedHeader2.message ∧
+      signingRootOf slashing.signedHeader1.message =
+        signingRootOf slashing.signedHeader2.message :=
+  signingRoot_eq_of_importAndSignBlocks_of_processProposerSlashing
+    ((importAndSignBlocks_map_signBlock ..).trans signed) valid
+    (List.mem_map_of_mem member1) (List.mem_map_of_mem member2)
+
 /-- If each block of the starting file is after a slot, so is each block that a signer signs.
 
 The file holds one or more blocks of the key. -/
@@ -548,21 +1339,9 @@ theorem lt_slot_of_signBlocks {signingRootOf : BeaconBlockHeader → Root} {pubk
     (signed : signBlocks signingRootOf pubkey start headers = .ok finish)
     (nonempty : start.blocksOf pubkey ≠ []) {old : Slot}
     (older : ∀ block ∈ start.blocksOf pubkey, old < block.slot) {header : BeaconBlockHeader}
-    (member : header ∈ headers) : old < header.slot := by
-  induction headers generalizing start with
-  | nil => simp at member
-  | cons first rest ih =>
-    obtain ⟨checked, later⟩ := bind_unit_ok_iff.mp signed
-    have after := lt_slot_of_checkBlockSlot nonempty older (bind_unit_ok_iff.mp checked).2
-    rcases List.mem_cons.mp member with rfl | inRest
-    · exact after
-    · -- The block just signed is after the old slot too, so the grown record keeps the bound.
-      refine ih later (by simp [blocksOf_recordBlock]) ?_ inRest
-      intro block kept
-      rw [blocksOf_recordBlock, List.mem_append, List.mem_singleton] at kept
-      rcases kept with kept | rfl
-      · exact older block kept
-      · exact after
+    (member : header ∈ headers) : old < header.slot :=
+  lt_slot_of_importAndSignBlocks ((importAndSignBlocks_map_signBlock ..).trans signed) nonempty
+    older (List.mem_map_of_mem member)
 
 /-- No valid proposer slashing pairs a signed header with a header before each block of the file.
 
@@ -580,13 +1359,436 @@ theorem processProposerSlashing_ne_ok_of_signBlocks {signingRootOf : BeaconBlock
     {state after : BeaconState preset fork} {slashing : ProposerSlashing}
     (pair : slashing.signedHeader1.message = old ∧ slashing.signedHeader2.message = header ∨
       slashing.signedHeader1.message = header ∧ slashing.signedHeader2.message = old) :
-    processProposerSlashing config checks state slashing ≠ .ok after := by
-  intro valid
-  have sameSlot := (processProposerSlashing_checks valid).1
-  have before := UInt64.ne_of_lt (lt_slot_of_signBlocks signed nonempty older member)
-  rcases pair with ⟨first, second⟩ | ⟨first, second⟩
-  · exact before (by rw [← first, ← second, sameSlot])
-  · exact before (by rw [← first, ← second, sameSlot])
+    processProposerSlashing config checks state slashing ≠ .ok after :=
+  processProposerSlashing_ne_ok_of_importAndSignBlocks
+    ((importAndSignBlocks_map_signBlock ..).trans signed) nonempty older
+    (List.mem_map_of_mem member) pair
+
+/-! ## Imports between signed votes -/
+
+/-- One step of a signer of votes: it imports a file, or signs a vote. -/
+inductive AttestationSignerStep where
+  /-- A file is imported with the minimal strategy. -/
+  | importFile (file : Interchange)
+  /-- A vote is checked against the record, then recorded. -/
+  | signAttestation (data : AttestationData)
+
+/-- A signer of votes that also imports files, in any order with its votes.
+
+A function gives the signing root of a vote, so the statements below hold for any one. -/
+def importAndSignAttestations (signingRootOf : AttestationData → Root) (pubkey : BLSPubkey) :
+    Interchange → List AttestationSignerStep → Except SlashingProtectionError Interchange
+  | interchange, [] => .ok interchange
+  | interchange, .importFile file :: rest =>
+    importAndSignAttestations signingRootOf pubkey (interchange.importFile file) rest
+  | interchange, .signAttestation data :: rest => do
+    interchange.checkAttestation pubkey data.source.epoch data.target.epoch (signingRootOf data)
+    importAndSignAttestations signingRootOf pubkey
+      (interchange.recordAttestation pubkey data.source.epoch data.target.epoch
+        (signingRootOf data)) rest
+
+/-- A source and a target are at most those of a limit without a signing root.
+
+The limit has the least source and the least target of the votes of a key. -/
+private abbrev UnderEpochLimit (interchange : Interchange) (key : BLSPubkey)
+    (source target : Epoch) : Prop :=
+  ∃ sourceLimit targetLimit,
+    (⟨sourceLimit, targetLimit, none⟩ : SignedAttestationRecord) ∈ interchange.attestationsOf key ∧
+      source ≤ sourceLimit ∧ target ≤ targetLimit ∧
+        ∀ vote ∈ interchange.attestationsOf key,
+          sourceLimit ≤ vote.sourceEpoch ∧ targetLimit ≤ vote.targetEpoch
+
+/-- A vote that passes the last three conditions is after a least limit without a root.
+
+Its source is at least the source of the limit, and its target is after the target of the limit. -/
+private theorem epochs_of_least_limit {votes : List SignedAttestationRecord}
+    {sourceLimit targetLimit source target : Epoch} {root : Root}
+    (kept : (⟨sourceLimit, targetLimit, none⟩ : SignedAttestationRecord) ∈ votes)
+    (least : ∀ vote ∈ votes, sourceLimit ≤ vote.sourceEpoch ∧ targetLimit ≤ vote.targetEpoch)
+    (passed : checkAttestationSigning votes source target root = .ok ()) :
+    sourceLimit ≤ source ∧ targetLimit < target := by
+  obtain ⟨free, -, after⟩ := checkAttestationSigning_eq_ok_iff.mp passed
+  obtain ⟨-, epochsChecked⟩ := bind_unit_ok_iff.mp passed
+  refine ⟨le_sourceEpoch_of_checkSourceEpoch (List.ne_nil_of_mem kept)
+    (fun vote member => (least vote member).1) (bind_unit_ok_iff.mp epochsChecked).1, ?_⟩
+  -- The limit has no signing root, so it is a double vote with every vote of its target.
+  have other : targetLimit ≠ target := by
+    intro same
+    simpa [SignedAttestationRecord.isSlashableWith, same] using free _ kept
+  obtain ⟨lowest, lowestKept, isLeast⟩ :=
+    exists_min?_map_eq SignedAttestationRecord.targetEpoch (List.ne_nil_of_mem kept)
+  rcases after _ isLeast with above | repeated
+  · exact UInt64.lt_of_le_of_lt (least lowest lowestKept).2 above
+  · -- A repeat has the target of a recorded vote, which is at least the limit.
+    obtain ⟨vote, member, same⟩ := List.any_eq_true.mp repeated
+    simp only [Bool.and_eq_true, beq_iff_eq] at same
+    have bound : targetLimit ≤ target := same.1.2 ▸ (least vote member).2
+    exact UInt64.lt_of_le_of_ne bound other
+
+/-- Recording a vote that passed its check keeps epochs under a limit. -/
+private theorem underEpochLimit_recordAttestation {interchange : Interchange}
+    {key : BLSPubkey} {oldSource oldTarget source target : Epoch} {root : Root}
+    (under : UnderEpochLimit interchange key oldSource oldTarget)
+    (passed : interchange.checkAttestation key source target root = .ok ()) :
+    UnderEpochLimit (interchange.recordAttestation key source target root) key oldSource
+      oldTarget := by
+  obtain ⟨sourceLimit, targetLimit, kept, sourceBelow, targetBelow, least⟩ := under
+  have after := epochs_of_least_limit kept least passed
+  refine ⟨sourceLimit, targetLimit, ?_, sourceBelow, targetBelow, fun vote member => ?_⟩
+  · rw [attestationsOf_recordAttestation]
+    exact List.mem_append_left _ kept
+  · rw [attestationsOf_recordAttestation, List.mem_append, List.mem_singleton] at member
+    rcases member with member | rfl
+    · exact least vote member
+    · exact ⟨after.1, UInt64.le_of_lt after.2⟩
+
+/-- After an import, the epochs of each vote of the two inputs are under a limit. -/
+private theorem underEpochLimit_importFile {held file : Interchange} {key : BLSPubkey}
+    {old : SignedAttestationRecord}
+    (member : old ∈ held.attestationsOf key ++ file.attestationsOf key) :
+    UnderEpochLimit (held.importFile file) key old.sourceEpoch old.targetEpoch := by
+  rw [← attestationsOf_append] at member
+  obtain ⟨maxSource, maxTarget, limits, sourceBound, targetBound⟩ := coversEpochs_limits member
+  have shape := attestationsOf_toMinimal limits
+  refine ⟨maxSource, maxTarget, (shape _).mpr rfl, sourceBound, targetBound,
+    fun vote kept => ?_⟩
+  rw [(shape vote).mp kept]
+  exact ⟨UInt64.le_refl _, UInt64.le_refl _⟩
+
+/-- An import keeps epochs under a limit. -/
+private theorem underEpochLimit_importFile_of_underEpochLimit {held file : Interchange}
+    {key : BLSPubkey} {source target : Epoch} (under : UnderEpochLimit held key source target) :
+    UnderEpochLimit (held.importFile file) key source target := by
+  obtain ⟨sourceLimit, targetLimit, kept, sourceBelow, targetBelow, -⟩ := under
+  obtain ⟨maxSource, maxTarget, inside, sourceAbove, targetAbove, least⟩ :=
+    underEpochLimit_importFile (file := file) (List.mem_append_left _ kept)
+  exact ⟨maxSource, maxTarget, inside, UInt64.le_trans sourceBelow sourceAbove,
+    UInt64.le_trans targetBelow targetAbove, least⟩
+
+/-- Epochs under a limit are before each vote that the signer signs from then on.
+
+Each such vote has a source at least the first epoch, and a target after the second. -/
+private theorem epochs_of_underEpochLimit {signingRootOf : AttestationData → Root}
+    {pubkey : BLSPubkey} {start finish : Interchange} {steps : List AttestationSignerStep}
+    {source target : Epoch}
+    (signed : importAndSignAttestations signingRootOf pubkey start steps = .ok finish)
+    (under : UnderEpochLimit start pubkey source target) {data : AttestationData}
+    (member : .signAttestation data ∈ steps) :
+    source ≤ data.source.epoch ∧ target < data.target.epoch := by
+  induction steps generalizing start with
+  | nil => simp at member
+  | cons step rest ih =>
+    cases step with
+    | importFile file =>
+      exact ih (start := start.importFile file) signed
+        (underEpochLimit_importFile_of_underEpochLimit under) (by simpa using member)
+    | signAttestation first =>
+      obtain ⟨checked, later⟩ := bind_unit_ok_iff.mp signed
+      rcases List.mem_cons.mp member with same | inRest
+      · cases same
+        obtain ⟨sourceLimit, targetLimit, kept, sourceBelow, targetBelow, least⟩ := under
+        have after := epochs_of_least_limit kept least checked
+        exact ⟨UInt64.le_trans sourceBelow after.1, UInt64.lt_of_le_of_lt targetBelow after.2⟩
+      · exact ih later (underEpochLimit_recordAttestation under checked) inRest
+
+/-- One more element keeps the least value of a field, when its field is at least that value. -/
+private theorem min?_map_append_singleton {α : Type} {xs : List α} {x : α}
+    (field : α → UInt64) {least : UInt64} (computed : (xs.map field).min? = some least)
+    (above : least ≤ field x) : ((xs ++ [x]).map field).min? = some least := by
+  obtain ⟨member, bound⟩ := List.min?_eq_some_iff.mp computed
+  refine List.min?_eq_some_iff.mpr ⟨?_, fun value mapped => ?_⟩
+  · rw [List.map_append]
+    exact List.mem_append_left _ member
+  · simp only [List.map_append, List.map_cons, List.map_nil, List.mem_append,
+      List.mem_singleton] at mapped
+    rcases mapped with mapped | rfl
+    · exact bound value mapped
+    · exact above
+
+/-- A vote that passes conditions 3, 4 and 5 after an accepted vote also passes them without it.
+
+The accepted vote passed them against the same votes. -/
+private theorem checkAttestationSigning_of_append {votes : List SignedAttestationRecord}
+    {firstSource firstTarget source target : Epoch} {firstRoot root : Root}
+    (accepted : checkAttestationSigning votes firstSource firstTarget firstRoot = .ok ())
+    (passed : checkAttestationSigning (votes ++ [⟨firstSource, firstTarget, some firstRoot⟩])
+      source target root = .ok ()) :
+    checkAttestationSigning votes source target root = .ok () := by
+  obtain ⟨-, firstAbove, firstAfter⟩ := checkAttestationSigning_eq_ok_iff.mp accepted
+  obtain ⟨free, above, after⟩ := checkAttestationSigning_eq_ok_iff.mp passed
+  refine checkAttestationSigning_eq_ok_iff.mpr
+    ⟨fun vote member => free vote (List.mem_append_left _ member), fun minimum computed => ?_,
+      fun minimum computed => ?_⟩
+  · exact above minimum (min?_map_append_singleton SignedAttestationRecord.sourceEpoch computed
+      (firstAbove minimum computed))
+  · -- The accepted vote has a target at least the least one, so the least target stays.
+    have bound : minimum ≤ firstTarget := by
+      rcases firstAfter minimum computed with below | repeated
+      · exact UInt64.le_of_lt below
+      · obtain ⟨vote, member, same⟩ := List.any_eq_true.mp repeated
+        simp only [Bool.and_eq_true, beq_iff_eq] at same
+        unfold minTargetEpoch at computed
+        exact same.1.2 ▸ (List.min?_eq_some_iff.mp computed).2 _
+          (List.mem_map.mpr ⟨vote, member, rfl⟩)
+    rcases after minimum (min?_map_append_singleton SignedAttestationRecord.targetEpoch computed
+      bound) with below | repeated
+    · exact .inl below
+    · rw [isRepeatAttestation, List.any_append, Bool.or_eq_true] at repeated
+      rcases repeated with repeated | repeated
+      · exact .inr repeated
+      · -- A repeat of the record has the epochs and the root of the accepted vote.
+        simp only [List.any_cons, List.any_nil, Bool.or_false, Bool.and_eq_true, beq_iff_eq,
+          Option.some.injEq] at repeated
+        obtain ⟨⟨rfl, rfl⟩, rfl⟩ := repeated
+        exact firstAfter minimum computed
+
+/-- Each vote that the signer signs meets conditions 3, 4 and 5 of its starting file. -/
+theorem checkAttestationSigning_of_importAndSignAttestations
+    {signingRootOf : AttestationData → Root} {pubkey : BLSPubkey}
+    {start finish : Interchange} {steps : List AttestationSignerStep}
+    (signed : importAndSignAttestations signingRootOf pubkey start steps = .ok finish)
+    {data : AttestationData} (member : .signAttestation data ∈ steps) :
+    checkAttestationSigning (start.attestationsOf pubkey) data.source.epoch data.target.epoch
+      (signingRootOf data) = .ok () := by
+  induction steps generalizing start with
+  | nil => simp at member
+  | cons step rest ih =>
+    cases step with
+    | importFile file =>
+      -- The import puts each vote of the starting file under a limit, so the vote is after it.
+      have after : ∀ old ∈ start.attestationsOf pubkey,
+          old.sourceEpoch ≤ data.source.epoch ∧ old.targetEpoch < data.target.epoch :=
+        fun old kept => epochs_of_underEpochLimit (start := start.importFile file) signed
+          (underEpochLimit_importFile (List.mem_append_left _ kept)) (by simpa using member)
+      exact checkAttestationSigning_of_all (fun old kept => (after old kept).1)
+        (fun old kept => (after old kept).2)
+    | signAttestation first =>
+      obtain ⟨checked, later⟩ := bind_unit_ok_iff.mp signed
+      rcases List.mem_cons.mp member with same | inRest
+      · cases same
+        exact checked
+      · have passed := ih later inRest
+        rw [attestationsOf_recordAttestation] at passed
+        exact checkAttestationSigning_of_append checked passed
+
+/-- Each vote that the signer signs is not slashable with a vote of its starting file.
+
+The comparison is the one the record allows: by epochs, and by signing root for a double vote. -/
+theorem isSlashableWith_eq_false_of_importAndSignAttestations
+    {signingRootOf : AttestationData → Root} {pubkey : BLSPubkey}
+    {start finish : Interchange} {steps : List AttestationSignerStep}
+    (signed : importAndSignAttestations signingRootOf pubkey start steps = .ok finish)
+    {attestation : SignedAttestationRecord} (imported : attestation ∈ start.attestationsOf pubkey)
+    {data : AttestationData} (member : .signAttestation data ∈ steps) :
+    attestation.isSlashableWith data.source.epoch data.target.epoch (signingRootOf data) =
+      false :=
+  (checkAttestationSigning_eq_ok_iff.mp
+    (checkAttestationSigning_of_importAndSignAttestations signed member)).1 _ imported
+
+/-- Two votes that the signer signed and that Casper FFG forbids together have one signing root.
+
+Files imported between the two do not change this. -/
+theorem signingRoot_eq_of_importAndSignAttestations {signingRootOf : AttestationData → Root}
+    {pubkey : BLSPubkey} {start finish : Interchange} {steps : List AttestationSignerStep}
+    (signed : importAndSignAttestations signingRootOf pubkey start steps = .ok finish)
+    {data1 data2 : AttestationData} (member1 : .signAttestation data1 ∈ steps)
+    (member2 : .signAttestation data2 ∈ steps)
+    (slashable : isSlashableAttestationData data1 data2 = true) :
+    signingRootOf data1 = signingRootOf data2 := by
+  induction steps generalizing start with
+  | nil => simp at member1
+  | cons step rest ih =>
+    cases step with
+    | importFile file =>
+      exact ih (start := start.importFile file) signed (by simpa using member1)
+        (by simpa using member2)
+    | signAttestation first =>
+      obtain ⟨_, later⟩ := bind_unit_ok_iff.mp signed
+      -- A later vote is not slashable with the record of the first, as the record sees it.
+      have against : ∀ data : AttestationData, .signAttestation data ∈ rest →
+          (⟨first.source.epoch, first.target.epoch, some (signingRootOf first)⟩ :
+            SignedAttestationRecord).isSlashableWith data.source.epoch data.target.epoch
+              (signingRootOf data) = false := by
+        intro data member
+        refine isSlashableWith_eq_false_of_importAndSignAttestations later ?_ member
+        rw [attestationsOf_recordAttestation]
+        exact List.mem_append_right _ (List.mem_singleton_self _)
+      rcases List.mem_cons.mp member1 with head1 | inRest1 <;>
+        rcases List.mem_cons.mp member2 with head2 | inRest2
+      · cases head1
+        cases head2
+        rfl
+      · cases head1
+        exact signingRoot_eq_of_isSlashableWith_eq_false (against data2 inRest2) (.inl slashable)
+      · cases head2
+        exact (signingRoot_eq_of_isSlashableWith_eq_false (against data1 inRest1)
+          (.inr slashable)).symm
+      · exact ih later inRest1 inRest2
+
+/-- If each vote of the starting file has a source at least an epoch, so does each signed vote.
+
+The starting file holds one or more votes of the key. -/
+theorem le_sourceEpoch_of_importAndSignAttestations {signingRootOf : AttestationData → Root}
+    {pubkey : BLSPubkey} {start finish : Interchange} {steps : List AttestationSignerStep}
+    (signed : importAndSignAttestations signingRootOf pubkey start steps = .ok finish)
+    (nonempty : start.attestationsOf pubkey ≠ []) {old : Epoch}
+    (older : ∀ attestation ∈ start.attestationsOf pubkey, old ≤ attestation.sourceEpoch)
+    {data : AttestationData} (member : .signAttestation data ∈ steps) :
+    old ≤ data.source.epoch := by
+  obtain ⟨-, epochsChecked⟩ :=
+    bind_unit_ok_iff.mp (checkAttestationSigning_of_importAndSignAttestations signed member)
+  exact le_sourceEpoch_of_checkSourceEpoch nonempty older (bind_unit_ok_iff.mp epochsChecked).1
+
+/-- If each vote of the starting file has a target after an epoch, so does each signed vote.
+
+The starting file holds one or more votes of the key. -/
+theorem lt_targetEpoch_of_importAndSignAttestations {signingRootOf : AttestationData → Root}
+    {pubkey : BLSPubkey} {start finish : Interchange} {steps : List AttestationSignerStep}
+    (signed : importAndSignAttestations signingRootOf pubkey start steps = .ok finish)
+    (nonempty : start.attestationsOf pubkey ≠ []) {old : Epoch}
+    (older : ∀ attestation ∈ start.attestationsOf pubkey, old < attestation.targetEpoch)
+    {data : AttestationData} (member : .signAttestation data ∈ steps) :
+    old < data.target.epoch := by
+  obtain ⟨-, epochsChecked⟩ :=
+    bind_unit_ok_iff.mp (checkAttestationSigning_of_importAndSignAttestations signed member)
+  exact lt_targetEpoch_of_checkTargetEpoch nonempty older (bind_unit_ok_iff.mp epochsChecked).2
+
+/-- No vote that the signer signs is slashable with an older vote, in either order.
+
+An older vote has a source at most, and a target before, those of each vote of the starting file.
+
+The starting file holds one or more votes of the key. -/
+theorem isSlashableAttestationData_eq_false_of_importAndSignAttestations
+    {signingRootOf : AttestationData → Root} {pubkey : BLSPubkey}
+    {start finish : Interchange} {steps : List AttestationSignerStep}
+    (signed : importAndSignAttestations signingRootOf pubkey start steps = .ok finish)
+    (nonempty : start.attestationsOf pubkey ≠ []) {old : AttestationData}
+    (older : ∀ attestation ∈ start.attestationsOf pubkey,
+      old.source.epoch ≤ attestation.sourceEpoch ∧ old.target.epoch < attestation.targetEpoch)
+    {data : AttestationData} (member : .signAttestation data ∈ steps) :
+    isSlashableAttestationData old data = false ∧ isSlashableAttestationData data old = false :=
+  isSlashableAttestationData_eq_false_of_le_of_lt
+    (le_sourceEpoch_of_importAndSignAttestations signed nonempty
+      (fun attestation kept => (older attestation kept).1) member)
+    (lt_targetEpoch_of_importAndSignAttestations signed nonempty
+      (fun attestation kept => (older attestation kept).2) member)
+
+/-- A vote signed after an import is after each vote of the file and of the starting file.
+
+Its source is at least, and its target after, those of each such vote. -/
+private theorem epochs_of_importAndSignAttestations_of_importFile
+    {signingRootOf : AttestationData → Root} {pubkey : BLSPubkey}
+    {start finish : Interchange} {steps : List AttestationSignerStep}
+    (signed : importAndSignAttestations signingRootOf pubkey start steps = .ok finish)
+    {file : Interchange} {data : AttestationData}
+    (order : List.Sublist [.importFile file, .signAttestation data] steps) :
+    ∀ old ∈ start.attestationsOf pubkey ++ file.attestationsOf pubkey,
+      old.sourceEpoch ≤ data.source.epoch ∧ old.targetEpoch < data.target.epoch := by
+  induction steps generalizing start with
+  | nil => simp at order
+  | cons step rest ih =>
+    intro old member
+    rcases List.sublist_cons_iff.mp order with inRest | ⟨tail, equal, inTail⟩
+    · have later : .signAttestation data ∈ rest := inRest.subset (by simp)
+      cases step with
+      | importFile other =>
+        rcases List.mem_append.mp member with held | imported
+        · -- An earlier import already puts the votes of the starting file under a limit.
+          exact epochs_of_underEpochLimit (start := start.importFile other) signed
+            (underEpochLimit_importFile (List.mem_append_left _ held)) later
+        · exact ih (start := start.importFile other) signed inRest old
+            (List.mem_append_right _ imported)
+      | signAttestation first =>
+        obtain ⟨_, signedRest⟩ := bind_unit_ok_iff.mp signed
+        refine ih signedRest inRest old ?_
+        rw [attestationsOf_recordAttestation]
+        rcases List.mem_append.mp member with held | imported
+        · exact List.mem_append_left _ (List.mem_append_left _ held)
+        · exact List.mem_append_right _ imported
+    · -- This step imports the file itself, which puts both lists of votes under a limit.
+      cases equal
+      exact epochs_of_underEpochLimit (start := start.importFile file) signed
+        (underEpochLimit_importFile member) (List.singleton_sublist.mp inTail)
+
+/-- A vote signed after an import has a source at least that of each vote of the imported file.
+
+The same holds for each vote of the starting file. -/
+theorem le_sourceEpoch_of_importAndSignAttestations_of_importFile
+    {signingRootOf : AttestationData → Root} {pubkey : BLSPubkey}
+    {start finish : Interchange} {steps : List AttestationSignerStep}
+    (signed : importAndSignAttestations signingRootOf pubkey start steps = .ok finish)
+    {file : Interchange} {data : AttestationData}
+    (order : List.Sublist [.importFile file, .signAttestation data] steps) :
+    ∀ old ∈ start.attestationsOf pubkey ++ file.attestationsOf pubkey,
+      old.sourceEpoch ≤ data.source.epoch :=
+  fun old member => (epochs_of_importAndSignAttestations_of_importFile signed order old member).1
+
+/-- A vote signed after an import has a target after that of each vote of the imported file.
+
+The same holds for each vote of the starting file. -/
+theorem lt_targetEpoch_of_importAndSignAttestations_of_importFile
+    {signingRootOf : AttestationData → Root} {pubkey : BLSPubkey}
+    {start finish : Interchange} {steps : List AttestationSignerStep}
+    (signed : importAndSignAttestations signingRootOf pubkey start steps = .ok finish)
+    {file : Interchange} {data : AttestationData}
+    (order : List.Sublist [.importFile file, .signAttestation data] steps) :
+    ∀ old ∈ start.attestationsOf pubkey ++ file.attestationsOf pubkey,
+      old.targetEpoch < data.target.epoch :=
+  fun old member => (epochs_of_importAndSignAttestations_of_importFile signed order old member).2
+
+/-- Each vote that the signer signs after an import meets conditions 3, 4 and 5 of that file. -/
+theorem checkAttestationSigning_of_importAndSignAttestations_of_importFile
+    {signingRootOf : AttestationData → Root} {pubkey : BLSPubkey}
+    {start finish : Interchange} {steps : List AttestationSignerStep}
+    (signed : importAndSignAttestations signingRootOf pubkey start steps = .ok finish)
+    {file : Interchange} {data : AttestationData}
+    (order : List.Sublist [.importFile file, .signAttestation data] steps) :
+    checkAttestationSigning (file.attestationsOf pubkey) data.source.epoch data.target.epoch
+      (signingRootOf data) = .ok () :=
+  checkAttestationSigning_of_all
+    (fun old kept => le_sourceEpoch_of_importAndSignAttestations_of_importFile signed order old
+      (List.mem_append_right _ kept))
+    (fun old kept => lt_targetEpoch_of_importAndSignAttestations_of_importFile signed order old
+      (List.mem_append_right _ kept))
+
+/-! ## A signer of votes without imports -/
+
+/-- A signer of votes that imports no file is the signer of votes without imports. -/
+theorem importAndSignAttestations_map_signAttestation (signingRootOf : AttestationData → Root)
+    (pubkey : BLSPubkey) (start : Interchange) (votes : List AttestationData) :
+    importAndSignAttestations signingRootOf pubkey start (votes.map .signAttestation) =
+      signAttestations signingRootOf pubkey start votes := by
+  induction votes generalizing start with
+  | nil => rfl
+  | cons first rest ih =>
+    simp only [List.map_cons, importAndSignAttestations, signAttestations, ih]
+
+/-- Two signed votes that Casper FFG forbids together have the same signing root.
+
+So such a pair is a collision of the signing root, since the two votes are different. -/
+theorem signingRoot_eq_of_signAttestations {signingRootOf : AttestationData → Root}
+    {pubkey : BLSPubkey} {start finish : Interchange} {votes : List AttestationData}
+    (signed : signAttestations signingRootOf pubkey start votes = .ok finish)
+    {data1 data2 : AttestationData} (member1 : data1 ∈ votes) (member2 : data2 ∈ votes)
+    (slashable : isSlashableAttestationData data1 data2 = true) :
+    signingRootOf data1 = signingRootOf data2 :=
+  signingRoot_eq_of_importAndSignAttestations
+    ((importAndSignAttestations_map_signAttestation ..).trans signed)
+    (List.mem_map_of_mem member1) (List.mem_map_of_mem member2) slashable
+
+/-- Each vote that a signer signs is not slashable with a vote of the file it started from.
+
+The comparison is the one the record allows: by epochs, and by signing root for a double vote. -/
+theorem isSlashableWith_eq_false_of_signAttestations {signingRootOf : AttestationData → Root}
+    {pubkey : BLSPubkey} {start finish : Interchange} {votes : List AttestationData}
+    (signed : signAttestations signingRootOf pubkey start votes = .ok finish)
+    {attestation : SignedAttestationRecord} (imported : attestation ∈ start.attestationsOf pubkey)
+    {data : AttestationData} (member : data ∈ votes) :
+    attestation.isSlashableWith data.source.epoch data.target.epoch (signingRootOf data) =
+      false :=
+  isSlashableWith_eq_false_of_importAndSignAttestations
+    ((importAndSignAttestations_map_signAttestation ..).trans signed) imported
+    (List.mem_map_of_mem member)
 
 /-- No vote that a signer signs is slashable with a vote older than each vote of its starting file.
 
@@ -601,25 +1803,9 @@ theorem isSlashableAttestationData_eq_false_of_signAttestations
     (older : ∀ attestation ∈ start.attestationsOf pubkey,
       old.source.epoch ≤ attestation.sourceEpoch ∧ old.target.epoch < attestation.targetEpoch)
     {data : AttestationData} (member : data ∈ votes) :
-    isSlashableAttestationData old data = false ∧ isSlashableAttestationData data old = false := by
-  induction votes generalizing start with
-  | nil => simp at member
-  | cons first rest ih =>
-    obtain ⟨checked, later⟩ := bind_unit_ok_iff.mp signed
-    obtain ⟨-, epochsChecked⟩ := bind_unit_ok_iff.mp checked
-    obtain ⟨sourceChecked, targetChecked⟩ := bind_unit_ok_iff.mp epochsChecked
-    have above := le_sourceEpoch_of_checkSourceEpoch nonempty
-      (fun attestation kept => (older attestation kept).1) sourceChecked
-    have after := lt_targetEpoch_of_checkTargetEpoch nonempty
-      (fun attestation kept => (older attestation kept).2) targetChecked
-    rcases List.mem_cons.mp member with rfl | inRest
-    · exact isSlashableAttestationData_eq_false_of_le_of_lt above after
-    · -- The vote just signed is newer than the old one too, so the grown record keeps the bound.
-      refine ih later (by simp [attestationsOf_recordAttestation]) ?_ inRest
-      intro attestation kept
-      rw [attestationsOf_recordAttestation, List.mem_append, List.mem_singleton] at kept
-      rcases kept with kept | rfl
-      · exact older attestation kept
-      · exact ⟨above, after⟩
+    isSlashableAttestationData old data = false ∧ isSlashableAttestationData data old = false :=
+  isSlashableAttestationData_eq_false_of_importAndSignAttestations
+    ((importAndSignAttestations_map_signAttestation ..).trans signed) nonempty older
+    (List.mem_map_of_mem member)
 
 end EthLib.Consensus

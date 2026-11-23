@@ -6,8 +6,6 @@ public import EthLib.Cryptography.Hash.Hkdf
 /-!
 # Proofs: HKDF-SHA-256
 
-A successful expansion has exactly the requested length.
-
 HKDF expands the key `HMAC-Hash(salt, IKM)` of RFC 5869 §2.2.
 
 The expansion computes the blocks `T(1), T(2), ...` of [RFC 5869 §2.3][rfc5869].
@@ -31,35 +29,12 @@ open EthLib.Cryptography.Hash.Hmac
 
 /-! ## Lengths -/
 
-/-- The blocks of the expansion are 32 bytes each. -/
-theorem expandBlocks_size (prk info previous : ByteArray) (i count : Nat) :
-    (expandBlocks prk info previous i count).size = HASH_LEN * count := by
-  induction count generalizing previous i with
-  | zero => rfl
-  | succ count ih =>
-    simp only [expandBlocks, ByteArray.size_append, hmac_size, ih, HASH_LEN]
-    omega
-
-/-- A successful expansion has exactly the requested length. -/
-theorem expand_size {prk info okm : ByteArray} {length : Nat}
-    (h : expand prk info length = .ok okm) : okm.size = length := by
-  unfold expand at h
-  by_cases short : prk.size < HASH_LEN
-  · simp [short] at h
-  by_cases long : 255 * HASH_LEN < length
-  · simp [short, long] at h
-  simp only [short, long, ite_false] at h
-  -- The blocks cover the output, so the extraction keeps the requested length.
-  obtain rfl := Except.ok.inj h
-  simp only [ByteArray.size_extract, expandBlocks_size, HASH_LEN]
-  omega
-
 /-- The pseudorandom key is 32 bytes, so HKDF fails exactly on an output longer than `255 * 32`. -/
 theorem hkdf_eq_error_iff {salt ikm info : ByteArray} {length : Nat} {e : HkdfError} :
     hkdf salt ikm info length = .error e ↔
       e = .outputTooLong length ∧ 255 * HASH_LEN < length := by
   unfold hkdf expand extract
-  simp only [hmac_size, HASH_LEN, show ¬ 32 < 32 by decide, ite_false]
+  simp only [hmac_size, HASH_LEN, Sha256.DIGEST_SIZE_BYTES, show ¬ 32 < 32 by decide, ite_false]
   by_cases long : 255 * 32 < length
   · simp [long, eq_comm]
   · simp [long]
@@ -158,7 +133,7 @@ theorem expand_prefix {prk info okm okm' : ByteArray} {length length' : Nat}
   rw [Nat.add_sub_cancel' hn] at ht
   -- The first blocks cover the shorter output, so the tail adds none of its bytes.
   have hsize : length ≤ (blocks prk info ((length + HASH_LEN - 1) / HASH_LEN)).size := by
-    rw [blocks_size, HASH_LEN]
+    rw [blocks_size, HASH_LEN, Sha256.DIGEST_SIZE_BYTES]
     omega
   rw [ht, ByteArray.extract_extract, ByteArray.extract_append, Nat.zero_add, Nat.zero_add,
     Nat.min_eq_left hle, Nat.sub_eq_zero_of_le hsize]
@@ -186,7 +161,7 @@ theorem hkdf_eq {salt ikm info : ByteArray} {length : Nat} (h : length ≤ 255 *
       .ok ((blocks (hmac salt ikm) info
         ((length + HASH_LEN - 1) / HASH_LEN)).extract 0 length) :=
   -- The key `HMAC-Hash(salt, IKM)` is `HashLen` bytes, so it is never too short.
-  expand_eq (by simp [extract, HASH_LEN]) h
+  expand_eq (by simp [extract, HASH_LEN, Sha256.DIGEST_SIZE_BYTES]) h
 
 /-- A successful HKDF returns exactly the requested length. -/
 theorem hkdf_size {salt ikm info okm : ByteArray} {length : Nat}
@@ -201,9 +176,10 @@ theorem hkdf_ok {salt ikm info : ByteArray} {length : Nat} (h : length ≤ 255 *
 /-- An output of whole blocks is the first `n` blocks, with no byte cut, for `n <= 255`. -/
 theorem hkdf_hashLen_mul {salt ikm info : ByteArray} {n : Nat} (hn : n ≤ 255) :
     hkdf salt ikm info (HASH_LEN * n) = .ok (blocks (hmac salt ikm) info n) := by
-  have hcount : (HASH_LEN * n + HASH_LEN - 1) / HASH_LEN = n := by simp only [HASH_LEN]; omega
-  rw [hkdf_eq (by simp only [HASH_LEN]; omega), hcount, ← blocks_size (hmac salt ikm) info n,
-    ByteArray.extract_zero_size]
+  have hcount : (HASH_LEN * n + HASH_LEN - 1) / HASH_LEN = n := by
+    simp only [HASH_LEN, Sha256.DIGEST_SIZE_BYTES]; omega
+  rw [hkdf_eq (by simp only [HASH_LEN, Sha256.DIGEST_SIZE_BYTES]; omega), hcount,
+    ← blocks_size (hmac salt ikm) info n, ByteArray.extract_zero_size]
 
 /-! ## Error codes -/
 

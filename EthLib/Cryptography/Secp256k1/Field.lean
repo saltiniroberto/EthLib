@@ -1,7 +1,5 @@
 module
 
-public import EthLib.Cryptography.Inverse
-
 /-!
 # `Secp256k1.Field`
 
@@ -16,9 +14,7 @@ Each field is `Fin` of its modulus, so every element is below the modulus by con
 
 Core gives `Fin` its `+`, `-`, `*` and negation, all reduced mod the modulus.
 
-An inverse comes from the extended Euclidean algorithm.
-
-A square root is a power too, because `p = 3 mod 4`.
+Other files of this module give the Montgomery form of `Fp`, the inverses and the square root.
 
 No division is defined.
 
@@ -65,33 +61,12 @@ namespace Fp
 /-- `a^e`, for an exponent below `2^256`. -/
 def pow (a : Fp) (e : Nat) : Fp := Fin.powBits 256 a e
 
-/-- The inverse of `a`, by the extended Euclidean algorithm.
-
-It sends `0` to `0`. -/
-def inv (a : Fp) : Fp := Fin.inverse a
-
-/-- A square root of `a`, or `none` when `a` is not a square.
-
-Since `p = 3 mod 4`, a square `a` has the root `c = a^((p + 1) / 4)`.
-
-By Euler's criterion, `c^2 = a^((p + 1) / 2) = a * a^((p - 1) / 2) = a`.
-
-When `a` is not a square, `c^2 != a`, so the check rejects it. -/
-def sqrt (a : Fp) : Option Fp :=
-  let c := a.pow ((modulus + 1) / 4)
-  if c * c = a then some c else none
-
 end Fp
 
 namespace Fn
 
 /-- `a^e`, for an exponent below `2^256`. -/
 def pow (a : Fn) (e : Nat) : Fn := Fin.powBits 256 a e
-
-/-- The inverse of `a`, by the extended Euclidean algorithm.
-
-It sends `0` to `0`. -/
-def inv (a : Fn) : Fn := Fin.inverse a
 
 end Fn
 

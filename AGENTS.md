@@ -16,6 +16,12 @@ For example, a signature scheme needs a cryptographer, a fork-choice rule needs 
 Adapt the role to each task.
 Hold the work to the standard that specialist would accept.
 
+A defect that your work finds in an upstream document is always reported upstream ([CONTRIBUTING.md, Defects found upstream](CONTRIBUTING.md#defects-found-upstream)).
+Also check how the implementations of that rule handle the defect, and report each one that is wrong.
+Report a vulnerability privately ([CONTRIBUTING.md, Implementations of an affected rule](CONTRIBUTING.md#implementations-of-an-affected-rule)).
+
+leanVM issues and pull requests carry the `leanVM` label; agents do not review them unless a person asks ([CONTRIBUTING.md, leanVM work](CONTRIBUTING.md#leanvm-work)).
+
 ## Write prose
 
 Use this workflow for documents, doc comments, other comments, commit messages, pull request and issue text, and review comments.

@@ -2,6 +2,7 @@ module
 
 public import EthLib.Serialization.Ssz.Typed.Collections
 public import EthLib.Serialization.Proofs.Ssz.Typed.Basic
+import EthLib.Base.Proofs.Bytes
 
 /-!
 # Proofs: typed SSZ collections are lawful
@@ -43,14 +44,20 @@ theorem ofElements_eq {α : Type} [SszType α] (elements : List Value) :
 
 variable {α : Type} [SszType α] [LawfulSszType α]
 
-/-- Converted elements read back as the elements they came from. -/
-theorem ofElements_map (items : List α) : ofElements (items.map toValue) = .ok items.toArray := by
+/-- Elements that each read back from their value read back as a list. -/
+theorem ofElements_map_of {α : Type} [SszType α]
+    (back : ∀ a : α, ofValue (toValue a) = .ok a) (items : List α) :
+    ofElements (items.map toValue) = .ok items.toArray := by
   suffices read : (items.map toValue).mapM (ofValue (α := α)) = .ok items by
     simp [ofElements_eq, read, Functor.map, Except.map]
   induction items with
   | nil => rfl
   | cons item rest ih =>
-    simp [List.mapM_cons, LawfulSszType.ofValue_toValue, ih, bind, Except.bind, pure, Except.pure]
+    simp [List.mapM_cons, back, ih, bind, Except.bind, pure, Except.pure]
+
+/-- Converted elements read back as the elements they came from. -/
+theorem ofElements_map (items : List α) : ofElements (items.map toValue) = .ok items.toArray :=
+  ofElements_map_of LawfulSszType.ofValue_toValue items
 
 /-- Elements that read back are the values that their typed elements stand for. -/
 theorem map_toValue_of_ofElements {elements : List Value} {items : Array α}
@@ -162,8 +169,7 @@ instance {α : Type} [SszType α] [LawfulSszType α] {length : Nat} [NeZero leng
     simp [desc, Desc.wellFormed, NeZero.ne length, LawfulSszType.wellFormed (α := α)]
   fits v := .vector (by simp) (forall_fits_map v.toList)
   ofValue_toValue v := by
-    simp [toValue, ofValue, ofElements_map, bind, Except.bind, pure, Except.pure,
-      Vector.toArray_toList]
+    simp [toValue, ofValue, ofElements_map, bind, Except.bind, Vector.toArray_toList]
   toValue_of_ofValue {value v} made := by
     cases value <;> simp only [ofValue] at made <;> try cases made
     rename_i elements
@@ -171,16 +177,17 @@ instance {α : Type} [SszType α] [LawfulSszType α] {length : Nat} [NeZero leng
     | error fault => simp [read, bind, Except.bind] at made
     | ok items =>
       by_cases exact : items.size = length
-      · simp only [read, exact, bind, Except.bind, dite_true, pure, Except.pure,
+      · simp only [read, bind, Except.bind, Base.exactArray_of_size_eq _ exact,
           Except.ok.injEq] at made
         subst made
         simp [toValue, ← map_toValue_of_ofElements read]
-      · simp [read, exact, bind, Except.bind] at made
+      · simp [read, bind, Except.bind, Base.exactArray_of_size_ne _ exact] at made
   ofValue_ne_error {value fault} fits made := by
     cases fits with
     | vector count each =>
       obtain ⟨items, read, size⟩ := ofElements_ok each
-      simp [ofValue, read, count, size, bind, Except.bind, pure, Except.pure] at made
+      simp [ofValue, read, Base.exactArray_of_size_eq _ (size.trans count), bind,
+        Except.bind] at made
   encode_eq v := by
     by_cases fixed : (desc α).isFixed
     · simp only [encode, fixed, ite_true, encodeFixedElements_eq fixed, desc, toValue,
@@ -256,18 +263,20 @@ theorem SszList.deserialize_uint8_eq_ok_iff {limit : Nat} {data : ByteArray}
 instance {length : Nat} [NeZero length] : LawfulSszType (Bitvector length) where
   wellFormed := by simp [desc, Desc.wellFormed, NeZero.ne length]
   fits b := .bitVector b.bits.size_toArray
-  ofValue_toValue b := by simp [toValue, ofValue, b.bits.size_toArray]
+  ofValue_toValue b := by simp [toValue, ofValue, Functor.map, Except.map]
   toValue_of_ofValue {value b} made := by
     cases value <;> simp only [ofValue] at made <;> try cases made
     rename_i data
     by_cases exact : data.size = length
-    · simp only [exact, dite_true, Except.ok.injEq] at made
+    · simp only [Base.exactArray_of_size_eq _ exact, Functor.map, Except.map,
+        Except.ok.injEq] at made
       subst made
       rfl
-    · simp [exact] at made
+    · simp [Base.exactArray_of_size_ne _ exact, Functor.map, Except.map] at made
   ofValue_ne_error {value fault} fits made := by
     cases fits with
-    | bitVector exact => simp [ofValue, exact] at made
+    | bitVector exact =>
+      simp [ofValue, Base.exactArray_of_size_eq _ exact, Functor.map, Except.map] at made
 
 instance {limit : Nat} : LawfulSszType (Bitlist limit) where
   wellFormed := rfl

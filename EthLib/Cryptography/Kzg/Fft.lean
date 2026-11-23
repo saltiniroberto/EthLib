@@ -104,6 +104,11 @@ The values and the roots of unity must have the same length, a power of two.
 
 Values of any other shape have no transform, and they come back unchanged. -/
 def fftFieldIter (vals roots : Array Fr) : Array Fr :=
+  -- The butterflies of the recursive radix-2 FFT, run stage by stage in a loop.
+  --
+  -- With `L` and `R` the transforms of the even and the odd entries, `o_i = L_i + w_i R_i`.
+  --
+  -- Likewise `o_(i + n/2) = L_i - w_i R_i`, where `w_i` is root `i` and `n` the length.
   if h : vals.size = 2 ^ vals.size.log2 ∧ roots.size = vals.size then
     (fftStages ⟨roots, h.2⟩ vals.size.log2
       ⟨bitReversalPermutation vals, by simp [bitReversalPermutation]⟩ 1
@@ -119,20 +124,25 @@ def fftField
     (vals : Array Fr) (rootsOfUnity : Array Fr)
     (inv : Bool := false) : Array Fr :=
   if inv then
+    -- The inverse `1 / n = n^(r - 2)` of the length `n` in `Fr`.
     let invlen := (Fr.ofNat vals.size).inverse
+    -- The roots in reverse order after the first: `w_0, w_(n-1), ..., w_1`.
+    --
     -- Root `i` of the inverse is root `n - i` of the forward transform, and root `0` stays.
     let n := rootsOfUnity.size
     let reversed := Array.ofFn (n := n) fun i =>
       rootsOfUnity[(n - i.val) % n]'(Nat.mod_lt _ (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+    -- Each output of the transform with these roots is multiplied by `1 / n`.
     (fftFieldIter vals reversed).map (· * invlen)
   else
+    -- The forward transform, with the roots as given.
     fftFieldIter vals rootsOfUnity
 
 /-- The FFT in `G1` of `2^k` points, by the Cooley-Tukey recursion.
 
-```text
-    out[i] = sum_j [rootsOfUnity[i]^j] vals[j]
-```
+Output `i` is `sum_j [w_i^j] vals[j]`, where `w_i` is entry `i` of the roots of unity.
+
+Computing each cell proof on its own needs no FFT in `G1`; the FK20 cell proofs use this one.
 
 The butterflies are those of the FFT over `Fr`.
 
@@ -144,6 +154,7 @@ def fftG1Vector : (k : Nat) → Vector Bls.G1 (2 ^ k) → Vector Fr (2 ^ k) → 
     let l := fftG1Vector k (everyOther vals 0) halfRoots
     let r := fftG1Vector k (everyOther vals 1) halfRoots
     -- Each product [root_i] r_i serves two outputs, so it is computed once.
+    --
     -- The products are independent, so each runs as its own task.
     let tasks := Vector.ofFn (n := 2 ^ k) fun i => Task.spawn fun _ =>
       Bls.G1.mul r[i] (rootsOfUnity[i.val]'(by
@@ -173,12 +184,14 @@ def fftG1 (vals : Array Bls.G1) (rootsOfUnity : Array Fr) : Array Bls.G1 :=
 /-- Multiply successive values by successive powers of `factor`, starting at `shift`. -/
 def shiftValsAux (factor : Fr) : Fr → List Fr → List Fr
   | _, [] => []
+  -- Value `i` is multiplied by the current shift, then the shift is multiplied by `factor`.
   | shift, v :: rest => (v * shift) :: shiftValsAux factor (shift * factor) rest
 
 /-- Multiply `vals[i]` by `factor ^ i`, shifting the values onto a coset. -/
 def shiftVals
     (vals : Array Fr) (factor : Fr)
     : Array Fr :=
+  -- The shift starts at `1`, so value `i` is multiplied by `factor^i`.
   (shiftValsAux factor Fr.one vals.toList).toArray
 
 /-- The FFT or the inverse FFT over a coset of the roots of unity.
@@ -187,12 +200,17 @@ It serves to divide by a polynomial that vanishes on the unshifted domain. -/
 def cosetFftField
     (vals : Array Fr) (rootsOfUnity : Array Fr)
     (inv : Bool := false) : Array Fr :=
+  -- The coset is shifted by `g = 7`, which generates the multiplicative group of `Fr`.
   let shiftFactor : Fr := Fr.ofNat PRIMITIVE_ROOT_OF_UNITY
   if inv then
+    -- The inverse transform comes first.
     let post := fftField vals rootsOfUnity inv
+    -- Then value `i` is multiplied by `g^(-i)`.
     shiftVals post shiftFactor.inverse
   else
+    -- Value `i` is first multiplied by `g^i`.
     let pre := shiftVals vals shiftFactor
+    -- Then the forward transform of the shifted values.
     fftField pre rootsOfUnity inv
 
 end EthLib.Cryptography.Kzg

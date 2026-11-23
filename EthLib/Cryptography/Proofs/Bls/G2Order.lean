@@ -17,7 +17,7 @@ The twist also matches draft-07, §4.2.1.
 <https://datatracker.ietf.org/doc/html/draft-irtf-cfrg-pairing-friendly-curves-07>
 
 - The kernel checks `[r] g_2 = 0` in the model of `Fp`, by double and add on a fuel argument.
-- Since `r` is prime and `g_2 != 0`, the order of `g_2` is exactly `r`.
+- Since `r` is prime and `g_2 ≠ 0`, the order of `g_2` is exactly `r`.
 - The map `s ↦ [s] g_2` is linear in `s` modulo `r`.
 -/
 
@@ -26,69 +26,16 @@ The twist also matches draft-07, §4.2.1.
 namespace EthLib.Cryptography.Bls.G2
 
 open WeierstrassCurve.Jacobian
+open G1 (projectiveEq)
 
 set_option maxRecDepth 8000
 
 /-! ## `[r] * g_2 = 0` -/
 
-/-- Fuel-based double-and-add, structurally recursive so the kernel can evaluate it.
-
-The spec's `mulNat` is well-founded recursion, which does not reduce definitionally. -/
-def mulNatAux {F : Type} [BaseField F] : Nat → G2 F → Nat → G2 F
-  | 0, _, _ => zero
-  | fuel + 1, p, k =>
-    if k = 0 then zero
-    else
-      let half := mulNatAux fuel (double p) (k / 2)
-      if k % 2 = 1 then add p half else half
-
-theorem mulNatAux_eq (fuel : Nat) (p : G2) (k : Nat)
-    (hk : k < 2 ^ fuel) : mulNatAux fuel p k = mulNat p k := by
-  induction fuel generalizing p k with
-  | zero =>
-    have : k = 0 := by simpa using hk
-    subst this
-    rw [mulNatAux, mulNat_def]
-    simp
-  | succ fuel ih =>
-    rw [mulNatAux, mulNat_def]
-    by_cases h0 : k = 0
-    · simp [h0]
-    · have h2 : k / 2 < 2 ^ fuel := by
-        rw [Nat.pow_succ] at hk
-        omega
-      rw [ite_eq_right h0, ite_eq_right h0, ih (double p) (k / 2) h2]
-
-/-- A map of base fields commutes with the ladder. -/
-theorem map_mulNatAux {F G : Type} [BaseField F] [BaseField G] (f : BaseField.Hom F G)
-    (fuel : Nat) (p : G2 F) (k : Nat) :
-    map f (mulNatAux fuel p k) = mulNatAux fuel (map f p) k := by
-  induction fuel generalizing p k with
-  | zero => exact map_zero f
-  | succ fuel ih =>
-    rw [mulNatAux, mulNatAux]
-    split
-    · exact map_zero f
-    · dsimp only
-      rw [← map_double, ← ih]
-      split
-      · exact map_add f _ _
-      · rfl
-
-/-- A map of base fields commutes with the sum, written as a function. -/
-theorem map_add_fn {F G : Type} [BaseField F] [BaseField G] (f : BaseField.Hom F G)
-    (p q : G2 F) : map f (add p q) = add (map f p) (map f q) :=
-  map_add f p q
-
-/-- A map of base fields commutes with the negation, written as a function. -/
-theorem map_neg_fn {F G : Type} [BaseField F] [BaseField G] (f : BaseField.Hom F G)
-    (p : G2 F) : map f (neg p) = neg (map f p) :=
-  map_neg f p
-
 /-- A map of base fields keeps the projective equality of two points. -/
 theorem map_projectiveEq {F G : Type} [BaseField F] [BaseField G] (f : BaseField.Hom F G)
-    (p q : G2 F) : projectiveEq (map f p) (map f q) = projectiveEq p q := by
-  simp only [projectiveEq, map, Fp2.map_isZero, ← Fp2.map_mul, Fp2.map_beq]
+    (p q : G2 F) : projectiveEq (map f p) (map f q) = projectiveEq p q :=
+  G1.map_projectiveEq _ p q
 
 /-- The test for the point at infinity reads the same on the image in the model. -/
 theorem isInfinity_model (p : G2) : p.isInfinity = (map Fp.toModel p).isInfinity :=
@@ -113,7 +60,7 @@ macro "decide_g2_at_model" "[" ids:Lean.Parser.Tactic.simpLemma,* "]" : tactic =
                Fp.toModel_ofNat, Fp.toModel_zero, Fp.toModel_one, $ids,*]
              decide +kernel))
 
-/-- `[r]g₂` is the point at infinity.
+/-- `[r]g_2` is the point at infinity.
 
 The kernel runs the ladder in the model, 255 doublings and additions on 381-bit integers. -/
 theorem modulus_smul_generator :
@@ -130,13 +77,13 @@ theorem modulus_smul_generator :
   exact h
 
 theorem toPoint_generator_ne_zero : toPoint generator ≠ 0 := by
-  -- Because `z = 1 != 0`, `generator` maps to `Point.some ...`, which cannot equal `Point.zero`.
+  -- Because `z = 1 ≠ 0`, `generator` maps to `Point.some ...`, which cannot equal `Point.zero`.
   have hz : ¬ (Fp2.one : Fp2).isZero = true := by rw [Fp2.one_isZero]; decide
   rw [toPoint, Point.toAffine_of_Z_ne_zero valid_generator
     (by exact fun h => absurd (isZero_iff.mpr h) hz)]
   exact fun h => by cases h
 
-/-- Because `r` is prime and `[r] * g_2 = 0` with `g_2 != 0`, the order of `g_2` cannot be `1` and must be `r`. -/
+/-- Because `r` is prime and `[r] * g_2 = 0` with `g_2 ≠ 0`, the order of `g_2` is `r`. -/
 theorem addOrderOf_toPoint_generator :
     addOrderOf (toPoint generator) = Fr.modulus :=
   addOrderOf_eq_prime modulus_smul_generator toPoint_generator_ne_zero
@@ -145,7 +92,7 @@ theorem addOrderOf_toPoint_generator :
 
 theorem nsmul_generator_mod (k : Nat) :
     k • toPoint generator = (k % Fr.modulus) • toPoint generator := by
-  -- Split `k = r * (k / r) + k % r` and annihilate the multiple of `r`.
+  -- Split `k = r * (k / r) + k mod r` and annihilate the multiple of `r`.
   conv_lhs => rw [← Nat.div_add_mod k Fr.modulus]
   rw [add_nsmul, Nat.mul_comm Fr.modulus (k / Fr.modulus), mul_nsmul',
       modulus_smul_generator, nsmul_zero]

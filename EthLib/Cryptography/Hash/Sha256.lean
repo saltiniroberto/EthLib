@@ -22,9 +22,15 @@ namespace EthLib.Cryptography.Hash.Sha256
 
 /-! ## Words -/
 
+/-- The size `w` of a word, in bits, FIPS 180-4 §1 and §2.2.1. -/
+def WORD_BITS : UInt32 := 32
+
 /-- Rotation right by `n` bits, ROTR of FIPS 180-4 §3.2. -/
 @[inline] def rotr (x : UInt32) (n : UInt32) : UInt32 :=
-  (x >>> n) ||| (x <<< (32 - n))
+  -- The word moved down by `n` bits, which drops its low `n` bits.
+  (x >>> n) |||
+  -- Those low `n` bits, moved up to the top of the word.
+  (x <<< (WORD_BITS - n))
 
 /-- Shift right by `n` bits, SHR of FIPS 180-4 §3.2. -/
 @[inline] def shr (x : UInt32) (n : UInt32) : UInt32 := x >>> n
@@ -35,22 +41,22 @@ namespace EthLib.Cryptography.Hash.Sha256
 /-- Maj of FIPS 180-4 §4.1.2 (4.3): each bit that at least two of the three words share. -/
 @[inline] def maj (x y z : UInt32) : UInt32 := (x &&& y) ^^^ (x &&& z) ^^^ (y &&& z)
 
-/-- Σ0 of FIPS 180-4 §4.1.2 (4.4). -/
+/-- Σ_0^{256} of FIPS 180-4 §4.1.2 (4.4). -/
 @[inline] def bigSigma0 (x : UInt32) : UInt32 := rotr x 2 ^^^ rotr x 13 ^^^ rotr x 22
 
-/-- Σ1 of FIPS 180-4 §4.1.2 (4.5). -/
+/-- Σ_1^{256} of FIPS 180-4 §4.1.2 (4.5). -/
 @[inline] def bigSigma1 (x : UInt32) : UInt32 := rotr x 6 ^^^ rotr x 11 ^^^ rotr x 25
 
-/-- σ0 of FIPS 180-4 §4.1.2 (4.6). -/
+/-- σ_0^{256} of FIPS 180-4 §4.1.2 (4.6). -/
 @[inline] def smallSigma0 (x : UInt32) : UInt32 := rotr x 7 ^^^ rotr x 18 ^^^ shr x 3
 
-/-- σ1 of FIPS 180-4 §4.1.2 (4.7). -/
+/-- σ_1^{256} of FIPS 180-4 §4.1.2 (4.7). -/
 @[inline] def smallSigma1 (x : UInt32) : UInt32 := rotr x 17 ^^^ rotr x 19 ^^^ shr x 10
 
 /-! ## Constants -/
 
 /--
-The round constants K₀ to K₆₃, FIPS 180-4 §4.2.2.
+The round constants K_0^{256} to K_63^{256}, FIPS 180-4 §4.2.2.
 
 Each is the first 32 bits of the fractional part of the cube root of one of the first 64 primes.
 -/
@@ -65,7 +71,7 @@ def K : Vector UInt32 64 := #v[
   0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2 ]
 
 /--
-The initial hash value H⁽⁰⁾, FIPS 180-4 §5.3.3.
+The initial hash value H^(0), FIPS 180-4 §5.3.3.
 
 Each is the first 32 bits of the fractional part of the square root of one of the first 8 primes.
 -/
@@ -74,32 +80,59 @@ def IV : Vector UInt32 8 := #v[
 
 /-! ## Padding -/
 
-/-- The zero bytes between the `0x80` byte and the length, so that the blocks are whole. -/
-def paddingZeros (size : Nat) : Nat := (64 - (size + 9) % 64) % 64
+/-- The size `m` of a message block, 512 bits, in bytes, FIPS 180-4 §1 and §2.2.1. -/
+def BLOCK_SIZE_BYTES : Nat := 64
+
+/-- The size of the block that holds the message length, 64 bits, in bytes, FIPS 180-4 §5.1.1. -/
+def LENGTH_SIZE_BYTES : Nat := 8
+
+/--
+The zero bytes between the `0b10000000` byte and the length, so that the blocks are whole.
+
+They are the fewest that bring the message, that byte, them and the length to whole blocks.
+-/
+def paddingZeros (size : Nat) : Nat :=
+  (BLOCK_SIZE_BYTES - (size + 1 + LENGTH_SIZE_BYTES) % BLOCK_SIZE_BYTES) % BLOCK_SIZE_BYTES
 
 /--
 The length of a message in bits, as eight big-endian bytes.
 
-FIPS 180-4 §5.1.1 admits fewer than 2⁶⁴ bits, so the length of an admitted message fits.
+FIPS 180-4 §5.1.1 admits fewer than 2^64 bits, so the length of an admitted message fits.
 -/
 def lengthBytes (size : Nat) : ByteArray :=
   let bits : UInt64 := UInt64.ofNat size * 8
   ⟨Array.ofFn fun i : Fin 8 => (bits >>> (56 - 8 * UInt64.ofNat i.val)).toUInt8⟩
 
 /--
-The padded message, FIPS 180-4 §5.1.1: the message, a set bit, zeros, then its length in bits.
+The padded message, FIPS 180-4 §5.1.1.
 
-The message is whole bytes, so the set bit and the seven zero bits after it are the byte `0x80`.
+It has four parts, in order:
+
+- The message itself, of `l` bits.
+- The byte `0b10000000`: the bit 1, then seven zero bits, since `l` is a multiple of 8.
+- The fewest zero bits that bring the size to 448 modulo 512.
+- The 64-bit block that holds `l`, big-endian, which completes the last 512-bit block.
 -/
 def pad (message : ByteArray) : ByteArray :=
-  message ++ ⟨#[0x80]⟩ ++ ⟨Array.replicate (paddingZeros message.size) 0⟩ ++
+  message ++ ⟨#[0b10000000]⟩ ++ ⟨Array.replicate (paddingZeros message.size) 0⟩ ++
     lengthBytes message.size
 
 /-! ## Words of four bytes -/
 
-/-- Four bytes read as one big-endian word, FIPS 180-4 §3.1. -/
+/--
+Four bytes read as one big-endian word, FIPS 180-4 §3.1.
+
+The first byte is the most significant.
+-/
 @[inline] def big32 (b0 b1 b2 b3 : UInt8) : UInt32 :=
-  b0.toUInt32 <<< 24 ||| b1.toUInt32 <<< 16 ||| b2.toUInt32 <<< 8 ||| b3.toUInt32
+  -- The first byte fills bits 31 to 24.
+  b0.toUInt32 <<< 24 |||
+  -- The second byte fills bits 23 to 16.
+  b1.toUInt32 <<< 16 |||
+  -- The third byte fills bits 15 to 8.
+  b2.toUInt32 <<< 8 |||
+  -- The last byte fills bits 7 to 0.
+  b3.toUInt32
 
 /-! ## One block -/
 
@@ -117,82 +150,179 @@ structure Window where
 /--
 The first sixteen words of the schedule are those of the block, FIPS 180-4 §6.2.2, step 1.
 
-The block is the 64 bytes from an offset, and word `j` is the four from `4j` on, big-endian.
+The block is the `m / 8` bytes of `bytes` from `start`.
+
+Word `j` of the block is its four bytes from `4j` on, read big-endian.
 -/
-def Window.ofBlock (bytes : ByteArray) (start : Nat) (whole : start + 64 ≤ bytes.size) :
+def Window.ofBlock (bytes : ByteArray) (start : Nat)
+    (whole : start + BLOCK_SIZE_BYTES ≤ bytes.size) :
     Window :=
-  let word (j : Nat) (within : j < 16) : UInt32 :=
-    big32 (bytes[start + 4 * j]'(by omega)) (bytes[start + 4 * j + 1]'(by omega))
-      (bytes[start + 4 * j + 2]'(by omega)) (bytes[start + 4 * j + 3]'(by omega))
-  ⟨word 0 (by decide), word 1 (by decide), word 2 (by decide), word 3 (by decide),
-    word 4 (by decide), word 5 (by decide), word 6 (by decide), word 7 (by decide),
-    word 8 (by decide), word 9 (by decide), word 10 (by decide), word 11 (by decide),
-    word 12 (by decide), word 13 (by decide), word 14 (by decide), word 15 (by decide)⟩
+  -- Word `j` is the bytes at `4j` to `4j + 3` of the block, the first one most significant.
+  let word (j : Fin 16) : UInt32 :=
+    -- Since `j` is at most 15, every index is below `start + 64`, so inside the array.
+    big32 (bytes[start + 4 * j]'(by unfold BLOCK_SIZE_BYTES at whole; omega))
+      (bytes[start + 4 * j + 1]'(by unfold BLOCK_SIZE_BYTES at whole; omega))
+      (bytes[start + 4 * j + 2]'(by unfold BLOCK_SIZE_BYTES at whole; omega))
+      (bytes[start + 4 * j + 3]'(by unfold BLOCK_SIZE_BYTES at whole; omega))
+  -- The words `W_0` to `W_15`, in order.
+  ⟨word 0, word 1, word 2, word 3, word 4, word 5, word 6, word 7,
+    word 8, word 9, word 10, word 11, word 12, word 13, word 14, word 15⟩
 
 /--
-The schedule one word later, FIPS 180-4 §6.2.2, step 1.
+The schedule sixteen words later, FIPS 180-4 §6.2.2, step 1.
 
-The new last word is `W_(t+16) = W_t + σ0(W_(t+1)) + W_(t+9) + σ1(W_(t+14))`.
+From the words `W_t` to `W_(t+15)`, it gives the words `W_(t+16)` to `W_(t+31)`.
+
+Each new word is `W_u = W_(u-16) + σ_0^{256}(W_(u-15)) + W_(u-7) + σ_1^{256}(W_(u-2))`.
+
+The later new words read the earlier new words, so they are computed in order.
+
+The rounds use one window for sixteen rounds.
 -/
 def Window.next (w : Window) : Window :=
-  ⟨w.w1, w.w2, w.w3, w.w4, w.w5, w.w6, w.w7, w.w8, w.w9, w.w10, w.w11, w.w12, w.w13, w.w14, w.w15,
-    w.w0 + smallSigma0 w.w1 + w.w9 + smallSigma1 w.w14⟩
-
-/-- One round on the working variables a to h, FIPS 180-4 §6.2.2, step 3. -/
-@[inline] def round (s : State) (constant word : UInt32) : State :=
-  let t1 := s.h + bigSigma1 s.e + ch s.e s.f s.g + constant + word
-  let t2 := bigSigma0 s.a + maj s.a s.b s.c
-  ⟨t1 + t2, s.a, s.b, s.c, s.d + t1, s.e, s.f, s.g⟩
-
-/-- One round per constant, each with the first word of the schedule, which then moves on. -/
-def rounds : List UInt32 → Window → State → State
-  | [], _, s => s
-  | constant :: rest, w, s => rounds rest w.next (round s constant w.w0)
+  -- `n_i` is `W_(t+16+i)`; an operand past `W_(t+15)` is an earlier `n`.
+  let n0 := w.w0 + smallSigma0 w.w1 + w.w9 + smallSigma1 w.w14
+  let n1 := w.w1 + smallSigma0 w.w2 + w.w10 + smallSigma1 w.w15
+  let n2 := w.w2 + smallSigma0 w.w3 + w.w11 + smallSigma1 n0
+  let n3 := w.w3 + smallSigma0 w.w4 + w.w12 + smallSigma1 n1
+  let n4 := w.w4 + smallSigma0 w.w5 + w.w13 + smallSigma1 n2
+  let n5 := w.w5 + smallSigma0 w.w6 + w.w14 + smallSigma1 n3
+  let n6 := w.w6 + smallSigma0 w.w7 + w.w15 + smallSigma1 n4
+  let n7 := w.w7 + smallSigma0 w.w8 + n0 + smallSigma1 n5
+  let n8 := w.w8 + smallSigma0 w.w9 + n1 + smallSigma1 n6
+  let n9 := w.w9 + smallSigma0 w.w10 + n2 + smallSigma1 n7
+  let n10 := w.w10 + smallSigma0 w.w11 + n3 + smallSigma1 n8
+  let n11 := w.w11 + smallSigma0 w.w12 + n4 + smallSigma1 n9
+  let n12 := w.w12 + smallSigma0 w.w13 + n5 + smallSigma1 n10
+  let n13 := w.w13 + smallSigma0 w.w14 + n6 + smallSigma1 n11
+  let n14 := w.w14 + smallSigma0 w.w15 + n7 + smallSigma1 n12
+  let n15 := w.w15 + smallSigma0 n0 + n8 + smallSigma1 n13
+  ⟨n0, n1, n2, n3, n4, n5, n6, n7, n8, n9, n10, n11, n12, n13, n14, n15⟩
 
 /--
-The hash value after one more block, FIPS 180-4 §6.2.2, steps 2 to 4.
+Round `t` on the working variables a to h, FIPS 180-4 §6.2.2, step 3.
 
-The working variables start as the hash value, go through the rounds, and are added back to it.
+It takes the constant `K_t^{256}` and the schedule word `W_t`, and adds modulo 2^32:
 
-The block is the 64 bytes from an offset.
+- `T1 = h + Σ_1^{256}(e) + Ch(e, f, g) + K_t^{256} + W_t`
+- `T2 = Σ_0^{256}(a) + Maj(a, b, c)`
+- `h = g`, `g = f`, `f = e`, `e = d + T1`
+- `d = c`, `c = b`, `b = a`, `a = T1 + T2`
 -/
-def compress (s : State) (bytes : ByteArray) (start : Nat) (whole : start + 64 ≤ bytes.size) :
+@[inline] def round (s : State) (K_t W_t : UInt32) : State :=
+  let T1 := s.h + bigSigma1 s.e + ch s.e s.f s.g + K_t + W_t
+  let T2 := bigSigma0 s.a + maj s.a s.b s.c
+  { h := s.g, g := s.f, f := s.e, e := s.d + T1, d := s.c, c := s.b, b := s.a, a := T1 + T2 }
+
+/--
+Rounds `t` to `t + 15` of FIPS 180-4 §6.2.2, step 3.
+
+The window holds `W_t` to `W_(t+15)`, and round `t + j` takes `K_(t+j)^{256}` and `W_(t+j)`.
+-/
+@[inline] def rounds (s : State) (w : Window) (t : Nat) (inside : t + 16 ≤ 64) : State :=
+  let s := round s (K[t + 0]'(by omega)) w.w0
+  let s := round s (K[t + 1]'(by omega)) w.w1
+  let s := round s (K[t + 2]'(by omega)) w.w2
+  let s := round s (K[t + 3]'(by omega)) w.w3
+  let s := round s (K[t + 4]'(by omega)) w.w4
+  let s := round s (K[t + 5]'(by omega)) w.w5
+  let s := round s (K[t + 6]'(by omega)) w.w6
+  let s := round s (K[t + 7]'(by omega)) w.w7
+  let s := round s (K[t + 8]'(by omega)) w.w8
+  let s := round s (K[t + 9]'(by omega)) w.w9
+  let s := round s (K[t + 10]'(by omega)) w.w10
+  let s := round s (K[t + 11]'(by omega)) w.w11
+  let s := round s (K[t + 12]'(by omega)) w.w12
+  let s := round s (K[t + 13]'(by omega)) w.w13
+  let s := round s (K[t + 14]'(by omega)) w.w14
+  let s := round s (K[t + 15]'(by omega)) w.w15
+  s
+
+/--
+The hash value `H^(i)` after the block `M^(i)`, FIPS 180-4 §6.2.2, steps 1 to 4.
+
+The block is the `m / 8` bytes of `bytes` from `start`, and `H` is `H^(i-1)`.
+
+- Step 1: the schedule starts with the sixteen words of the block.
+- Step 2: the working variables a to h are set to `H_0^(i-1)` to `H_7^(i-1)`.
+- Step 3: the 64 rounds run on them.
+- Step 4: `H_0^(i) = a + H_0^(i-1)`, and so on to `H_7^(i) = h + H_7^(i-1)`, modulo 2^32.
+-/
+def compress (H : State) (bytes : ByteArray) (start : Nat)
+    (whole : start + BLOCK_SIZE_BYTES ≤ bytes.size) :
     State :=
-  let r := rounds K.toList (Window.ofBlock bytes start whole) s
-  ⟨s.a + r.a, s.b + r.b, s.c + r.c, s.d + r.d, s.e + r.e, s.f + r.f, s.g + r.g, s.h + r.h⟩
+  -- Step 1: the schedule, sixteen words at a time, from the words of the block.
+  let w0 := Window.ofBlock bytes start whole
+  let w1 := w0.next
+  let w2 := w1.next
+  let w3 := w2.next
+  -- Steps 2 and 3: the 64 rounds, from `H^(i-1)`, sixteen on each window.
+  let r := rounds (rounds (rounds (rounds H w0 0 (by omega)) w1 16 (by omega)) w2 32 (by omega))
+    w3 48 (by omega)
+  -- Step 4: each word of `H^(i)` is a working variable plus the same word of `H^(i-1)`.
+  { a := r.a + H.a, b := r.b + H.b, c := r.c + H.c, d := r.d + H.d,
+    e := r.e + H.e, f := r.f + H.f, g := r.g + H.g, h := r.h + H.h }
 
 /--
-The hash value after some blocks of 64 bytes from an offset, each absorbed by one step.
+The loop over the blocks of FIPS 180-4 §6.2.2: for `i` from 1 to `N`, `H^(i)` from `H^(i-1)`.
 
-The step is an argument: with the compression inside, the kernel overflows on the equations.
+The blocks are the `count` blocks of `m / 8` bytes of `bytes` from `start`.
+
+The step is the compression, which computes `H^(i)` from `H^(i-1)` and the block `M^(i)`.
+
+It is an argument because, with the compression inside, the kernel overflows on the equations.
 -/
-def chain (step : State → (bytes : ByteArray) → (start : Nat) → start + 64 ≤ bytes.size → State)
-    (bytes : ByteArray) : (count start : Nat) → start + 64 * count ≤ bytes.size → State → State
-  | 0, _, _, s => s
-  | count + 1, start, whole, s =>
-    chain step bytes count (start + 64) (by omega) (step s bytes start (by omega))
+def chain
+    (step : State → (bytes : ByteArray) → (start : Nat) →
+      start + BLOCK_SIZE_BYTES ≤ bytes.size → State)
+    (bytes : ByteArray) :
+    (count start : Nat) → start + BLOCK_SIZE_BYTES * count ≤ bytes.size → State → State
+  -- No block is left, so the hash value is the last one computed.
+  | 0, _, _, H => H
+  | count + 1, start, whole, H =>
+    -- The rest of the blocks start one block later, from `H^(i)`.
+    chain step bytes count (start + BLOCK_SIZE_BYTES) (by rw [Nat.mul_succ] at whole; omega)
+      -- The block `M^(i)` starts at `start`, and the compression gives `H^(i)` from `H^(i-1)`.
+      (step H bytes start (by rw [Nat.mul_succ] at whole; omega))
 
 /-! ## The hash -/
 
 /-- The byte of a word that a right shift brings to the low eight bits. -/
 @[inline] def byteAt (w : UInt32) (shift : UInt32) : UInt8 := (w >>> shift).toUInt8
 
-/-- The final hash value as thirty-two bytes, each word big-endian, FIPS 180-4 §6.2.2. -/
-def digest (s : State) : ByteArray :=
-  ⟨#[byteAt s.a 24, byteAt s.a 16, byteAt s.a 8, byteAt s.a 0,
-    byteAt s.b 24, byteAt s.b 16, byteAt s.b 8, byteAt s.b 0,
-    byteAt s.c 24, byteAt s.c 16, byteAt s.c 8, byteAt s.c 0,
-    byteAt s.d 24, byteAt s.d 16, byteAt s.d 8, byteAt s.d 0,
-    byteAt s.e 24, byteAt s.e 16, byteAt s.e 8, byteAt s.e 0,
-    byteAt s.f 24, byteAt s.f 16, byteAt s.f 8, byteAt s.f 0,
-    byteAt s.g 24, byteAt s.g 16, byteAt s.g 8, byteAt s.g 0,
-    byteAt s.h 24, byteAt s.h 16, byteAt s.h 8, byteAt s.h 0]⟩
+/-- The size of a message digest, 256 bits, in bytes, FIPS 180-4 §1. -/
+def DIGEST_SIZE_BYTES : Nat := 32
 
-/-- SHA-256 of a message, FIPS 180-4 §6.2: every block of the padded message, in order. -/
+/--
+The message digest `H_0^(N) ‖ H_1^(N) ‖ ... ‖ H_7^(N)`, FIPS 180-4 §6.2.2, as 32 bytes.
+
+Each word is written big-endian, as FIPS 180-4 §3.1 does.
+-/
+def digest (H : State) : ByteArray :=
+  -- One word per line, `H_0^(N)` to `H_7^(N)`, each most significant byte first.
+  ⟨#[byteAt H.a 24, byteAt H.a 16, byteAt H.a 8, byteAt H.a 0,
+    byteAt H.b 24, byteAt H.b 16, byteAt H.b 8, byteAt H.b 0,
+    byteAt H.c 24, byteAt H.c 16, byteAt H.c 8, byteAt H.c 0,
+    byteAt H.d 24, byteAt H.d 16, byteAt H.d 8, byteAt H.d 0,
+    byteAt H.e 24, byteAt H.e 16, byteAt H.e 8, byteAt H.e 0,
+    byteAt H.f 24, byteAt H.f 16, byteAt H.f 8, byteAt H.f 0,
+    byteAt H.g 24, byteAt H.g 16, byteAt H.g 8, byteAt H.g 0,
+    byteAt H.h 24, byteAt H.h 16, byteAt H.h 8, byteAt H.h 0]⟩
+
+/--
+SHA-256 of a message, FIPS 180-4 §6.2.
+
+- §6.2.1: the message is padded (§5.1.1) and parsed into `N` blocks of `m / 8` bytes (§5.2.1).
+- §6.2.1: the hash value starts as `H^(0)` (§5.3.3).
+- §6.2.2: for `i` from 1 to `N`, the compression of the block `M^(i)` gives `H^(i)`.
+- §6.2.2: the message digest is `H^(N)`, as bytes.
+-/
 def hash (message : ByteArray) : ByteArray :=
+  -- The padded message is whole blocks.
   let padded := pad message
-  digest (chain compress padded (padded.size / 64) 0
-    (by have := Nat.mul_div_le padded.size 64; omega) initial)
+  -- All `N` blocks from `H^(0)`, then the digest of `H^(N)`.
+  digest (chain compress padded (padded.size / BLOCK_SIZE_BYTES) 0
+    (by have := Nat.mul_div_le padded.size BLOCK_SIZE_BYTES; omega) initial)
 
 /-- SHA-256 of a message, as its 32 bytes. -/
 def hash32 (message : ByteArray) : Vector UInt8 32 :=

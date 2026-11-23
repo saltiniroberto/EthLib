@@ -6,6 +6,7 @@ public import EthLib.Cryptography.Proofs.Bls.FpZMod
 public import EthLib.Cryptography.Proofs.Bls.Compress
 public import EthLib.Cryptography.Proofs.Bls.FpModel
 public import EthLib.Cryptography.Proofs.Bls.BaseFieldMap
+public import EthLib.Cryptography.Proofs.Fp2
 public import Mathlib.Tactic.Ring
 public import Mathlib.Tactic.LinearCombination
 
@@ -33,14 +34,13 @@ There the kernel computes on natural numbers.
 
 namespace EthLib.Cryptography.Bls.Fp2
 
+open Cryptography.Fp2 (c0 c1 beq isZero conjugate inverse)
+
 /-! ## Extensionality and basic projections -/
 
 @[ext]
 theorem ext {a b : Fp2} (h0 : a.c0 = b.c0) (h1 : a.c1 = b.c1) : a = b := by
   cases a; cases b; simp_all
-
-instance : Zero Fp2 := ⟨zero⟩
-instance : One Fp2 := ⟨one⟩
 
 @[simp] theorem zero_eq_zero : zero = (0 : Fp2) := rfl
 @[simp] theorem one_eq_one : one = (1 : Fp2) := rfl
@@ -67,75 +67,57 @@ instance : One Fp2 := ⟨one⟩
 
 /-! ## Boolean equality and zero check -/
 
-theorem beq_iff_eq {a b : Fp2} : a.beq b = true ↔ a = b := by
-  rw [beq, Bool.and_eq_true, Fp.baseField_beq, Fp.baseField_beq, Fp.beq_iff, Fp.beq_iff]
-  exact ⟨fun ⟨h0, h1⟩ => ext h0 h1, fun h => ⟨congrArg c0 h, congrArg c1 h⟩⟩
+theorem beq_iff_eq {a b : Fp2} : a.beq b = true ↔ a = b :=
+  Cryptography.Fp2.beq_iff Fp.embedding
 
-theorem isZero_iff {a : Fp2} : a.isZero = true ↔ a = 0 := by
-  rw [isZero, Bool.and_eq_true, Fp.baseField_isZero, Fp.baseField_isZero, Fp.isZero_iff,
-    Fp.isZero_iff]
-  exact ⟨fun ⟨h0, h1⟩ => ext h0 h1, fun h => ⟨congrArg c0 h, congrArg c1 h⟩⟩
-
-instance : LawfulBEq Fp2 where
-  eq_of_beq {a b} h := by
-    cases a; cases b
-    change (_ && _) = true at h
-    rw [Bool.and_eq_true, _root_.beq_iff_eq, _root_.beq_iff_eq] at h
-    exact ext h.1 h.2
-  rfl {a} := by
-    cases a
-    change (_ && _) = true
-    simp
-
-instance : DecidableEq Fp2 := fun a b =>
-  if h : a.beq b then isTrue (beq_iff_eq.mp h)
-  else isFalse (fun heq => h (beq_iff_eq.mpr heq))
+theorem isZero_iff {a : Fp2} : a.isZero = true ↔ a = 0 :=
+  Cryptography.Fp2.isZero_iff Fp.embedding
 
 /-! ## Ring axioms and `CommRing Fp2` -/
 
 section RingLaws
 
-protected theorem add_comm (a b : Fp2) : a + b = b + a := by
-  apply ext <;> apply Fp.toZMod.injective <;> simp <;> ring
+protected theorem add_comm (a b : Fp2) : a + b = b + a :=
+  Cryptography.Fp2.add_comm Fp.embedding a b
 
-protected theorem add_assoc (a b c : Fp2) : a + b + c = a + (b + c) := by
-  apply ext <;> apply Fp.toZMod.injective <;> simp <;> ring
+protected theorem add_assoc (a b c : Fp2) : a + b + c = a + (b + c) :=
+  Cryptography.Fp2.add_assoc Fp.embedding a b c
 
-protected theorem zero_add (a : Fp2) : 0 + a = a := by
-  apply ext <;> apply Fp.toZMod.injective <;> simp
+protected theorem zero_add (a : Fp2) : 0 + a = a :=
+  Cryptography.Fp2.zero_add Fp.embedding a
 
-protected theorem add_zero (a : Fp2) : a + 0 = a := by
-  apply ext <;> apply Fp.toZMod.injective <;> simp
+protected theorem add_zero (a : Fp2) : a + 0 = a :=
+  Cryptography.Fp2.add_zero Fp.embedding a
 
-protected theorem neg_add_cancel (a : Fp2) : -a + a = 0 := by
-  apply ext <;> apply Fp.toZMod.injective <;> simp
+protected theorem neg_add_cancel (a : Fp2) : -a + a = 0 :=
+  Cryptography.Fp2.neg_add_cancel Fp.embedding a
 
-protected theorem sub_eq_add_neg (a b : Fp2) : a - b = a + -b := by
-  apply ext <;> apply Fp.toZMod.injective <;> simp [_root_.sub_eq_add_neg]
+protected theorem sub_eq_add_neg (a b : Fp2) : a - b = a + -b :=
+  Cryptography.Fp2.sub_eq_add_neg Fp.embedding a b
 
-protected theorem mul_comm (a b : Fp2) : a * b = b * a := by
-  apply ext <;> apply Fp.toZMod.injective <;> simp <;> ring
+protected theorem mul_comm (a b : Fp2) : a * b = b * a :=
+  Cryptography.Fp2.mul_comm Fp.embedding a b
 
-protected theorem mul_assoc (a b c : Fp2) : a * b * c = a * (b * c) := by
-  apply ext <;> apply Fp.toZMod.injective <;> simp <;> ring
+protected theorem mul_assoc (a b c : Fp2) : a * b * c = a * (b * c) :=
+  Cryptography.Fp2.mul_assoc Fp.embedding a b c
 
-protected theorem one_mul (a : Fp2) : 1 * a = a := by
-  apply ext <;> apply Fp.toZMod.injective <;> simp
+protected theorem one_mul (a : Fp2) : 1 * a = a :=
+  Cryptography.Fp2.one_mul Fp.embedding a
 
-protected theorem mul_one (a : Fp2) : a * 1 = a := by
-  apply ext <;> apply Fp.toZMod.injective <;> simp
+protected theorem mul_one (a : Fp2) : a * 1 = a :=
+  Cryptography.Fp2.mul_one Fp.embedding a
 
-protected theorem zero_mul (a : Fp2) : 0 * a = 0 := by
-  apply ext <;> apply Fp.toZMod.injective <;> simp
+protected theorem zero_mul (a : Fp2) : 0 * a = 0 :=
+  Cryptography.Fp2.zero_mul Fp.embedding a
 
-protected theorem mul_zero (a : Fp2) : a * 0 = 0 := by
-  apply ext <;> apply Fp.toZMod.injective <;> simp
+protected theorem mul_zero (a : Fp2) : a * 0 = 0 :=
+  Cryptography.Fp2.mul_zero Fp.embedding a
 
-protected theorem left_distrib (a b c : Fp2) : a * (b + c) = a * b + a * c := by
-  apply ext <;> apply Fp.toZMod.injective <;> simp <;> ring
+protected theorem left_distrib (a b c : Fp2) : a * (b + c) = a * b + a * c :=
+  Cryptography.Fp2.left_distrib Fp.embedding a b c
 
-protected theorem right_distrib (a b c : Fp2) : (a + b) * c = a * c + b * c := by
-  apply ext <;> apply Fp.toZMod.injective <;> simp <;> ring
+protected theorem right_distrib (a b c : Fp2) : (a + b) * c = a * c + b * c :=
+  Cryptography.Fp2.right_distrib Fp.embedding a b c
 
 instance : AddCommGroup Fp2 where
   add_assoc := Fp2.add_assoc
@@ -228,42 +210,13 @@ end RingLaws
 
 /-! ## Non-squareness of `-1` in `Fp` and `Fp2.inverse` correctness -/
 
-set_option maxRecDepth 8000 in
-set_option exponentiation.threshold 512 in
-private theorem sq_ne_neg_one_zmod (y : ZMod Fp.modulus) : y * y ≠ -1 := by
-  -- Euler's criterion: if `y^2 = -1`, then `(-1)^((p-1)/2) = y^(p-1) = 1`.
-  -- The kernel computes `(-1)^((p-1)/2) mod p` and finds `p - 1`, not `1`.
-  intro h
-  have h2 : y ^ 2 = ((Fp.modulus - 1 : Nat) : ZMod Fp.modulus) := by
-    have hm1 : (-1 : ZMod Fp.modulus) = ((Fp.modulus - 1 : Nat) : ZMod Fp.modulus) := by decide
-    rw [← hm1]
-    linear_combination h
-  have hy : y ≠ 0 := by
-    intro hy0
-    rw [hy0] at h
-    revert h; decide
-  have hfermat : y ^ (Fp.modulus - 1) = 1 :=
-    ZMod.pow_card_sub_one_eq_one hy
-  rw [show Fp.modulus - 1 = 2 * ((Fp.modulus - 1) / 2) by decide,
-    pow_mul, h2] at hfermat
-  exact PowMod.natCast_pow_div_ne_one Fp.modulus 384 (Fp.modulus - 1) 2
-    (by decide) (by decide) hfermat
+/-- `-1` is not a square mod `p`, since `p = 3 mod 4`. -/
+private theorem sq_ne_neg_one_zmod (y : ZMod Fp.modulus) : y * y ≠ -1 :=
+  Cryptography.Fp2.zmod_mul_self_ne_neg_one (by decide) y
 
 /-- `-1` is not a square in `Fp`, because `p = 3 mod 4`. -/
 theorem sq_ne_neg_one (y : Fp) : y * y ≠ -1 := fun h =>
   sq_ne_neg_one_zmod (Fp.toZMod y) (by rw [← Fp.toZMod_mul, h, Fp.toZMod_neg, Fp.toZMod_one])
-
-private theorem norm_eq_zero_zmod {c0 c1 : ZMod Fp.modulus}
-    (h : c0 * c0 + c1 * c1 = 0) : c0 = 0 ∧ c1 = 0 := by
-  by_cases hc1 : c1 = 0
-  · have hc0 : c0 * c0 = 0 := by linear_combination h - c1 * hc1
-    exact ⟨mul_self_eq_zero.mp hc0, hc1⟩
-  -- With `c1 /= 0`, dividing by `c1^2` makes `(c0 / c1)^2 = -1`, which has no solution.
-  · exfalso
-    have hinv : c1 * c1⁻¹ = 1 := mul_inv_cancel₀ hc1
-    have hsq : (c0 * c1⁻¹) * (c0 * c1⁻¹) = -1 := by
-      linear_combination (c1⁻¹ * c1⁻¹) * h - (c1 * c1⁻¹ + 1) * hinv
-    exact sq_ne_neg_one_zmod (c0 * c1⁻¹) hsq
 
 /-- The norm is zero only at zero. -/
 theorem norm_eq_zero_iff (a : Fp2) : norm a = 0 ↔ a = 0 := by
@@ -271,7 +224,7 @@ theorem norm_eq_zero_iff (a : Fp2) : norm a = 0 ↔ a = 0 := by
   · intro h
     have h' := congrArg Fp.toZMod h
     simp only [norm, Fp.toZMod_add, Fp.toZMod_mul, Fp.toZMod_zero] at h'
-    obtain ⟨h0, h1⟩ := norm_eq_zero_zmod h'
+    obtain ⟨h0, h1⟩ := Cryptography.Fp2.norm_eq_zero sq_ne_neg_one_zmod h'
     apply ext <;> apply Fp.toZMod.injective <;> simp [h0, h1]
   · rintro rfl
     exact norm_zero
@@ -279,73 +232,52 @@ theorem norm_eq_zero_iff (a : Fp2) : norm a = 0 ↔ a = 0 := by
 theorem norm_ne_zero_iff (a : Fp2) : norm a ≠ 0 ↔ a ≠ 0 :=
   not_congr (norm_eq_zero_iff a)
 
-private theorem mul_inv_c0_zmod (c0 c1 w : ZMod Fp.modulus)
-    (hw : (c0 * c0 + c1 * c1) * w = 1) :
-    c0 * (c0 * w) - c1 * -(c1 * w) = 1 := by
-  linear_combination hw
-
-private theorem mul_inv_c1_zmod (c0 c1 w : ZMod Fp.modulus) :
-    c0 * -(c1 * w) + c1 * (c0 * w) = 0 := by
-  ring
-
 private theorem fp_mul_inverse {x : Fp} (hx : x ≠ 0) :
     Fp.toZMod x * Fp.toZMod x.inverse = 1 := by
   rw [Fp.toZMod_inverse]
   exact mul_inv_cancel₀ fun h => hx (Fp.toZMod_inj.mp (h.trans Fp.toZMod_zero.symm))
 
-theorem mul_inverse_of_norm_ne_zero {a : Fp2} (h : norm a ≠ 0) :
-    a * a.inverse = 1 := by
-  have hinv := fp_mul_inverse h
-  simp only [norm, Fp.toZMod_add, Fp.toZMod_mul] at hinv
-  apply ext <;> apply Fp.toZMod.injective
-  · simp only [Fp2.inverse, mul_c0, one_c0, Fp.baseField_inverse, Fp.toZMod_sub,
-      Fp.toZMod_mul, Fp.toZMod_neg, Fp.toZMod_one]
-    exact mul_inv_c0_zmod _ _ _ hinv
-  · simp only [Fp2.inverse, mul_c1, one_c1, Fp.baseField_inverse, Fp.toZMod_add,
-      Fp.toZMod_mul, Fp.toZMod_neg, Fp.toZMod_zero]
-    exact mul_inv_c1_zmod _ _ _
-
 theorem mul_inverse_cancel {a : Fp2} (h : a ≠ 0) : a * a.inverse = 1 :=
-  mul_inverse_of_norm_ne_zero ((norm_ne_zero_iff a).mpr h)
+  Cryptography.Fp2.mul_inverse_cancel Fp.embedding sq_ne_neg_one_zmod h
+
+theorem mul_inverse_of_norm_ne_zero {a : Fp2} (h : norm a ≠ 0) :
+    a * a.inverse = 1 :=
+  mul_inverse_cancel ((norm_ne_zero_iff a).mp h)
 
 theorem inverse_mul_cancel {a : Fp2} (h : a ≠ 0) : a.inverse * a = 1 := by
   rw [Fp2.mul_comm, mul_inverse_cancel h]
 
 @[simp]
-theorem inverse_zero : (0 : Fp2).inverse = 0 := by
-  apply ext <;> apply Fp.toZMod.injective <;> simp [inverse]
+theorem inverse_zero : (0 : Fp2).inverse = 0 :=
+  Cryptography.Fp2.inverse_zero Fp.embedding
 
 instance : Field Fp2 where
   inv := inverse
-  exists_pair_ne := ⟨0, 1, fun h => by
-    exact Fp.ne_of_model (by
-      simp only [zero_c0, one_c0, Fp.toModel_zero', Fp.toModel_one']
-      decide +kernel) (congrArg c0 h)⟩
+  exists_pair_ne := ⟨0, 1, Cryptography.Fp2.zero_ne_one Fp.embedding⟩
   mul_inv_cancel := fun a h => mul_inverse_cancel h
   inv_zero := inverse_zero
   div_eq_mul_inv := fun _ _ => rfl
   nnqsmul := _
   qsmul := _
 
+/-- `Fp2` maps into itself, as a field of Mathlib, by the identity. -/
+def embedding : FieldOps.Embedding Fp2 Fp2 where
+  toFun a := a
+  injective := fun _ _ h => h
+  map_add _ _ := rfl
+  map_sub _ _ := rfl
+  map_mul _ _ := rfl
+  map_neg _ := rfl
+  map_zero := rfl
+  map_one := rfl
+  map_inverse _ := rfl
+  beq_iff _ _ := beq_iff_eq
+  isZero_iff _ := isZero_iff
+
 /-! ## Exponentiation (`powNat`) -/
 
-theorem powNat_eq_pow (a : Fp2) (e : Nat) : powNat a e = a ^ e := by
-  induction e using Nat.strongRecOn generalizing a with
-  | _ e ih =>
-    rw [powNat]
-    split
-    · rename_i h
-      subst h
-      rw [pow_zero, one_eq_one]
-    · rename_i h
-      rw [ih (e / 2) (by omega)]
-      by_cases h2 : e % 2 = 1
-      · rw [ite_eq_left h2, ← pow_two, ← pow_mul, ← pow_succ']
-        congr 1
-        omega
-      · rw [ite_eq_right h2, ← pow_two, ← pow_mul]
-        congr 1
-        omega
+theorem powNat_eq_pow (a : Fp2) (e : Nat) : powNat a e = a ^ e :=
+  Cryptography.Fp2.powNat_eq_npow _ rfl (fun _ _ => rfl) a e
 
 theorem powNat_zero (a : Fp2) : powNat a 0 = one := by
   rw [powNat_eq_pow, pow_zero, one_eq_one]
@@ -356,7 +288,7 @@ theorem powNat_one (a : Fp2) : powNat a 1 = a := by
 theorem powNat_succ (a : Fp2) (e : Nat) : powNat a (e + 1) = a * powNat a e := by
   rw [powNat_eq_pow, powNat_eq_pow, pow_succ']
 
-/-! ## Square-root soundness (`Fp2.sqrt`) -/
+/-! ## Square-root soundness -/
 
 private theorem c0_ne_zero_zmod {a0 a1 s' c0 inv2 : ZMod Fp.modulus}
     (ha1 : a1 ≠ 0)
@@ -394,13 +326,6 @@ private theorem sqrt_c1_zmod {a1 c0 w : ZMod Fp.modulus}
     c0 * (a1 * w) + (a1 * w) * c0 = a1 := by
   linear_combination a1 * h2c0_inv
 
-private theorem sqrtOrError_ok {a c : Fp} (h : sqrtOrError a = .ok c) : c * c = a :=
-  Fp.sqrt_ok ((Fp.sqrtOrError_eq a).symm.trans h)
-
-private theorem sqrtOrError_complete {a b : Fp} (h : b * b = a) :
-    sqrtOrError a = .ok (Fp.powNat a ((Fp.modulus + 1) / 4)) :=
-  (Fp.sqrtOrError_eq a).trans (Fp.sqrt_complete h)
-
 private theorem two_mul_inverse : (2 : ZMod Fp.modulus) * Fp.toZMod (Fp.ofNat 2).inverse = 1 := by
   have h := fp_mul_inverse (x := Fp.ofNat 2) (Fp.ne_of_model (by
     simp only [Fp.toModel_ofNat, Fp.toModel_zero']
@@ -436,7 +361,7 @@ private theorem sqrt_branch_gen_aux {invFn : Fp → Fp}
 
 /-- Negating a nonzero `Fp2` element flips its sign bit (`draft-irtf-cfrg-pairing-friendly-curves-07` Appendix C).
 
-When `c1 != 0`, the sign comes from `c1`, which is negated.
+When `c1 ≠ 0`, the sign comes from `c1`, which is negated.
 
 When `c1 = 0`, `c0` is nonzero, and the sign comes from `c0`, which is negated.
 -/
@@ -460,50 +385,6 @@ theorem signBit_neg {y : Fp2} (hy : y ≠ 0) :
     exact G1.signBit_neg hc1_ne
 
 /-! ## Square roots by the complex method -/
-
-/-- The cases in which the square root in `Fp2` succeeds, for any base field.
-
-When `c1` is zero, the output is built from the candidate of `c0`.
-
-Otherwise, `s` is a root of the norm, and the output is built from the candidate of `(a0 + s) / 2`.
-
-The statement is generic, so the kernel checks the case analysis on variables only.
--/
-theorem sqrt_eq_ok_cases {F : Type} [BaseField F] {a c : Fp2 F} (h : Fp2.sqrt a = .ok c) :
-    (BaseField.isZero a.c1 = true ∧
-      ((BaseField.beq (BaseField.sqrtCandidate a.c0 * BaseField.sqrtCandidate a.c0) a.c0 = true ∧
-          c = ⟨BaseField.sqrtCandidate a.c0, BaseField.zero⟩) ∨
-        (BaseField.beq (BaseField.sqrtCandidate a.c0 * BaseField.sqrtCandidate a.c0) a.c0 = false ∧
-          c = ⟨BaseField.zero, BaseField.sqrtCandidate a.c0⟩))) ∨
-    (BaseField.isZero a.c1 = false ∧ ∃ s,
-      sqrtOrError (a.c0 * a.c0 + a.c1 * a.c1) = .ok s ∧
-      let u := (a.c0 + s) * BaseField.inverse (BaseField.ofNat 2 : F)
-      let r := BaseField.sqrtCandidate u
-      let d := a.c1 * BaseField.inverse (BaseField.ofNat 2 * r)
-      (BaseField.beq (r * r) u = true ∧ c = ⟨r, d⟩) ∨
-        (BaseField.beq (r * r) u = false ∧ c = ⟨d, r⟩)) := by
-  unfold Fp2.sqrt at h
-  split at h
-  · rename_i hz
-    refine Or.inl ⟨hz, ?_⟩
-    dsimp only at h
-    split at h
-    · rename_i hc
-      exact Or.inl ⟨hc, Except.ok.inj h.symm⟩
-    · rename_i hc
-      exact Or.inr ⟨Bool.eq_false_iff.mpr hc, Except.ok.inj h.symm⟩
-  · rename_i hz
-    refine Or.inr ⟨Bool.eq_false_iff.mpr hz, ?_⟩
-    split at h
-    · cases h
-    · rename_i s hs
-      refine ⟨s, hs, ?_⟩
-      dsimp only at h ⊢
-      split at h
-      · rename_i hc
-        exact Or.inl ⟨hc, Except.ok.inj h.symm⟩
-      · rename_i hc
-        exact Or.inr ⟨Bool.eq_false_iff.mpr hc, Except.ok.inj h.symm⟩
 
 private theorem sqrt_branch_neg_zmod {a0 a1 s r t w : ZMod Fp.modulus}
     (ha1 : a1 ≠ 0) (hs : s * s = a0 * a0 + a1 * a1)
@@ -555,8 +436,8 @@ private theorem sqrt_branch_neg_aux {a0 a1 s r t : Fp}
   · exact hout.2
 
 /-- A root returned by the square root in `Fp2` squares to its input. -/
-theorem sqrt_ok {a c : Fp2} (h : Fp2.sqrt a = .ok c) : c * c = a := by
-  rcases sqrt_eq_ok_cases h with ⟨hz, hcases⟩ | ⟨hz, s, hs, hcases⟩ <;>
+theorem sqrt_mul_self {a c : Fp2} (h : Fp2.sqrt a = some c) : c * c = a := by
+  rcases Cryptography.Fp2.sqrt_eq_some_cases h with ⟨hz, hcases⟩ | ⟨hz, s, hs, hcases⟩ <;>
     simp only [Fp.baseField_sqrtCandidate] at hcases
   · have ha1 : a.c1 = 0 := Fp.isZero_iff.mp hz
     rcases hcases with ⟨hr, rfl⟩ | ⟨hr, rfl⟩
@@ -573,7 +454,7 @@ theorem sqrt_ok {a c : Fp2} (h : Fp2.sqrt a = .ok c) : c * c = a := by
   · have ha1 : a.c1 ≠ 0 := fun h0 => by
       rw [Fp.baseField_isZero, Fp.isZero_iff.mpr h0] at hz
       cases hz
-    have hn := sqrtOrError_ok hs
+    have hn := Fp.baseField_sqrt_mul_self hs
     rcases hcases with ⟨hr, rfl⟩ | ⟨hr, rfl⟩
     · exact sqrt_branch_gen_aux (fun _ hx => fp_mul_inverse hx) ha1 hn two_mul_inverse
         (Fp.beq_iff.mp hr)
@@ -587,30 +468,10 @@ theorem sqrt_ok {a c : Fp2} (h : Fp2.sqrt a = .ok c) : c * c = a := by
         · exact hneg
       exact sqrt_branch_neg_aux ha1 hn two_mul_inverse hr'
 
-/-- The square root in `Fp2` always succeeds on a real input, for any base field. -/
-theorem sqrt_isOk_of_c1_zero {F : Type} [BaseField F] {a : Fp2 F}
-    (hz : BaseField.isZero a.c1 = true) : ∃ c, Fp2.sqrt a = .ok c := by
-  unfold Fp2.sqrt
-  simp only [hz, ↓reduceIte]
-  split <;> exact ⟨_, rfl⟩
-
-/-- The square root in `Fp2` succeeds when the norm has a root, for any base field. -/
-theorem sqrt_isOk_of_norm {F : Type} [BaseField F] {a : Fp2 F}
-    (hn : ∃ s, sqrtOrError (a.c0 * a.c0 + a.c1 * a.c1) = .ok s) :
-    ∃ c, Fp2.sqrt a = .ok c := by
-  obtain ⟨s, hs⟩ := hn
-  unfold Fp2.sqrt
-  split
-  · dsimp only
-    split <;> exact ⟨_, rfl⟩
-  · rw [hs]
-    dsimp only
-    split <;> exact ⟨_, rfl⟩
-
 /-- The square root in `Fp2` succeeds on every square. -/
 theorem sqrt_complete {a b : Fp2} (hb : b * b = a) :
-    ∃ c, Fp2.sqrt a = .ok c := by
-  apply sqrt_isOk_of_norm
+    ∃ c, Fp2.sqrt a = some c := by
+  apply Cryptography.Fp2.sqrt_isSome_of_norm
   have hn : (b.c0 * b.c0 + b.c1 * b.c1) * (b.c0 * b.c0 + b.c1 * b.c1) =
       a.c0 * a.c0 + a.c1 * a.c1 := by
     rw [← hb]
@@ -618,19 +479,21 @@ theorem sqrt_complete {a b : Fp2} (hb : b * b = a) :
     simp only [mul_c0, mul_c1]
     push_toZMod
     ring
-  exact ⟨_, sqrtOrError_complete hn⟩
+  exact ⟨_, Fp.baseField_sqrt_complete hn⟩
 
-/-- The square root in `Fp2` fails only with the error for a non-square, for any base field. -/
-theorem sqrt_error_cases {F : Type} [BaseField F] (a : Fp2 F) :
-    Fp2.sqrt a = .error .notASquare ∨ ∃ c, Fp2.sqrt a = .ok c := by
-  unfold Fp2.sqrt
-  split
-  · dsimp only
-    split <;> exact Or.inr ⟨_, rfl⟩
-  · split
-    · exact Or.inl rfl
-    · dsimp only
-      split <;> exact Or.inr ⟨_, rfl⟩
+/-- The square root in `Fp2` fails exactly on the elements that are not squares. -/
+theorem sqrt_eq_none_iff {a : Fp2} : Fp2.sqrt a = none ↔ ∀ b : Fp2, b * b ≠ a := by
+  constructor
+  · -- A square has a root, so the square root does not fail on it.
+    intro h b hb
+    obtain ⟨c, hc⟩ := sqrt_complete hb
+    rw [h] at hc
+    cases hc
+  · -- A returned root squares to the input, so the input is a square.
+    intro h
+    cases hc : Fp2.sqrt a with
+    | none => rfl
+    | some c => exact absurd (sqrt_mul_self hc) (h c)
 
 /-! ## Equations decided in the model -/
 

@@ -12,7 +12,7 @@ from raising import raises
 from .expected_errors import expected_message, fork_schedule
 from .test_blocks import _first_item
 
-ARCHIVE = "execution-specs/tests@v21.0.2/fixtures"
+ARCHIVE = "execution-specs/tests@v21.0.3/fixtures"
 
 # The networks of the release that run the rules of Amsterdam under a blob schedule of their own.
 # Each sets its schedule from genesis, or from the time 15,000 that its name gives.
@@ -113,11 +113,15 @@ def test_cases_cover_each_network() -> None:
     assert {c["exception"] for c in _CASES} == {None, "BlockException.INCORRECT_EXCESS_BLOB_GAS"}
 
 
-@pytest.mark.parametrize("schedule", [(0, 7, 6, 3338477), (0, 0, 0, 3338477), (0, 1, 2, 0)])
+@pytest.mark.parametrize(
+    "schedule", [(0, 7, 6, 3338477), (0, 0, 0, 3338477), (0, 1, 2, 0), (0, 1, 2**47, 3338477)]
+)
 def test_schedule_out_of_bounds_rejected(schedule) -> None:
     case = _CASES[0]
     with raises(
-        blocks.BlockError, "a blob schedule needs target ≤ max, 0 < max and 0 < update fraction"
+        blocks.BlockError,
+        "a blob schedule needs target ≤ max, 0 < max, "
+        "0 < update fraction and a blob gas of max below 2^64",
     ) as error:
         blocks.validate_header(
             FORK, FORK, bytes.fromhex(case["parent"]), bytes.fromhex(case["header"]), [schedule]
@@ -135,7 +139,7 @@ def test_later_schedule_wins() -> None:
     blocks.validate_header(FORK, FORK, parent, header, [(0, 1, 2, 3338477)] + own)
     with raises(
         blocks.BlockError,
-        "header invalid: EthLib.Execution.Blocks.BlockError.wrongExcessBlobGas 184942592 182321152",
+        "block invalid: wrongExcessBlobGas (expected := 184942592) (actual := 182321152)",
     ) as error:
         blocks.validate_header(FORK, FORK, parent, header, own + [(0, 1, 2, 3338477)])
     assert error.value.code == WRONG_EXCESS_BLOB_GAS

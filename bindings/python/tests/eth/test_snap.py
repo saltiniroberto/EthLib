@@ -22,6 +22,7 @@ from ethlib.execution.network.snap import (
     codes_answer,
     decode_message,
     full_account,
+    trie_nodes_answer,
 )
 from ethlib.serialization import rlp
 from raising import raises
@@ -55,12 +56,13 @@ def _p(n: int) -> bytes:
 
 
 H = [bytes([i]) * 32 for i in range(1, 4)]
-ACCOUNT = rlp.encode([_p(1), _p(10), b"", b""])
+SLIM = [_p(1), _p(10), b"", b""]
+ACCOUNT = rlp.encode(SLIM)
 PROOF = [b"\xc0", b"\xc1\x80"]
 
 COMMON = [
     (GET_ACCOUNT_RANGE, rlp.encode([_p(7), H[0], H[1], H[2], _p(500_000)])),
-    (ACCOUNT_RANGE, rlp.encode([_p(7), [[H[0], ACCOUNT], [H[1], ACCOUNT]], PROOF])),
+    (ACCOUNT_RANGE, rlp.encode([_p(7), [[H[0], SLIM], [H[1], SLIM]], PROOF])),
     (GET_STORAGE_RANGES, rlp.encode([_p(7), H[0], [H[1], H[2]], b"", b"", _p(500_000)])),
     (STORAGE_RANGES, rlp.encode([_p(7), [[[H[0], b"\x01"]], []], PROOF])),
     (GET_BYTE_CODES, rlp.encode([_p(7), H, _p(500_000)])),
@@ -101,6 +103,24 @@ def test_full_account() -> None:
     assert full_account(ACCOUNT) == rlp.encode([_p(1), _p(10), EMPTY_ROOT, EMPTY_CODE])
     full = rlp.encode([_p(1), _p(10), H[0], H[1]])
     assert full_account(full) == full
+
+
+# AccountRange 1 with one account: nonce 1, balance 2, no storage and no code, no proof.
+# On the network its slim form is a list nested in the entry, while caps/snap.md types it `B`.
+NESTED = bytes.fromhex("ea01e7e6a0" + "11" * 32 + "c401028080" + "c0")
+# The same account as a byte string that holds the list, `accBody: B` read literally.
+WRAPPED = bytes.fromhex("eb01e8e7a0" + "11" * 32 + "85c401028080" + "c0")
+
+
+def test_account_range_nested_body() -> None:
+    assert rlp.encode([_p(1), [[b"\x11" * 32, [_p(1), _p(2), b"", b""]]], []]) == NESTED
+    assert decode_message(1, ACCOUNT_RANGE, NESTED) == NESTED
+
+
+def test_account_range_wrapped_body() -> None:
+    # The message has the shape of an AccountRange, so it reads.
+    # Its body is no account: test_snap_range.py checks that the range check refuses it.
+    assert decode_message(1, ACCOUNT_RANGE, WRAPPED) == WRAPPED
 
 
 CODES = [b"\x60\x00", b"\x60\x01", b"\x60\x02"]
@@ -154,3 +174,54 @@ def test_access_lists_answer(lists: list, accepted: bool) -> None:
     request = rlp.encode([_p(7), H, _p(2_000_000)])
     response = rlp.encode([_p(7), lists])
     assert access_lists_answer(request, response, hashes) is accepted
+
+
+# The example of GetTrieNodes: an account node, then two storage nodes of another account.
+# 0x3a is the odd leaf path [a], and 0x0012 the even extension path [1, 2].
+TRIE_PATHS = [[H[0]], [H[1], b"\x3a", b"\x00\x12"]]
+
+
+def _trie_nodes_request(paths: list[list[bytes]]) -> bytes:
+    return rlp.encode([_p(7), H[2], paths, _p(500_000)])
+
+
+@pytest.mark.parametrize(
+    "count, request_id, accepted",
+    [
+        # One node per account group and one per storage path: three in all.
+        (3, 7, True),
+        # The peer may cut the answer short.
+        (2, 7, True),
+        # The empty reply of a peer without the state.
+        (0, 7, True),
+        # More nodes than requested.
+        (4, 7, False),
+        # Another request ID.
+        (3, 8, False),
+    ],
+)
+def test_trie_nodes_answer(count: int, request_id: int, accepted: bool) -> None:
+    response = rlp.encode([_p(request_id), [b"\xc0"] * count])
+    assert trie_nodes_answer(_trie_nodes_request(TRIE_PATHS), response) is accepted
+
+
+@pytest.mark.parametrize(
+    "paths, message, code",
+    [
+        ([[b"\x00" * 33]], "a trie node path has 33 bytes, more than 32", 5),
+        # A first nibble above 3 is not a compact encoding.
+        ([[b"\x40"]], "a partial trie node path is not a valid compact encoding", 6),
+        ([[H[0]], []], "a list of trie node paths is empty", 7),
+    ],
+)
+def test_trie_nodes_bad_path(paths: list[list[bytes]], message: str, code: int) -> None:
+    response = rlp.encode([_p(7), []])
+    with raises(SnapError, message) as info:
+        trie_nodes_answer(_trie_nodes_request(paths), response)
+    assert info.value.code == code
+
+
+def test_trie_nodes_bad_message() -> None:
+    with raises(SnapError, "message data is not RLP of the expected shape") as info:
+        trie_nodes_answer(_trie_nodes_request(TRIE_PATHS), b"\x80")
+    assert info.value.code == 2

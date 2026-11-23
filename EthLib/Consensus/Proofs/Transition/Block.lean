@@ -185,8 +185,7 @@ theorem processRandao_eq {config : Config} {checks : SignatureChecks}
       getBeaconProposerIndex state = .ok index ∧ getValidator state index = .ok proposer ∧
       getDomain config state DOMAIN_RANDAO = .ok domain ∧
       computeSigningRoot (getCurrentEpoch state) domain = .ok signingRoot ∧
-      checks.verify (packBytes proposer.pubkey) (packBytes signingRoot)
-        (packBytes body.randaoReveal) = true ∧
+      checks.verify proposer.pubkey (packBytes signingRoot) body.randaoReveal = true ∧
       getRandaoMix state (getCurrentEpoch state) = .ok mix ∧
       writeCircularRooted state.randaoMixes (getCurrentEpoch state)
         (Vector.zipWith (· ^^^ ·) mix
@@ -289,13 +288,12 @@ theorem isValidIndexedAttestation_signature {config : Config} {checks : Signatur
     (valid : isValidIndexedAttestation config checks state attestation = .ok true) :
     ∃ pubkeys domain signingRoot,
       attestation.attestingIndices.data.toList.toArray.mapM
-          (fun index => do return packBytes (← liftAccessor (getValidator state index)).pubkey) =
+          (fun index => do return (← liftAccessor (getValidator state index)).pubkey) =
         .ok pubkeys ∧
       getDomain config state DOMAIN_BEACON_ATTESTER (some attestation.data.target.epoch) =
         .ok domain ∧
       computeSigningRoot attestation.data domain = .ok signingRoot ∧
-      checks.fastAggregateVerify pubkeys (packBytes signingRoot)
-        (packBytes attestation.signature) = true := by
+      checks.fastAggregateVerify pubkeys (packBytes signingRoot) attestation.signature = true := by
   simp only [isValidIndexedAttestation] at valid
   split at valid
   · simp [pure, Except.pure] at valid
@@ -314,8 +312,7 @@ theorem checkHeaderSignature_ok {config : Config} {checks : SignatureChecks}
       getDomain config state DOMAIN_BEACON_PROPOSER
           (some (computeEpochAtSlot preset signed.message.slot)) = .ok domain ∧
       computeSigningRoot signed.message domain = .ok signingRoot ∧
-      checks.verify (packBytes pubkey) (packBytes signingRoot) (packBytes signed.signature) =
-        true := by
+      checks.verify pubkey (packBytes signingRoot) signed.signature = true := by
   simp only [checkHeaderSignature, bind_ok_iff, ensure_ok_iff, liftAccessor_ok,
     liftSsz_ok] at computed
   obtain ⟨domain, domainOk, signingRoot, rootOk, verified⟩ := computed
@@ -359,16 +356,30 @@ theorem sameSizes_processProposerSlashing {config : Config} {checks : SignatureC
   obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _, slashed⟩ := computed
   exact sameSizes_slashValidator slashed
 
+/-- A valid proposer slashing changes no slashed flag at a position other than its proposer's. -/
+theorem slashedFlagAt_processProposerSlashing {config : Config} {checks : SignatureChecks}
+    {state after : BeaconState preset fork} {slashing : ProposerSlashing}
+    (computed : processProposerSlashing config checks state slashing = .ok after) (position : Nat)
+    (other : slashing.signedHeader1.message.proposerIndex.toNat ≠ position) :
+    slashedFlagAt after position = slashedFlagAt state position := by
+  simp only [processProposerSlashing, bind_ok_iff, ensure_ok_iff, liftAccessor_ok] at computed
+  obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _, slashed⟩ := computed
+  exact (slashValidator_slashedFlag slashed).2 position other.symm
+
 /-! ## Attester slashings -/
 
 /-- A step of an attester slashing keeps the sizes, and keeps every slashed flag that is set.
 
-The flag it returns is set only if it was set, or if the step slashed its validator. -/
+The flag it returns is set only if it was set, or if the step slashed its validator.
+
+It changes no slashed flag at a position other than that of its index. -/
 theorem slashIfSlashable_ok {config : Config} {step after : BeaconState preset fork × Bool}
     {index : ValidatorIndex} (computed : slashIfSlashable config step index = .ok after) :
     SameSizes step.1 after.1 ∧
       (∀ other, slashedFlag step.1 other = .ok true → slashedFlag after.1 other = .ok true) ∧
-      (after.2 = true → step.2 = true ∨ slashedFlag after.1 index = .ok true) := by
+      (after.2 = true → step.2 = true ∨ slashedFlag after.1 index = .ok true) ∧
+      (∀ position, position ≠ index.toNat →
+        slashedFlagAt after.1 position = slashedFlagAt step.1 position) := by
   obtain ⟨state, slashedAny⟩ := step
   simp only [slashIfSlashable, bind_ok_iff, liftAccessor_ok] at computed
   obtain ⟨validator, _, computed⟩ := computed
@@ -376,35 +387,50 @@ theorem slashIfSlashable_ok {config : Config} {step after : BeaconState preset f
   · simp only [bind_ok_iff, liftAccessor_ok, pure, Except.pure, Except.ok.injEq] at computed
     obtain ⟨slashedState, slashed, rfl⟩ := computed
     obtain ⟨flag, others⟩ := slashValidator_slashedFlag slashed
-    refine ⟨sameSizes_slashValidator slashed, fun other set => ?_, fun _ => .inr flag⟩
+    refine ⟨sameSizes_slashValidator slashed, fun other set => ?_, fun _ => .inr flag, others⟩
     by_cases same : other = index
     · exact same ▸ flag
-    · exact (others other same).trans set
+    · have positions : other.toNat ≠ index.toNat := fun equal => same (UInt64.toNat_inj.mp equal)
+      rw [slashedFlag_eq_of_slashed (others _ positions)]
+      exact set
   · simp only [pure, Except.pure, Except.ok.injEq] at computed
     subst computed
-    exact ⟨SameSizes.refl _, fun _ set => set, .inl⟩
+    exact ⟨SameSizes.refl _, fun _ set => set, .inl, fun _ _ => rfl⟩
 
 /-- The steps of an attester slashing over some indices keep the sizes and every set flag.
 
-The flag they return is set only if it was set, or if they slashed one of the indices. -/
+The flag they return is set only if it was set, or if they slashed one of the indices.
+
+They change no slashed flag at a position that none of the indices names. -/
 theorem foldlM_slashIfSlashable {config : Config} (indices : List ValidatorIndex) :
     ∀ {step after : BeaconState preset fork × Bool},
       indices.foldlM (slashIfSlashable config) step = .ok after →
       SameSizes step.1 after.1 ∧
         (∀ other, slashedFlag step.1 other = .ok true → slashedFlag after.1 other = .ok true) ∧
         (after.2 = true → step.2 = true ∨
-          ∃ index ∈ indices, slashedFlag after.1 index = .ok true) := by
-  induction indices with
+          ∃ index ∈ indices, slashedFlag after.1 index = .ok true) ∧
+        (∀ position, (∀ index ∈ indices, index.toNat ≠ position) →
+          slashedFlagAt after.1 position = slashedFlagAt step.1 position) := by
+  intro step after computed
+  have flags := slashedFlagAt_foldlM Prod.fst (fun index => [index])
+    (fun _ _ _ ok position outside => (slashIfSlashable_ok ok).2.2.2 position
+      fun equal => outside _ List.mem_cons_self equal.symm) computed
+  suffices kept : SameSizes step.1 after.1 ∧
+      (∀ other, slashedFlag step.1 other = .ok true → slashedFlag after.1 other = .ok true) ∧
+      (after.2 = true → step.2 = true ∨
+        ∃ index ∈ indices, slashedFlag after.1 index = .ok true) from
+    ⟨kept.1, kept.2.1, kept.2.2, fun position outside => flags position
+      fun _ member _ named => List.mem_singleton.mp named ▸ outside _ member⟩
+  clear flags
+  induction indices generalizing step with
   | nil =>
-    intro step after computed
     simp only [List.foldlM_nil, pure, Except.pure, Except.ok.injEq] at computed
     subst computed
     exact ⟨SameSizes.refl _, fun _ set => set, .inl⟩
   | cons first rest ih =>
-    intro step after computed
     simp only [List.foldlM_cons, bind_ok_iff] at computed
     obtain ⟨middle, firstOk, restOk⟩ := computed
-    obtain ⟨sizes, kept, flagged⟩ := slashIfSlashable_ok firstOk
+    obtain ⟨sizes, kept, flagged, -⟩ := slashIfSlashable_ok firstOk
     obtain ⟨restSizes, restKept, restFlagged⟩ := ih restOk
     refine ⟨sizes.trans restSizes, fun other set => restKept other (kept other set),
       fun done => ?_⟩
@@ -437,11 +463,24 @@ theorem processAttesterSlashing_slashed {config : Config} {checks : SignatureChe
   obtain ⟨_, _, _, _, _, _, _, _, _, _, ⟨folded, slashedAny⟩, foldOk, computed⟩ := computed
   simp only [pure, Except.pure, Except.ok.injEq] at computed
   obtain ⟨_, done, rfl⟩ := computed
-  obtain ⟨_, _, flagged⟩ := foldlM_slashIfSlashable _ foldOk
+  obtain ⟨_, _, flagged, -⟩ := foldlM_slashIfSlashable _ foldOk
   rcases flagged done with never | ⟨index, member, flag⟩
   · cases never
   · rw [slashingIndices, mem_sortedSet, List.mem_filter, decide_eq_true_iff] at member
     exact ⟨index, member.1, member.2, flag⟩
+
+/-- A valid attester slashing changes no slashed flag at a position that none of its indices names.
+-/
+theorem slashedFlagAt_processAttesterSlashing {config : Config} {checks : SignatureChecks}
+    {state after : BeaconState preset fork} {slashing : AttesterSlashing preset fork}
+    (computed : processAttesterSlashing config checks state slashing = .ok after) (position : Nat)
+    (outside : ∀ index ∈ slashingIndices slashing, index.toNat ≠ position) :
+    slashedFlagAt after position = slashedFlagAt state position := by
+  simp only [processAttesterSlashing, bind_ok_iff, ensure_ok_iff] at computed
+  obtain ⟨_, _, _, _, _, _, _, _, _, _, ⟨folded, slashedAny⟩, foldOk, computed⟩ := computed
+  simp only [pure, Except.pure, Except.ok.injEq] at computed
+  obtain ⟨_, _, rfl⟩ := computed
+  exact (foldlM_slashIfSlashable _ foldOk).2.2.2 position outside
 
 theorem sameSizes_processAttesterSlashing {config : Config} {checks : SignatureChecks}
     {state after : BeaconState preset fork} {slashing : AttesterSlashing preset fork}

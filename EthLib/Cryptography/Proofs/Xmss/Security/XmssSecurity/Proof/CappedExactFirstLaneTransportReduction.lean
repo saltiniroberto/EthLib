@@ -6,7 +6,7 @@ public import EthLib.Cryptography.Proofs.Xmss.Security.XmssSecurity.Proof.Capped
 public import EthLib.Cryptography.Proofs.Xmss.Security.XmssSecurity.Proof.CappedChain.DirectQueryAccounting
 public import EthLib.Cryptography.Proofs.Xmss.Security.XmssSecurity.Proof.StateLens
 public import EthLib.Cryptography.Proofs.Xmss.Security.XmssSecurity.Proof.EagerTraceInvariant
-public import EthLib.Cryptography.Proofs.Xmss.Unforgeability.Translate
+public import EthLib.Cryptography.Proofs.Xmss.Security.XmssSecurity.Translate
 
 @[expose] public section
 
@@ -454,6 +454,34 @@ theorem globalFirstLaneSignatureReveal_result_eq
   simp only [support_pure, Set.mem_singleton_iff] at hprojected
   exact congrArg Prod.fst hprojected
 
+/-- An output of a bind simulated in the first-lane traced world comes from outputs of its steps.
+
+It reads the generic statement at the first-lane world.
+
+The kernel would otherwise match the world's two names inside a support. -/
+private theorem exists_eq_of_mem_support_firstLaneEagerTrace_bind {α β : Type}
+    (table : GlobalChainValueIndex → Digest) (mx : OracleComp GlobalFirstLaneWorld α)
+    (my : α → OracleComp GlobalFirstLaneWorld β)
+    {y : β × FirstLaneOracleSimulation.ActionTrace GlobalChainValueIndex}
+    (h : y ∈ support
+      (simulateQ (FirstLaneOracleSimulation.eagerTraceImpl table)
+        (mx >>= my : OracleComp GlobalFirstLaneWorld β)).run) :
+    ∃ a w, (a, w) ∈ support (simulateQ (FirstLaneOracleSimulation.eagerTraceImpl table) mx).run ∧
+      ∀ c, (simulateQ (FirstLaneOracleSimulation.eagerTraceImpl table) (my a)).run = c →
+        ∃ b w', (b, w') ∈ support c ∧ y = (b, w ++ w') :=
+  exists_eq_of_mem_support_simulateQ_writerT_bind _ _ _ h
+
+/-- A uniform computation lifted into the first-lane traced simulation leaves an empty trace. -/
+private theorem firstLaneEagerTrace_liftProbComp_trace_eq_nil {α : Type}
+    (table : GlobalChainValueIndex → Digest) (computation : ProbComp α) {a : α}
+    {trace : FirstLaneOracleSimulation.ActionTrace GlobalChainValueIndex}
+    (h : (a, trace) ∈ support (simulateQ (FirstLaneOracleSimulation.eagerTraceImpl table)
+      (FirstLaneOracleSimulation.liftProbComp computation)).run) :
+    trace = [] := by
+  rw [FirstLaneOracleSimulation.simulate_eagerTrace_liftProbComp, support_map] at h
+  obtain ⟨_, -, h⟩ := h
+  exact (Prod.mk.inj h).2.symm
+
 theorem mem_support_globalFirstLaneSigningQuery
     {table : GlobalChainValueIndex → Digest} {keyView : ProgrammedGlobalChainKeygenView}
     {request : SignRequest} {state : GlobalCausalHashState}
@@ -467,15 +495,21 @@ theorem mem_support_globalFirstLaneSigningQuery
         (globalFirstLaneSignBoundedAttempts keyView request base signingAttemptLimit 0
           state)).run) ∧
       result = (topSignedResult keyView request attemptResult.1, attemptResult.2) := by
-  unfold globalFirstLaneSigningQuery at hresult
-  rw [simulateQ_bind, WriterT.run_bind', mem_support_bind_iff,
-    FirstLaneOracleSimulation.simulate_eagerTrace_liftProbComp] at hresult
-  obtain ⟨baseTrace, hbaseTrace, hresult⟩ := hresult
-  rw [support_map] at hbaseTrace
-  obtain ⟨base, _hbase, rfl⟩ := hbaseTrace
-  simp at hresult
-  obtain ⟨a, b, c, hmem, rfl⟩ := hresult
-  exact ⟨base, ((a, b), c), hmem, rfl⟩
+  -- Unfold by the equation and bind on any computation, so the kernel runs no signer.
+  rw [globalFirstLaneSigningQuery.eq_def] at hresult
+  obtain ⟨base, baseTrace, hbase, hrest⟩ :=
+    exists_eq_of_mem_support_firstLaneEagerTrace_bind _ _ _ hresult
+  have hbaseTrace := firstLaneEagerTrace_liftProbComp_trace_eq_nil _ _ hbase
+  obtain ⟨output, outputTrace, houtput, hresultEq⟩ := hrest _ rfl
+  obtain ⟨attempt, attemptTrace, hattempt, hrest⟩ :=
+    exists_eq_of_mem_support_firstLaneEagerTrace_bind _ _ _ houtput
+  obtain ⟨pureOutput, pureTrace, hpure, houtputEq⟩ := hrest _ rfl
+  refine ⟨base, (attempt, attemptTrace), hattempt, ?_⟩
+  simp only [simulateQ_pure, WriterT.run_pure, support_pure, Set.mem_singleton_iff,
+    Prod.mk.injEq] at hpure
+  simp only [Prod.mk.injEq] at houtputEq
+  rw [hresultEq, hbaseTrace, houtputEq.1, houtputEq.2, hpure.1, hpure.2]
+  simp
 
 theorem globalFirstLaneSigningAttempt_support_decompose
     (table : GlobalChainValueIndex → Digest)
@@ -1036,8 +1070,10 @@ theorem globalFirstLaneOracleTraceSublist_holds
       exact globalFirstLaneUniformQuery_trace_sublist keyView n state
         encodingTrace result
   | inr hashInput =>
+      -- Compare the sets: the kernel reduces a membership in `support` by running it.
       exact globalFirstLaneHashQuery_trace_sublist table keyView edgeHigh
-        hashInput state encodingTrace result hresult
+        hashInput state encodingTrace result
+        (Set.mem_of_subset_of_mem (by exact subset_rfl) hresult)
 
 abbrev GlobalFirstLaneExactTracedOracleTraceSublist
     (table : GlobalChainValueIndex → Digest)
@@ -1073,6 +1109,46 @@ theorem globalFirstLaneExactTracedOracleTraceSublist_holds
   exact globalFirstLaneOracleTraceSublist_holds table keyView edgeHigh
     input state.causalState initialTrace
 
+/-- The traced signing oracle, run on a request, is the traced lift of the signer.
+
+A proof rewrites with it, so the kernel compares the oracle and its definition as computations. -/
+private theorem globalFirstLaneExactTracedSigningImpl_eagerTrace
+    (table : GlobalChainValueIndex → Digest)
+    (keyView : ProgrammedGlobalChainKeygenView) (request : SignRequest)
+    (state : GlobalHighDirectTracedState) :
+    (simulateQ (FirstLaneOracleSimulation.eagerTraceImpl table)
+        ((globalFirstLaneExactTracedSigningImpl keyView request).run state)).run =
+      (simulateQ (FirstLaneOracleSimulation.eagerTraceImpl table)
+        ((globalExactTracedLift keyView (.inr request)
+          (globalFirstLaneSigningImpl keyView request)).run state)).run :=
+  rfl
+
+/-- The first-lane signer, run from a causal state at the joint range, is the signing query.
+
+A proof rewrites with it, so the kernel compares the signer and the query as computations. -/
+private theorem globalFirstLaneSigningImpl_eagerTrace_range (table : GlobalChainValueIndex → Digest)
+    (keyView : ProgrammedGlobalChainKeygenView) (request : SignRequest)
+    (state : GlobalCausalHashState) :
+    (simulateQ (FirstLaneOracleSimulation.eagerTraceImpl table)
+        (@StateT.run GlobalCausalHashState (OracleComp GlobalFirstLaneWorld)
+          ((OracleWorld + SigningSpec).Range (.inr request))
+          (globalFirstLaneSigningImpl keyView request) state)).run =
+      ((simulateQ (FirstLaneOracleSimulation.eagerTraceImpl table)
+        (globalFirstLaneSigningQuery keyView request state)).run :
+        ProbComp ((Option Signature × GlobalCausalHashState) ×
+          FirstLaneOracleSimulation.ActionTrace GlobalChainValueIndex)) :=
+  rfl
+
+/-- An output of a traced signing run, read at the signing range, is one at the joint range. -/
+private theorem mem_support_range_inr_of_signingRange {σ ω : Type} (request : SignRequest)
+    (c : ProbComp (((OracleWorld + SigningSpec).Range (.inr request) × σ) × ω))
+    (raw : (SigningSpec.Range request × σ) × ω)
+    (h : @Membership.mem ((SigningSpec.Range request × σ) × ω)
+      (Set ((SigningSpec.Range request × σ) × ω)) _ (support c) raw) :
+    @Membership.mem (((OracleWorld + SigningSpec).Range (.inr request) × σ) × ω) _ _
+      (support c) raw :=
+  h
+
 theorem globalFirstLaneExactTracedSigningImpl_trace_sublist
     (table : GlobalChainValueIndex → Digest)
     (keyView : ProgrammedGlobalChainKeygenView) (request : SignRequest)
@@ -1089,13 +1165,41 @@ theorem globalFirstLaneExactTracedSigningImpl_trace_sublist
         (state.causalState.cache, []) result.1.1
           (result.1.2.causalState.cache, []) initialTrace)
       (initialTrace ++ result.2.encodingActions) := by
-  unfold globalFirstLaneExactTracedSigningImpl at hresult
+  -- Rewrite by equations and read outputs at matching ranges, so the kernel runs no signer.
+  rw [globalFirstLaneExactTracedSigningImpl_eagerTrace] at hresult
   apply globalExactTracedLift_trace_sublist table keyView
     (.inr request) (globalFirstLaneSigningImpl keyView request) state
-      initialTrace result hresult
+      initialTrace result (mem_support_range_inr_of_signingRange request _ result hresult)
   intro baseResult hbase
+  rw [globalFirstLaneSigningImpl_eagerTrace_range] at hbase
   exact globalFirstLaneSigningQuery_trace_sublist table keyView request
-    state.causalState initialTrace baseResult hbase
+    state.causalState initialTrace baseResult
+      (mem_support_range_inr_traced request _ baseResult hbase)
+
+/-- The traced adversary oracle, run on a signing request, is the traced lift of the signer.
+
+A proof rewrites with it, so the kernel compares the oracle and its branch as computations. -/
+private theorem globalFirstLaneExactTracedMappedAdversaryImpl_eagerTrace_inr
+    (table : GlobalChainValueIndex → Digest)
+    (keyView : ProgrammedGlobalChainKeygenView)
+    (edgeHigh : GlobalChainEdgeIndex → Digest) (request : SignRequest)
+    (state : GlobalHighDirectTracedState) :
+    (simulateQ (FirstLaneOracleSimulation.eagerTraceImpl table)
+        ((globalFirstLaneExactTracedMappedAdversaryImpl keyView edgeHigh
+          (.inr request)).run state)).run =
+      (simulateQ (FirstLaneOracleSimulation.eagerTraceImpl table)
+        ((globalExactTracedLift keyView (.inr request)
+          (globalFirstLaneSigningImpl keyView request)).run state)).run :=
+  rfl
+
+/-- An output of a traced signing run, read at the joint range, is one at the signing range. -/
+private theorem mem_support_signingRange_of_range_inr {σ ω : Type} (request : SignRequest)
+    (c : ProbComp ((SigningSpec.Range request × σ) × ω))
+    (raw : ((OracleWorld + SigningSpec).Range (.inr request) × σ) × ω)
+    (h : @Membership.mem (((OracleWorld + SigningSpec).Range (.inr request) × σ) × ω)
+      (Set (((OracleWorld + SigningSpec).Range (.inr request) × σ) × ω)) _ (support c) raw) :
+    @Membership.mem ((SigningSpec.Range request × σ) × ω) _ _ (support c) raw :=
+  h
 
 theorem globalFirstLaneExactTracedMappedAdversaryImpl_query_trace_sublist
     (table : GlobalChainValueIndex → Digest)
@@ -1121,8 +1225,12 @@ theorem globalFirstLaneExactTracedMappedAdversaryImpl_query_trace_sublist
       exact globalFirstLaneExactTracedOracleTraceSublist_holds table keyView
         edgeHigh worldInput state initialTrace result hresult
   | inr request =>
+      -- Rewrite by equations and read at the signing range, so the kernel runs no signer.
+      rw [globalFirstLaneExactTracedMappedAdversaryImpl_eagerTrace_inr,
+        ← globalFirstLaneExactTracedSigningImpl_eagerTrace] at hresult
       exact globalFirstLaneExactTracedSigningImpl_trace_sublist table keyView
-        request state initialTrace result hresult
+        request state initialTrace result
+          (mem_support_signingRange_of_range_inr request _ result hresult)
 
 theorem globalFirstLaneLiftRevealProbe_mem_eagerTrace_support
     (table : GlobalChainValueIndex → Digest)
@@ -1193,7 +1301,8 @@ theorem globalFirstLaneVerifierHashExecution_cache_le
         (globalFirstLaneVerifierHashExecution keyView edgeHigh hashInput
           state)).run)) :
     state.cache ≤ result.1.2.cache := by
-  unfold globalFirstLaneVerifierHashExecution at hresult
+  -- Rewrite, not unfold: unfolding makes the kernel run the computation to compare supports.
+  rw [globalFirstLaneVerifierHashExecution] at hresult
   exact globalFirstLaneHashQuery_cache_le table keyView edgeHigh hashInput state
     result hresult
 
@@ -1242,10 +1351,13 @@ theorem globalFirstLaneVerifierHashExecution_simulateQ_cache_le
           (globalFirstLaneVerifierHashExecution keyView edgeHigh hashInput))
             computation).run initialState)).run)) :
     initialState.cache ≤ result.1.2.cache := by
+  -- Compare the sets: the kernel reduces a membership in `support` by running the computation.
   exact simulateQ_eagerTrace_state_cache_le table
     (globalFirstLaneVerifierHashExecution keyView edgeHigh)
       (fun state : GlobalCausalHashState => state.cache)
-      (globalFirstLaneVerifierHashExecution_cache_le table keyView edgeHigh)
+      (fun hashInput state result hstep =>
+        globalFirstLaneVerifierHashExecution_cache_le table keyView edgeHigh hashInput state
+          result (Set.mem_of_subset_of_mem (by exact subset_rfl) hstep))
       computation initialState result hresult
 
 @[irreducible]
@@ -1371,11 +1483,13 @@ theorem globalFirstLaneEncodingHash_support_decompose
               (Concrete.encodingPayload message randomness)) initialState)).run) ∧
       result = ((truncateHash queryHead.1.1, queryHead.1.2), queryHead.2) := by
   rw [concreteEncodingHash_eq_query] at hresult
-  exact simulateQ_eagerTrace_query_pure_support_decompose table
+  -- Compare the sets: the kernel reduces a membership in `support` by running the computation.
+  obtain ⟨queryHead, hhead, rfl⟩ := simulateQ_eagerTrace_query_pure_support_decompose table
     (globalFirstLaneVerifierHashExecution keyView edgeHigh)
       (tweakableHashInput keyView.publicKey.parameter (.encoding leafIndex)
         (Concrete.encodingPayload message randomness)) truncateHash
-      initialState result hresult
+      initialState result (Set.mem_of_subset_of_mem (by exact subset_rfl) hresult)
+  exact ⟨queryHead, Set.mem_of_subset_of_mem (by exact subset_rfl) hhead, rfl⟩
 
 theorem globalFirstLaneVerifier_support_decompose_raw
     (table : GlobalChainValueIndex → Digest)
@@ -1411,15 +1525,16 @@ theorem globalFirstLaneVerifier_support_decompose_raw
   rw [globalFirstLaneVerifier_eq_hashExecution keyView edgeHigh forgery]
     at hresult
   rw [concreteVerify_eq_encodingHash_bind_afterDigest] at hresult
-  rw [simulateQ_bind, StateT.run_bind, simulateQ_bind,
-    WriterT.run_bind', mem_support_bind_iff] at hresult
-  obtain ⟨head, hhead, htail⟩ := hresult
+  -- Rewrite the set: the kernel reduces a membership in `support` by running the computation.
+  obtain ⟨head, hhead, htail⟩ := Set.mem_iUnion₂.1 (Set.mem_of_subset_of_mem (by
+    rw [simulateQ_bind, StateT.run_bind, simulateQ_bind, WriterT.run_bind', support_bind])
+    hresult)
   rw [support_map] at htail
   obtain ⟨tail, htail, rfl⟩ := htail
   obtain ⟨queryHead, hquery, rfl⟩ :=
     globalFirstLaneEncodingHash_support_decompose table keyView edgeHigh
       forgery.leafIndex forgery.message forgery.signature.randomness initialState
-        head hhead
+        head (Set.mem_of_subset_of_mem (by exact subset_rfl) hhead)
   refine ⟨queryHead, tail, hquery, ?_, ?_⟩
   · simpa using htail
   · cases tail
@@ -1469,8 +1584,8 @@ theorem globalFirstLaneVerifier_support_decompose
           (Concrete.encodingPayload forgery.message
             forgery.signature.randomness) = targetInput := by
     simp [targetInput, Concrete.CacheView.encodingInput, hparameter]
-  rw [hqueryInput] at hquery
-  unfold globalFirstLaneVerifierHashExecution at hquery
+  -- Rewrite, not unfold: unfolding makes the kernel run the computation to compare supports.
+  rw [hqueryInput, globalFirstLaneVerifierHashExecution] at hquery
   have hleafIndex : encodingInputLeafIndex? keyView.secretKey.parameter targetInput =
       some forgery.leafIndex := by
     simp [targetInput]
@@ -1945,6 +2060,28 @@ theorem globalFirstLaneExactTracedMappedAdversaryImpl_uniform_validSignLeafIndic
   exact globalFirstLaneUniformImpl_validSignLeafIndices_eq_nil table n
     initialState.causalState baseResult hbase
 
+/-- The first-lane signer, run from a causal state, is the signing query from it.
+
+A proof rewrites with it, so the kernel compares the signer and the query as computations. -/
+private theorem globalFirstLaneSigningImpl_eagerTrace (table : GlobalChainValueIndex → Digest)
+    (keyView : ProgrammedGlobalChainKeygenView) (request : SignRequest)
+    (state : GlobalCausalHashState) :
+    (simulateQ (FirstLaneOracleSimulation.eagerTraceImpl table)
+        ((globalFirstLaneSigningImpl keyView request).run state)).run =
+      ((simulateQ (FirstLaneOracleSimulation.eagerTraceImpl table)
+        (globalFirstLaneSigningQuery keyView request state)).run :
+        ProbComp ((Option Signature × GlobalCausalHashState) ×
+          FirstLaneOracleSimulation.ActionTrace GlobalChainValueIndex)) :=
+  rfl
+
+/-- An output of a traced signing run, read at the signing range, is one at its type. -/
+private theorem mem_support_signingRange {σ ω : Type} (request : SignRequest)
+    (c : ProbComp ((Option Signature × σ) × ω)) (raw : (SigningSpec.Range request × σ) × ω)
+    (h : @Membership.mem ((SigningSpec.Range request × σ) × ω)
+      (Set ((SigningSpec.Range request × σ) × ω)) _ (support c) raw) :
+    @Membership.mem ((Option Signature × σ) × ω) _ _ (support c) raw :=
+  h
+
 theorem globalFirstLaneExactTracedMappedAdversaryImpl_signing_validSignLeafIndices_step
     (table : GlobalChainValueIndex → Digest)
     (keyView : ProgrammedGlobalChainKeygenView)
@@ -1965,14 +2102,28 @@ theorem globalFirstLaneExactTracedMappedAdversaryImpl_signing_validSignLeafIndic
           result.2.encodingActions)
       (result.1.2.attackerTrace.toSigningLog.map
         fun entry => entry.1.leafIndex) := by
-  unfold globalFirstLaneExactTracedMappedAdversaryImpl
-    globalFirstLaneExactTracedSigningImpl at hresult
+  -- Rewrite by the branch equation, so the kernel never runs signing.
+  rw [globalFirstLaneExactTracedMappedAdversaryImpl_eagerTrace_inr] at hresult
   apply globalExactTracedLift_signing_validSignLeafIndices_step table
     keyView request (globalFirstLaneSigningImpl keyView request)
       initialState result hresult
   intro baseResult hbase
+  rw [globalFirstLaneSigningImpl_eagerTrace] at hbase
   exact globalFirstLaneSigningQuery_validSignLeafIndices_sublist_singleton table
-    keyView request initialState.causalState baseResult hbase
+    keyView request initialState.causalState baseResult
+      (mem_support_signingRange request _ baseResult hbase)
+
+/-- An output of a traced run at the generic world is one at the first-lane world. -/
+private theorem mem_support_eagerTrace_run_firstLaneWorld {α σ : Type}
+    (table : GlobalChainValueIndex → Digest)
+    (x : StateT σ (OracleComp GlobalFirstLaneWorld) α) (state : σ)
+    (r : (α × σ) × FirstLaneOracleSimulation.ActionTrace GlobalChainValueIndex)
+    (h : r ∈ support ((simulateQ (FirstLaneOracleSimulation.eagerTraceImpl table)
+      (@StateT.run σ (OracleComp (FirstLaneOracleSimulation.World GlobalChainValueIndex)) α
+        x state)).run)) :
+    r ∈ support ((simulateQ (FirstLaneOracleSimulation.eagerTraceImpl table)
+      (x.run state)).run) :=
+  h
 
 theorem globalFirstLaneExactTracedMappedAdversary_validSignLeafIndices_sublist_of_hashRun
     (table : GlobalChainValueIndex → Digest)
@@ -2039,9 +2190,11 @@ theorem globalFirstLaneExactTracedMappedAdversary_validSignLeafIndices_sublist_o
             intro baseResult hbase
             exact hhashNil hashInput state.causalState baseResult hbase
     | inr request =>
+        -- Read the step at the first-lane world: the kernel would run signing to match them.
         exact
           globalFirstLaneExactTracedMappedAdversaryImpl_signing_validSignLeafIndices_step
-            table keyView edgeHigh request state stepResult hstep
+            table keyView edgeHigh request state stepResult
+              (mem_support_eagerTrace_run_firstLaneWorld table _ state stepResult hstep)
   · exact hresult
 
 theorem globalFirstLaneExactTracedMappedAdversary_validSignLeafIndices_sublist

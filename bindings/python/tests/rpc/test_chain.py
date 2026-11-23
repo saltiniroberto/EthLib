@@ -1,0 +1,1304 @@
+"""The official JSON-RPC fixtures, answered by a chain view built from the test chain."""
+
+import json
+from collections.abc import Callable
+from dataclasses import replace
+from pathlib import Path
+from typing import Any, Final
+
+import pytest
+
+from ethlib.cryptography import ethash
+from ethlib.cryptography.keccak import keccak256
+from ethlib.execution import rpc, trie
+from ethlib.execution.pow import seal_hash
+from ethlib.serialization import rlp
+from raising import raises
+
+from .chain import FIXTURES, ReplayChain, block_hash, read_fixture, replay_chain
+
+# Each method that the view serves, with the schema of its result in `src/eth` of the source.
+# A result that is an object has no reader of its schema, so it maps to None.
+# Some of those objects have their own check of the schema, further below.
+RESULT_SCHEMAS: Final[dict[str, rpc.Schema | None]] = {
+    "eth_blockNumber": "uint",
+    "eth_chainId": "uint",
+    "eth_config": None,
+    "net_version": "uintDecimal",
+    "eth_getTransactionByHash": None,
+    "eth_getTransactionByBlockHashAndIndex": None,
+    "eth_getTransactionByBlockNumberAndIndex": None,
+    "eth_getHeaderByHash": None,
+    "eth_getHeaderByNumber": None,
+    "eth_getBlockByHash": None,
+    "eth_getBlockByNumber": None,
+    "eth_getBlockTransactionCountByHash": "uint",
+    "eth_getBlockTransactionCountByNumber": "uint",
+    "eth_getTransactionReceipt": None,
+    "eth_getBlockReceipts": None,
+    "eth_getLogs": None,
+    "eth_getBalance": "uint",
+    "eth_getTransactionCount": "uint",
+    "eth_getCode": "bytes",
+    "eth_getStorageAt": "bytes",
+    "eth_getStorageValues": None,
+    "eth_getProof": None,
+    "eth_call": "bytes",
+    "eth_estimateGas": "uint",
+    "eth_createAccessList": None,
+    "debug_getRawHeader": "bytes",
+    "debug_getRawBlock": "bytes",
+    "debug_getRawTransaction": "bytes",
+    "debug_getRawReceipts": None,
+    "debug_traceTransaction": None,
+    "debug_traceBlockByNumber": None,
+    "debug_traceBlockByHash": None,
+}
+
+
+def _check_access_list_result(result: object) -> None:
+    """Raise unless the result fits the result schema of `eth_createAccessList` in the source."""
+    if not isinstance(result, dict) or not set(result) <= {"accessList", "error", "gasUsed"}:
+        raise ValueError("result: not an object of accessList, error and gasUsed")
+    entries = result.get("accessList", [])
+    if not isinstance(entries, list):
+        raise ValueError("accessList: not an array")
+    for entry in entries:
+        if not isinstance(entry, dict) or set(entry) != {"address", "storageKeys"}:
+            raise ValueError("accessList: an entry is not an address with its storage keys")
+        rpc.read_param("address", entry["address"])
+        if not isinstance(entry["storageKeys"], list):
+            raise ValueError("storageKeys: not an array")
+        for key in entry["storageKeys"]:
+            rpc.read_param("hash32", key)
+    if not isinstance(result.get("error", ""), str):
+        raise ValueError("error: not a string")
+    if "gasUsed" in result:
+        rpc.read_param("uint", result["gasUsed"])
+
+
+# The fields of a StructLog in `opcode-tracer.yaml` of the source.
+_STRUCT_LOG_REQUIRED: Final = frozenset({"pc", "op", "gas", "gasCost", "depth"})
+_STRUCT_LOG_OPTIONAL: Final = frozenset(
+    {"error", "refund", "stack", "memory", "returnData", "storage"}
+)
+
+
+def _check_count(name: str, value: object, *, minimum: int = 0) -> None:
+    """Raise unless the value is a JSON integer of at least `minimum`."""
+    if not isinstance(value, int) or isinstance(value, bool) or value < minimum:
+        raise ValueError(f"{name}: not an integer of at least {minimum}")
+
+
+def _check_struct_log(entry: object) -> None:
+    """Raise unless the entry fits the StructLog schema of the source."""
+    if not isinstance(entry, dict):
+        raise ValueError("structLogs: an entry is not an object")
+    if not _STRUCT_LOG_REQUIRED <= set(entry) <= _STRUCT_LOG_REQUIRED | _STRUCT_LOG_OPTIONAL:
+        raise ValueError("structLogs: an entry lacks a required field or has an unknown one")
+    for name in ("pc", "gas", "gasCost", "refund"):
+        if name in entry:
+            _check_count(name, entry[name])
+    _check_count("depth", entry["depth"], minimum=1)
+    if not isinstance(entry["op"], str):
+        raise ValueError("op: not a string")
+    # The source forbids an error that is null or empty.
+    if "error" in entry and (not isinstance(entry["error"], str) or not entry["error"]):
+        raise ValueError("error: not a non-empty string")
+    for word in entry.get("stack", []):
+        rpc.read_param("uint256", word)
+    for chunk in entry.get("memory", []):
+        rpc.read_param("bytes32", chunk)
+    if "returnData" in entry:
+        rpc.read_param("bytes", entry["returnData"])
+    # The source leaves out a refund of zero, and the storage of a step that fails.
+    if entry.get("refund") == 0:
+        raise ValueError("refund: zero, which the source leaves out")
+    if "storage" in entry and "error" in entry:
+        raise ValueError("storage: at a step that fails")
+    if "storage" in entry:
+        if not isinstance(entry["storage"], dict):
+            raise ValueError("storage: not an object")
+        for key, value in entry["storage"].items():
+            rpc.read_param("bytes32", key)
+            rpc.read_param("bytes32", value)
+
+
+def _check_trace_result(result: object) -> None:
+    """Raise unless the result fits the OpcodeTransactionTrace schema of the source."""
+    if not isinstance(result, dict) or set(result) != {
+        "gas",
+        "failed",
+        "returnValue",
+        "structLogs",
+    }:
+        raise ValueError("result: not an object of gas, failed, returnValue and structLogs")
+    _check_count("gas", result["gas"])
+    if not isinstance(result["failed"], bool):
+        raise ValueError("failed: not a boolean")
+    rpc.read_param("bytes", result["returnValue"])
+    if not isinstance(result["structLogs"], list):
+        raise ValueError("structLogs: not an array")
+    for entry in result["structLogs"]:
+        _check_struct_log(entry)
+
+
+def _check_block_trace_result(result: object) -> None:
+    """Raise unless the result is an array of OpcodeBlockTransactionTrace of the source."""
+    if not isinstance(result, list):
+        raise ValueError("result: not an array")
+    for item in result:
+        if not isinstance(item, dict) or set(item) != {"txHash", "result"}:
+            raise ValueError("result: an entry is not an object of txHash and result")
+        rpc.read_param("hash32", item["txHash"])
+        _check_trace_result(item["result"])
+
+
+# The methods whose result is an object, with a check of its schema.
+RESULT_CHECKS: Final[dict[str, Callable[[object], None]]] = {
+    "eth_createAccessList": _check_access_list_result,
+    "debug_traceTransaction": _check_trace_result,
+    "debug_traceBlockByNumber": _check_block_trace_result,
+    "debug_traceBlockByHash": _check_block_trace_result,
+}
+
+# The trace methods, whose speconly fixtures EthLib still matches value for value.
+TRACE_METHODS: Final = frozenset(
+    {
+        "debug_traceTransaction",
+        "debug_traceBlockByNumber",
+        "debug_traceBlockByHash",
+    }
+)
+
+
+# Every fixture of a method that the view serves.
+SERVED: Final = sorted(
+    path for method in RESULT_SCHEMAS for path in (FIXTURES / method).glob("*.io")
+)
+
+
+@pytest.fixture(scope="module")
+def answers() -> dict[str, dict[str, Any]]:
+    """The response of the view to each request of the served fixtures, by its text."""
+    requests = sorted(
+        {exchange.request for path in SERVED for exchange in read_fixture(path).exchanges}
+    )
+    responses = replay_chain().serve(requests)
+    answers = {}
+    for request, text in zip(requests, responses, strict=True):
+        assert text is not None, request
+        answers[request] = json.loads(text)
+    return answers
+
+
+def test_every_method_has_fixtures() -> None:
+    """Each served method has a fixture, so a missing directory does not pass silently."""
+    assert {path.parent.name for path in SERVED} == set(RESULT_SCHEMAS)
+
+
+@pytest.mark.parametrize("path", SERVED, ids=lambda path: f"{path.parent.name}/{path.stem}")
+def test_fixture(path: Path, answers: dict[str, dict[str, Any]]) -> None:
+    """The view answers each request of the fixture as the fixture expects."""
+    fixture = read_fixture(path)
+    for exchange in fixture.exchanges:
+        got, expected = answers[exchange.request], exchange.response
+        assert got["jsonrpc"] == "2.0"
+        assert got["id"] == expected["id"]
+        if "error" in expected:
+            # The source fixes the code of an error, and its data where a fixture gives it.
+            assert set(got) == {"jsonrpc", "id", "error"}
+            assert got["error"]["code"] == expected["error"]["code"]
+            if "data" in expected["error"]:
+                assert got["error"]["data"] == expected["error"]["data"]
+            continue
+        assert set(got) == {"jsonrpc", "id", "result"}
+        # Every result reads under the schema of its method, when a reader has one.
+        schema = RESULT_SCHEMAS[fixture.method]
+        if schema is not None:
+            rpc.read_param(schema, got["result"])
+        check = RESULT_CHECKS.get(fixture.method)
+        if check is not None:
+            check(got["result"])
+        # A fixture marked speconly is checked against the schema only, as the source says.
+        # Without a check of the schema, such a fixture would check nothing, so none may exist.
+        assert schema is not None or check is not None or not fixture.speconly
+        if not fixture.speconly:
+            assert got["result"] == expected["result"]
+        elif fixture.method in TRACE_METHODS:
+            # The trace leaves out a refund counter of zero, as the source requires.
+            assert got["result"] == expected["result"]
+
+
+def test_chain_links() -> None:
+    """The chain is a genesis block, the parent of the first block, then 60 blocks to the head."""
+    chain = replay_chain()
+    assert len(chain.blocks) == 61
+    _, first = chain.blocks[1]
+    # The parent hash is the first field of the header of the first block.
+    assert rlp.decode(first)[0][0] == block_hash(chain.blocks[0])
+    assert chain.forkchoice[0] == block_hash(chain.blocks[-1])
+
+
+def _answer(text: str) -> Any:
+    (response,) = replay_chain().serve([text])
+    assert response is not None
+    return json.loads(response)
+
+
+def _error(text: str) -> dict[str, Any]:
+    answer = _answer(text)
+    assert set(answer) == {"jsonrpc", "id", "error"}
+    return answer
+
+
+def _transaction_hash(block: rpc.ChainBlock, index: int) -> bytes:
+    """The hash of a transaction of a block, from the raw block: the hash of its envelope."""
+    _, raw = block
+    item = rlp.decode(raw)[1][index]
+    # A legacy transaction is an RLP list; a typed one is already its envelope bytes.
+    return keccak256(rlp.encode(item) if isinstance(item, list) else item)
+
+
+def _call(method: str, params: list[object]) -> Any:
+    request = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+    answer = _answer(json.dumps(request))
+    assert set(answer) == {"jsonrpc", "id", "result"}
+    return answer["result"]
+
+
+# The creation that block 1 holds, which the trace fixtures name.
+_TRACED: Final = "0xc1d605c6612a5fe84dc95810030bfe5b1d327652b381bc695e28f50d13b2b09e"
+
+
+def test_trace_limit_keeps_the_first_entries() -> None:
+    """A limit keeps the first entries of the full trace, and the rest of the result."""
+    full = _call("debug_traceTransaction", [_TRACED])
+    cut = _call("debug_traceTransaction", [_TRACED, {"limit": 2}])
+    assert len(full["structLogs"]) > 2
+    assert cut == {**full, "structLogs": full["structLogs"][:2]}
+    # The refund counter of this trace stays zero, so no entry gives it, as the source requires.
+    assert not any("refund" in entry for entry in full["structLogs"])
+
+
+@pytest.mark.parametrize("config", [{"limit": 0}, {"tracer": ""}], ids=["limit-0", "tracer-empty"])
+def test_trace_default_config(config: dict[str, object]) -> None:
+    """A limit of 0 and an empty tracer name give the trace with no configuration."""
+    assert _call("debug_traceTransaction", [_TRACED, config]) == _call(
+        "debug_traceTransaction", [_TRACED]
+    )
+
+
+def test_trace_flags() -> None:
+    """The stack flag leaves out the stack, the memory flag adds the memory, and nothing else."""
+    full = _call("debug_traceTransaction", [_TRACED])
+    assert any("stack" in entry for entry in full["structLogs"])
+    bare = _call("debug_traceTransaction", [_TRACED, {"disableStack": True}])
+    assert bare["structLogs"] == [
+        {key: value for key, value in entry.items() if key != "stack"}
+        for entry in full["structLogs"]
+    ]
+    with_memory = _call("debug_traceTransaction", [_TRACED, {"enableMemory": True}])
+    assert any("memory" in entry for entry in with_memory["structLogs"])
+    assert [
+        {key: value for key, value in entry.items() if key != "memory"}
+        for entry in with_memory["structLogs"]
+    ] == full["structLogs"]
+
+
+@pytest.mark.parametrize(
+    ("config", "data"),
+    [
+        ({"tracer": "callTracer"}, "tracer: named tracers are not supported"),
+        ({"limit": -1}, "limit: negative"),
+        ({"limit": 1.5}, "limit: not an integer"),
+        ({"disableStack": 1}, "disableStack: not a boolean"),
+    ],
+    ids=["named-tracer", "negative-limit", "fractional-limit", "flag-not-boolean"],
+)
+def test_trace_bad_config(config: dict[str, object], data: str) -> None:
+    """A named tracer and a malformed configuration are invalid parameters."""
+    request = {"jsonrpc": "2.0", "id": 1, "method": "debug_traceTransaction"}
+    answer = _error(json.dumps({**request, "params": [_TRACED, config]}))
+    assert answer["error"] == {"code": -32602, "message": "Invalid params", "data": data}
+
+
+def _entry(**fields: object) -> dict[str, object]:
+    """A valid StructLog entry, with some fields replaced."""
+    return {"pc": 0, "op": "STOP", "gas": 0, "gasCost": 0, "depth": 1} | fields
+
+
+def _trace(*entries: dict[str, object]) -> dict[str, object]:
+    """A valid OpcodeTransactionTrace with the given entries."""
+    return {"gas": 21000, "failed": False, "returnValue": "0x", "structLogs": list(entries)}
+
+
+_HASH: Final = "0x" + "00" * 32
+
+# Results that the checks of the trace schema reject, each with the full message of its check.
+BAD_TRACE_RESULTS: Final = [
+    pytest.param(
+        _trace() | {"extra": 1},
+        ValueError,
+        "result: not an object of gas, failed, returnValue and structLogs",
+        id="extra-field",
+    ),
+    pytest.param(_trace() | {"failed": 0}, ValueError, "failed: not a boolean", id="failed"),
+    pytest.param(
+        _trace(_entry(depth=0)), ValueError, "depth: not an integer of at least 1", id="depth-0"
+    ),
+    pytest.param(
+        _trace(_entry(gas=True)), ValueError, "gas: not an integer of at least 0", id="gas-bool"
+    ),
+    pytest.param(
+        _trace({"pc": 0}),
+        ValueError,
+        "structLogs: an entry lacks a required field or has an unknown one",
+        id="missing-field",
+    ),
+    pytest.param(
+        _trace(_entry(error="")), ValueError, "error: not a non-empty string", id="empty-error"
+    ),
+    pytest.param(
+        _trace(_entry(storage=[])), ValueError, "storage: not an object", id="storage-array"
+    ),
+    pytest.param(
+        _trace(_entry(refund=0)), ValueError, "refund: zero, which the source leaves out", id="zero"
+    ),
+    pytest.param(
+        _trace(_entry(op="SSTORE", error="out of gas", storage={})),
+        ValueError,
+        "storage: at a step that fails",
+        id="storage-at-error",
+    ),
+    pytest.param(
+        _trace(_entry(memory=["0x00"])),
+        rpc.RpcError,
+        "bytes32: 1 bytes, not 32",
+        id="short-memory-word",
+    ),
+]
+
+
+@pytest.mark.parametrize(("result", "error", "message"), BAD_TRACE_RESULTS)
+def test_trace_result_check_rejects(result: object, error: type[Exception], message: str) -> None:
+    """The check of the trace schema rejects a result that breaks one of its rules."""
+    _check_trace_result(_trace())
+    with raises(error, message):
+        _check_trace_result(result)
+
+
+def test_block_trace_result_check_rejects() -> None:
+    """The check of a block trace rejects an entry without its hash or with a bad hash."""
+    _check_block_trace_result([{"txHash": _HASH, "result": _trace()}])
+    with raises(ValueError, "result: an entry is not an object of txHash and result"):
+        _check_block_trace_result([{"result": _trace()}])
+    with raises(rpc.RpcError, "hash32: 1 bytes, not 32"):
+        _check_block_trace_result([{"txHash": "0x00", "result": _trace()}])
+
+
+def test_transaction_at_index() -> None:
+    """Both lookups by block and index read the transaction at that index, not the first one."""
+    chain = replay_chain()
+    expected = "0x" + _transaction_hash(chain.blocks[1], 1).hex()
+    by_hash = "0x" + block_hash(chain.blocks[1]).hex()
+    for method, block in [
+        ("eth_getTransactionByBlockNumberAndIndex", "0x1"),
+        ("eth_getTransactionByBlockHashAndIndex", by_hash),
+    ]:
+        result = _call(method, [block, "0x1"])
+        assert result["hash"] == expected
+        assert result["transactionIndex"] == "0x1"
+        assert result["blockNumber"] == "0x1"
+        # The lookup by hash returns the same object.
+        assert _call("eth_getTransactionByHash", [expected]) == result
+
+
+def test_headers() -> None:
+    """A block has one header by number and by hash, with its hash and one key per RLP item."""
+    chain = replay_chain()
+    hashes = ["0x" + block_hash(block).hex() for block in chain.blocks]
+    by_number = [("eth_getHeaderByNumber", hex(number)) for number in range(len(hashes))]
+    by_hash = [("eth_getHeaderByHash", block) for block in hashes]
+    requests = [
+        json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": [param]})
+        for method, param in by_number + by_hash
+    ]
+    texts = chain.serve(requests)
+    results = [json.loads(text)["result"] for text in texts if text is not None]
+    assert len(results) == 2 * len(hashes)
+    headers = results[: len(hashes)]
+    assert headers == results[len(hashes) :]
+    for number, ((_, raw), header) in enumerate(zip(chain.blocks, headers, strict=True)):
+        assert header["hash"] == hashes[number]
+        assert header["number"] == hex(number)
+        # The object holds the hash and one key for each field of the RLP header, none other.
+        assert len(header) == len(rlp.decode(raw)[0]) + 1
+
+
+def test_blocks() -> None:
+    """A block object holds its header and lists its transaction hashes, which give its count."""
+    chain = replay_chain()
+    hashes = ["0x" + block_hash(block).hex() for block in chain.blocks]
+    calls = [
+        call
+        for number, block in enumerate(hashes)
+        for call in [
+            ("eth_getBlockByNumber", [hex(number), False]),
+            ("eth_getBlockByHash", [block, True]),
+            ("eth_getHeaderByHash", [block]),
+            ("eth_getBlockTransactionCountByNumber", [hex(number)]),
+        ]
+    ]
+    requests = [
+        json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+        for method, params in calls
+    ]
+    texts = chain.serve(requests)
+    results = [json.loads(text)["result"] for text in texts if text is not None]
+    assert len(results) == 4 * len(hashes)
+    for number in range(len(hashes)):
+        short, full, header, count = results[4 * number : 4 * number + 4]
+        assert {key: short[key] for key in header} == header
+        assert {key: full[key] for key in header} == header
+        assert [entry["hash"] for entry in full["transactions"]] == short["transactions"]
+        assert count == hex(len(short["transactions"]))
+
+
+def test_raw_getters() -> None:
+    """Each raw block is the RLP form of the block, and its parts match the hashes and roots."""
+    chain = replay_chain()
+    transactions = [
+        "0x" + _transaction_hash(block, index).hex()
+        for block in chain.blocks
+        for index in range(len(rlp.decode(block[1])[1]))
+    ]
+    calls = [
+        call
+        for number in range(len(chain.blocks))
+        for call in [
+            ("debug_getRawBlock", [hex(number)]),
+            ("debug_getRawHeader", [hex(number)]),
+            ("debug_getRawReceipts", [hex(number)]),
+        ]
+    ] + [("debug_getRawTransaction", [transaction]) for transaction in transactions]
+    requests = [
+        json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+        for method, params in calls
+    ]
+    texts = chain.serve(requests)
+    results = [json.loads(text)["result"] for text in texts if text is not None]
+    assert len(results) == len(calls)
+    for number, block in enumerate(chain.blocks):
+        raw_block, raw_header, raw_receipts = results[3 * number : 3 * number + 3]
+        _, raw = block
+        assert raw_block == "0x" + raw.hex()
+        assert keccak256(bytes.fromhex(raw_header[2:])) == block_hash(block)
+        # One receipt for each transaction, whose trie by index has the receipts root of the header.
+        header, transactions_of_block, *_ = rlp.decode(raw)
+        assert len(raw_receipts) == len(transactions_of_block)
+        entries = [
+            # An index is the RLP of its minimal big-endian bytes, so 0 is the empty string.
+            (
+                rlp.encode(index.to_bytes((index.bit_length() + 7) // 8, "big")),
+                bytes.fromhex(receipt[2:]),
+            )
+            for index, receipt in enumerate(raw_receipts)
+        ]
+        assert trie.root(entries) == header[5]
+    # The bytes of each transaction hash to the hash that names it in the request.
+    raw_transactions = results[3 * len(chain.blocks) :]
+    assert len(raw_transactions) == len(transactions) > 0
+    for transaction, raw_transaction in zip(transactions, raw_transactions, strict=True):
+        assert "0x" + keccak256(bytes.fromhex(raw_transaction[2:])).hex() == transaction
+
+
+# Each raw getter asked for a block or a transaction that the view does not hold.
+# The test chain holds blocks 0 to 60, so 0x3d is the first number that it does not hold.
+UNKNOWN = [
+    pytest.param("debug_getRawHeader", ["0x3d"], "unknown block", id="header"),
+    pytest.param("debug_getRawBlock", ["0x3e8"], "unknown block", id="block"),
+    pytest.param("debug_getRawReceipts", ["0x3d"], "unknown block", id="receipts-number"),
+    pytest.param("debug_getRawReceipts", ["0x" + "11" * 32], "unknown block", id="receipts-hash"),
+    pytest.param("debug_getRawTransaction", ["0x" + "11" * 32], "unknown transaction", id="tx"),
+    # The view built from the test chain has no pending block.
+    pytest.param("debug_getRawHeader", ["pending"], "unknown block", id="pending"),
+]
+
+
+@pytest.mark.parametrize(("method", "params", "data"), UNKNOWN)
+def test_raw_unknown(method: str, params: list[object], data: str) -> None:
+    """A raw getter has the code -32001 for what the view does not hold."""
+    request = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+    answer = _error(json.dumps(request))
+    assert answer["error"] == {"code": -32001, "message": "Resource not found", "data": data}
+
+
+def test_raw_tags() -> None:
+    """The tags latest and earliest name the head and the lowest block."""
+    chain = replay_chain()
+    assert _call("debug_getRawBlock", ["latest"]) == "0x" + chain.blocks[-1][1].hex()
+    assert _call("debug_getRawBlock", ["earliest"]) == "0x" + chain.blocks[0][1].hex()
+
+
+def test_receipts() -> None:
+    """The receipts of each block number their logs, add up their gas, and match each lookup."""
+    chain = replay_chain()
+    hashes = [
+        "0x" + _transaction_hash(block, index).hex()
+        for block in chain.blocks
+        for index in range(len(rlp.decode(block[1])[1]))
+    ]
+    calls = [("eth_getBlockReceipts", [hex(number)]) for number in range(len(chain.blocks))]
+    calls += [("eth_getTransactionReceipt", [transaction]) for transaction in hashes]
+    requests = [
+        json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+        for method, params in calls
+    ]
+    texts = chain.serve(requests)
+    results = [json.loads(text)["result"] for text in texts if text is not None]
+    assert len(results) == len(calls)
+    blocks, singles = results[: len(chain.blocks)], results[len(chain.blocks) :]
+    flat = [receipt for receipts in blocks for receipt in receipts]
+    # Each lookup by hash returns the object that the receipts of its block hold.
+    assert singles == flat
+    assert [receipt["transactionHash"] for receipt in flat] == hashes
+    for receipts in blocks:
+        logs = [log for receipt in receipts for log in receipt["logs"]]
+        assert [log["logIndex"] for log in logs] == [hex(index) for index in range(len(logs))]
+        gas = sum(int(receipt["gasUsed"], 16) for receipt in receipts)
+        assert gas == (int(receipts[-1]["cumulativeGasUsed"], 16) if receipts else 0)
+
+
+def test_logs_of_whole_chain() -> None:
+    """A filter over the whole chain returns every log of every receipt, in block order."""
+    chain = replay_chain()
+    calls: list[tuple[str, list[object]]] = [
+        ("eth_getBlockReceipts", [hex(number)]) for number in range(len(chain.blocks))
+    ]
+    calls.append(("eth_getLogs", [{"fromBlock": "earliest", "toBlock": "latest"}]))
+    # An empty list of addresses takes any address, as a filter with no topic position does.
+    calls.append(("eth_getLogs", [{"fromBlock": "earliest", "address": [], "topics": []}]))
+    requests = [
+        json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+        for method, params in calls
+    ]
+    results = [json.loads(text)["result"] for text in chain.serve(requests) if text is not None]
+    assert len(results) == len(calls)
+    *blocks, logs, empty_lists = results
+    expected = [log for receipts in blocks for receipt in receipts for log in receipt["logs"]]
+    assert expected
+    assert logs == expected
+    assert empty_lists == expected
+
+
+def test_logs_need_a_topic_at_each_position() -> None:
+    """A log needs a topic at each position of the filter, even one that takes any topic."""
+    logs = _call("eth_getLogs", [{"fromBlock": "earliest"}])
+    counts = {len(log["topics"]) for log in logs}
+    # The chain has logs of several topic counts, so some request below drops some logs.
+    assert len(counts) > 1
+    # Both null and an empty list take any topic at a position.
+    for wildcard in (None, []):
+        for size in range(max(counts) + 2):
+            topics = [wildcard] * size
+            result = _call("eth_getLogs", [{"fromBlock": "earliest", "topics": topics}])
+            assert result == [log for log in logs if len(log["topics"]) >= size]
+    # A position after a concrete topic needs a second topic, though it takes any.
+    first = next(log["topics"][0] for log in logs if len(log["topics"]) == 1)
+    result = _call("eth_getLogs", [{"fromBlock": "earliest", "topics": [first, None]}])
+    assert result == [
+        log for log in logs if log["topics"][:1] == [first] and len(log["topics"]) > 1
+    ]
+
+
+# Each filter that the method rejects, with the code of its error.
+# The test chain holds blocks 0 to 60.
+BAD_FILTERS = [
+    pytest.param({"fromBlock": "0x3d"}, -32602, id="from-above-head"),
+    pytest.param({"fromBlock": "0x5", "toBlock": "0x4"}, -32602, id="reversed"),
+    pytest.param({"fromBlock": "safe", "toBlock": "0x3d"}, -32602, id="tag-to-above-head"),
+    pytest.param({"fromBlock": "pending"}, -32602, id="pending"),
+    pytest.param({"blockHash": "0x" + "11" * 32}, -32001, id="unknown-hash"),
+]
+
+
+@pytest.mark.parametrize(("log_filter", "code"), BAD_FILTERS)
+def test_bad_filter(log_filter: dict[str, str], code: int) -> None:
+    """The method rejects each bad filter with the expected error code."""
+    request = {"jsonrpc": "2.0", "id": 1, "method": "eth_getLogs", "params": [log_filter]}
+    assert _error(json.dumps(request))["error"]["code"] == code
+
+
+# A contract of the test chain with code and a storage word at key 0, as the fixtures show.
+CONTRACT: Final = "0x7dcd17433742f4c0ca53122ab541d0ba67fc27df"
+KEY: Final = "0x" + "00" * 32
+# An account of the test chain that sends one transaction, as the nonce fixtures show.
+SENDER: Final = "0x0300100f529a704d19736a8714837adbc934db7f"
+
+# Each account query that the view rejects, with the code and the data of its error.
+BAD_ACCOUNT_QUERIES = [
+    pytest.param("eth_getBalance", [CONTRACT, "0x3d"], -32001, "unknown block", id="unknown-block"),
+    pytest.param("eth_getCode", [CONTRACT, "pending"], -32001, "unknown block", id="pending"),
+    pytest.param(
+        "eth_getStorageAt",
+        [CONTRACT, KEY, {"blockHash": "0x" + "11" * 32}],
+        -32001,
+        "unknown block",
+        id="unknown-hash-object",
+    ),
+    pytest.param(
+        "eth_getStorageValues",
+        [{CONTRACT: ["0xasdf"]}],
+        -32602,
+        "key: not a hex digit",
+        id="bad-key",
+    ),
+    pytest.param("eth_getBalance", [], -32602, "missing parameter", id="no-address"),
+    pytest.param("eth_getStorageAt", [CONTRACT], -32602, "missing parameter", id="no-key"),
+    pytest.param(
+        "eth_getTransactionCount",
+        [CONTRACT, "latest", "latest"],
+        -32602,
+        "too many parameters",
+        id="extra",
+    ),
+    pytest.param(
+        "eth_getStorageValues",
+        [{CONTRACT: [KEY], CONTRACT.upper().replace("0X", "0x"): [KEY]}],
+        -32602,
+        "requests: an address twice",
+        id="address-twice",
+    ),
+    # The keys of an address are an array, so null is no request for that address.
+    pytest.param(
+        "eth_getStorageValues",
+        [{CONTRACT: [KEY], "0x" + "aa" * 20: None}],
+        -32602,
+        "keys: not an array",
+        id="null-keys",
+    ),
+    pytest.param("eth_getProof", [CONTRACT], -32602, "missing parameter", id="proof-no-keys"),
+    pytest.param(
+        "eth_getProof",
+        [CONTRACT, KEY],
+        -32602,
+        "storage keys: not an array",
+        id="proof-keys-not-array",
+    ),
+    pytest.param(
+        "eth_getProof", [CONTRACT, [], "0x3d"], -32001, "unknown block", id="proof-unknown-block"
+    ),
+]
+
+
+@pytest.mark.parametrize(("method", "params", "code", "data"), BAD_ACCOUNT_QUERIES)
+def test_bad_account_query(method: str, params: list[object], code: int, data: str) -> None:
+    """The view rejects each bad account query with the expected error."""
+    request = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+    error = _error(json.dumps(request))["error"]
+    assert (error["code"], error["data"]) == (code, data)
+
+
+def test_account_queries_agree() -> None:
+    """At each block, the storage values are the words that eth_getStorageAt gives."""
+    chain = replay_chain()
+    blocks = [hex(number) for number in range(len(chain.blocks))]
+    requests = [
+        json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+        for block in blocks
+        for method, params in [
+            ("eth_getStorageAt", [CONTRACT, KEY, block]),
+            # A short key reads as a number, so "0x0" is the key of 32 zero bytes.
+            ("eth_getStorageValues", [{CONTRACT: [KEY, "0x0"], SENDER: []}, block]),
+        ]
+    ]
+    results = [json.loads(text)["result"] for text in chain.serve(requests) if text is not None]
+    assert len(results) == len(requests)
+    words = results[0::2]
+    assert results[1::2] == [{CONTRACT: [word, word], SENDER: []} for word in words]
+    # Slot 0 of the contract counts up from zero along the chain, so each block is read.
+    counts = [int(word, 16) for word in words]
+    assert counts == sorted(counts)
+    assert (counts[0], counts[-1]) == (0, 0x33)
+
+
+# An address with no account in the test chain.
+NOBODY: Final = "0x" + "ab" * 20
+
+
+# The queries of the proof test, each without its block parameter.
+PROOF_QUERIES: Final[list[tuple[str, list[object]]]] = [
+    ("eth_getHeaderByNumber", []),
+    ("eth_getBalance", [CONTRACT]),
+    ("eth_getTransactionCount", [CONTRACT]),
+    ("eth_getStorageAt", [CONTRACT, KEY]),
+    # Slot 6 of the contract is never set, so its proof shows it absent.
+    ("eth_getProof", [CONTRACT, [KEY, "0x6"]]),
+    ("eth_getProof", [NOBODY, ["0x1"]]),
+]
+
+
+def test_proof_at_each_block() -> None:
+    """At each block, the proofs hold against the header's state root and match the queries."""
+    chain = replay_chain()
+    requests = [
+        json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": [*params, hex(number)]})
+        for number in range(len(chain.blocks))
+        for method, params in PROOF_QUERIES
+    ]
+    results = [json.loads(text)["result"] for text in chain.serve(requests) if text is not None]
+    assert len(results) == len(requests)
+    size = len(PROOF_QUERIES)
+    for index in range(0, len(results), size):
+        header, balance, nonce, word, proof, absent = results[index : index + size]
+        root = bytes.fromhex(header["stateRoot"][2:])
+        # Slot 0 is set once it holds a word other than zero.
+        assert trie.verify_account_proof(root, proof) == [int(word, 16) != 0, False]
+        assert (proof["balance"], proof["nonce"]) == (balance, nonce)
+        assert [slot["key"] for slot in proof["storageProof"]] == [KEY, "0x6"]
+        # The storage query gives a word on 32 bytes, and the proof a quantity.
+        assert [slot["value"] for slot in proof["storageProof"]] == [hex(int(word, 16)), "0x0"]
+        assert trie.verify_account_proof(root, absent) is None
+        # The text of the method gives an absent account zero hashes, and slots without nodes.
+        assert (absent["balance"], absent["nonce"], absent["codeHash"], absent["storageHash"]) == (
+            "0x0",
+            "0x0",
+            "0x" + "00" * 32,
+            "0x" + "00" * 32,
+        )
+        assert absent["storageProof"] == [{"key": "0x1", "value": "0x0", "proof": []}]
+
+
+def test_proof_of_missing_account() -> None:
+    """The request of the fixture `get-account-proof-missing-account.io` of execution-apis."""
+    result = _call(
+        "eth_getProof", ["0x000000000000000000000000000000000000dead", ["0x0"], "latest"]
+    )
+    assert (result["codeHash"], result["storageHash"]) == ("0x" + "00" * 32, "0x" + "00" * 32)
+    assert result["storageProof"] == [{"key": "0x0", "value": "0x0", "proof": []}]
+
+
+# Each requested key of slot 1, and the key that the answer gives back for it.
+# A key of 63 or 64 hex digits comes back as 32 bytes, and any other key as a number.
+KEY_ECHOES: Final = [
+    ("0x1", "0x1"),
+    ("0x01", "0x1"),
+    ("0x" + "0" * 61 + "1", "0x1"),
+    ("0x" + "0" * 62 + "1", "0x" + "00" * 31 + "01"),
+    ("0x" + "0" * 63 + "1", "0x" + "00" * 31 + "01"),
+]
+
+
+def test_proof_key_echo() -> None:
+    """Each key comes back in its requested form, in order, with a duplicate kept."""
+    keys = [key for key, _ in KEY_ECHOES] + ["0x1"]
+    result = _call("eth_getProof", [CONTRACT, keys, "latest"])
+    echoed = [slot["key"] for slot in result["storageProof"]]
+    assert echoed == [echo for _, echo in KEY_ECHOES] + ["0x1"]
+    # Every form names slot 1, so every entry gives the same word and proof.
+    assert len({json.dumps(slot | {"key": None}) for slot in result["storageProof"]}) == 1
+
+
+def test_proof_empty_key() -> None:
+    """The empty key `0x` names slot 0, and comes back as `0x0`."""
+    empty, zero = _call("eth_getProof", [CONTRACT, ["0x", "0x0"], "latest"])["storageProof"]
+    assert empty == zero
+    assert empty["key"] == "0x0"
+
+
+def test_account_at_each_block() -> None:
+    """The nonce and the code of an account are those of the state after the named block."""
+    assert _call("eth_getTransactionCount", [SENDER, "0x0"]) == "0x0"
+    assert _call("eth_getTransactionCount", [SENDER, "latest"]) == "0x1"
+    # A contract that a transaction of the chain creates has no code before its block.
+    created = next(
+        (int(receipt["blockNumber"], 16), receipt["contractAddress"])
+        for number in range(len(replay_chain().blocks))
+        for receipt in _call("eth_getBlockReceipts", [hex(number)])
+        if receipt["contractAddress"] is not None
+    )
+    number, address = created
+    assert _call("eth_getCode", [address, hex(number - 1)]) == "0x"
+    assert _call("eth_getCode", [address, hex(number)]) != "0x"
+
+
+def test_storage_values_member_twice() -> None:
+    """A member name written twice in one object is a parse error, with the identifier null."""
+    text = (
+        '{"jsonrpc":"2.0","id":1,"method":"eth_getStorageValues","params":'
+        f'[{{"{CONTRACT}":["0x1"],"{CONTRACT}":["{KEY}"]}},"latest"]}}'
+    )
+    answer = _error(text)
+    assert answer["id"] is None
+    assert answer["error"] == {
+        "code": -32700,
+        "message": "Parse error",
+        "data": f'offset 164: duplicate object key "{CONTRACT}"',
+    }
+
+
+def test_pending_header() -> None:
+    """The header of the tag `pending` is null, as the method says."""
+    assert _call("eth_getHeaderByNumber", ["pending"]) is None
+
+
+# Each request of `eth_estimateGas` in the fixtures that has a result.
+ESTIMATED: Final = [
+    pytest.param(exchange.request, id=f"{path.stem}-{exchange.response['id']}")
+    for path in sorted((FIXTURES / "eth_estimateGas").glob("*.io"))
+    for exchange in read_fixture(path).exchanges
+    if "result" in exchange.response
+]
+
+
+@pytest.mark.parametrize("request_text", ESTIMATED)
+def test_estimate_is_least(request_text: str) -> None:
+    """The call completes with the estimate as its gas limit, and fails with one gas less."""
+    params = json.loads(request_text)["params"]
+    transaction, rest = params[0], params[1:]
+    estimate = int(_call("eth_estimateGas", params), 16)
+    _call("eth_call", [{**transaction, "gas": hex(estimate)}, *rest])
+    answer = _error(
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "eth_call",
+                "params": [{**transaction, "gas": hex(estimate - 1)}, *rest],
+            }
+        )
+    )
+    assert answer["error"]["code"] in {800, 801}
+
+
+# Each result that breaks the schema of `eth_createAccessList`, and the error of its check.
+BAD_ACCESS_LIST_RESULTS = [
+    pytest.param(
+        [], ValueError, "result: not an object of accessList, error and gasUsed", id="not-object"
+    ),
+    pytest.param({"accessList": {}}, ValueError, "accessList: not an array", id="list-not-array"),
+    pytest.param(
+        {"accessList": [{"address": "0x" + "00" * 20, "storageKeys": "0x"}]},
+        ValueError,
+        "storageKeys: not an array",
+        id="keys-not-array",
+    ),
+    pytest.param(
+        {"accessList": [], "gasUsed": "0x1", "extra": 1},
+        ValueError,
+        "result: not an object of accessList, error and gasUsed",
+        id="extra-member",
+    ),
+    pytest.param({"error": 3}, ValueError, "error: not a string", id="error-not-string"),
+    pytest.param(
+        {"accessList": [{"address": "0x" + "00" * 20}]},
+        ValueError,
+        "accessList: an entry is not an address with its storage keys",
+        id="entry-without-keys",
+    ),
+    pytest.param({"gasUsed": "0x01"}, rpc.RpcError, "uint: leading zero", id="gas-leading-zero"),
+    pytest.param(
+        {"accessList": [{"address": "0x" + "00" * 20, "storageKeys": ["0x01"]}]},
+        rpc.RpcError,
+        "hash32: 1 bytes, not 32",
+        id="short-key",
+    ),
+]
+
+
+@pytest.mark.parametrize(("result", "error", "message"), BAD_ACCESS_LIST_RESULTS)
+def test_access_list_result_check_rejects(
+    result: object, error: type[Exception], message: str
+) -> None:
+    """The check of the schema of an access-list result rejects a result that breaks it."""
+    with raises(error, message):
+        _check_access_list_result(result)
+
+
+# Each lookup by block and index that finds no transaction, so its result is null.
+NOT_FOUND = [
+    pytest.param("eth_getTransactionByBlockNumberAndIndex", ["0x3e8", "0x0"], id="unknown-number"),
+    pytest.param(
+        "eth_getTransactionByBlockHashAndIndex", ["0x" + "11" * 32, "0x0"], id="unknown-hash"
+    ),
+    pytest.param(
+        "eth_getTransactionByBlockNumberAndIndex", ["0x1", "0x10000000000000000"], id="past-end"
+    ),
+    pytest.param("eth_getTransactionByBlockNumberAndIndex", ["0x0", "0x0"], id="empty-block"),
+]
+
+
+@pytest.mark.parametrize(("method", "params"), NOT_FOUND)
+def test_transaction_not_found(method: str, params: list[object]) -> None:
+    """A block that the view does not hold, or an index past its end, gives null."""
+    assert _call(method, params) is None
+
+
+def test_unknown_method() -> None:
+    """A method that the view does not serve has the code -32601, with its name as data."""
+    answer = _error('{"jsonrpc":"2.0","id":7,"method":"eth_mining"}')
+    assert answer["id"] == 7
+    assert answer["error"] == {"code": -32601, "message": "Method not found", "data": "eth_mining"}
+
+
+def test_extra_parameter() -> None:
+    """A method with no parameters rejects one, with the code -32602."""
+    answer = _error('{"jsonrpc":"2.0","id":"a","method":"eth_chainId","params":[1]}')
+    assert answer["id"] == "a"
+    assert answer["error"] == {
+        "code": -32602,
+        "message": "Invalid params",
+        "data": "the method takes no parameter",
+    }
+
+
+def test_not_json() -> None:
+    """A text that is not JSON has the code -32700, and the identifier null."""
+    answer = _error('{"jsonrpc":"2.0",')
+    assert answer["id"] is None
+    assert set(answer["error"]) == {"code", "message", "data"}
+    assert answer["error"]["code"] == -32700
+    assert answer["error"]["message"] == "Parse error"
+
+
+def test_not_a_request() -> None:
+    """A JSON value that is not a request has the code -32600, and its identifier when it reads."""
+    answer = _error('{"jsonrpc":"1.0","id":1,"method":"eth_chainId"}')
+    assert answer["id"] == 1
+    assert answer["error"] == {
+        "code": -32600,
+        "message": "Invalid Request",
+        "data": "request: jsonrpc is not 2.0",
+    }
+
+
+def test_notification() -> None:
+    """A request without an identifier is a notification, and gets no response."""
+    assert replay_chain().serve(['{"jsonrpc":"2.0","method":"eth_chainId"}']) == [None]
+
+
+def test_batch() -> None:
+    """A batch gets the responses to its requests, without those of its notifications."""
+    batch = (
+        '[{"jsonrpc":"2.0","id":1,"method":"eth_chainId"},'
+        '{"jsonrpc":"2.0","method":"eth_blockNumber"},'
+        '{"jsonrpc":"2.0","id":2,"method":"eth_blockNumber"}]'
+    )
+    assert _answer(batch) == [
+        {"jsonrpc": "2.0", "id": 1, "result": "0xc72dd9d5e883e"},
+        {"jsonrpc": "2.0", "id": 2, "result": "0x3c"},
+    ]
+
+
+def test_batch_of_notifications() -> None:
+    """A batch of notifications gets no response."""
+    batch = '[{"jsonrpc":"2.0","method":"eth_chainId"}]'
+    assert replay_chain().serve([batch]) == [None]
+
+
+def test_empty_batch() -> None:
+    """An empty batch is an invalid request."""
+    answer = _error("[]")
+    assert answer["id"] is None
+    assert answer["error"] == {
+        "code": -32600,
+        "message": "Invalid Request",
+        "data": "batch: empty array",
+    }
+
+
+def test_invalid_request_keeps_its_identifier() -> None:
+    """An invalid request whose identifier reads carries it back."""
+    answer = _error('{"jsonrpc":"2.0","id":5,"method":"eth_chainId","extra":1}')
+    assert answer["id"] == 5
+    assert answer["error"] == {
+        "code": -32600,
+        "message": "Invalid Request",
+        "data": "request: a member other than jsonrpc, id, method and params",
+    }
+
+
+def _build(chain: ReplayChain, *, check_seal: bool = False) -> None:
+    """Build a view from the chain, and answer no request."""
+    rpc.serve(
+        chain.config,
+        chain.state,
+        chain.blocks,
+        chain.forkchoice,
+        chain.network_id,
+        [],
+        check_seal=check_seal,
+    )
+
+
+# Each input that builds no view, with the message and the code of its error.
+# A block error carries its code; any other bad input has code 0.
+BAD_INPUTS = [
+    pytest.param(
+        lambda c: replace(c, forkchoice=(block_hash(c.blocks[-2]),) * 3),
+        "the head is not the last block",
+        0,
+        id="head-not-last",
+    ),
+    pytest.param(
+        lambda c: replace(c, state=rlp.encode([])),
+        "the state is not the state of the lowest block",
+        0,
+        id="state-mismatch",
+    ),
+    pytest.param(lambda c: replace(c, blocks=()), "no block", 0, id="no-block"),
+    pytest.param(
+        lambda c: replace(c, blocks=(("frontier", c.blocks[0][1]),) + c.blocks[1:]),
+        "the lowest block is not at its active fork",
+        0,
+        id="lowest-fork",
+    ),
+    pytest.param(
+        lambda c: replace(c, blocks=c.blocks[:1] + c.blocks[2:]),
+        "block 2: block invalid: wrongNumber (expected := 1) (actual := 2)",
+        207,
+        id="out-of-order",
+    ),
+]
+
+
+@pytest.mark.parametrize(("change", "message", "code"), BAD_INPUTS)
+def test_bad_input(change: Callable[[ReplayChain], ReplayChain], message: str, code: int) -> None:
+    """An input that breaks a rule of the view builds no view, and says which rule."""
+    with raises(rpc.RpcError, message) as error:
+        _build(change(replay_chain()))
+    assert error.value.code == code
+
+
+def test_seal_checked() -> None:
+    """With the seal checked, the first block fails, since the test chain carries no real seal."""
+    # Ethash gives a mix digest that the header of block 1 does not hold.
+    fork, raw = replay_chain().blocks[1]
+    header = rlp.decode(raw)[0]
+    mix, _ = ethash.hashimoto_light(
+        ethash.dataset_size(1), ethash.cache(1), seal_hash(fork, rlp.encode(header)), header[14]
+    )
+    pow_error = (
+        f"EthLib.Execution.Blocks.PowError.wrongMixDigest (expected := 0x{mix.hex()}) "
+        f"(actual := 0x{header[13].hex()})"
+    )
+    with raises(rpc.RpcError, f"block 1: block invalid: proofOfWork ({pow_error})") as error:
+        _build(replay_chain(), check_seal=True)
+    assert error.value.code == 216
+
+
+def test_network_id() -> None:
+    """The network ID is an input of the view, which net_version answers in decimal."""
+    chain = replace(replay_chain(), network_id=1)
+    (response,) = chain.serve(['{"jsonrpc":"2.0","id":1,"method":"net_version"}'])
+    assert response is not None
+    assert json.loads(response) == {"jsonrpc": "2.0", "id": 1, "result": "1"}
+
+
+# The requests of the fixtures of execution-apis#938 and execution-apis#939, with their answers.
+# Each request runs from the funded account below, to the address 0x01 followed by zeros.
+# Block 0x17 is before Berlin, 0x1a before London, 0x29 before Cancun and 0x2c before Prague.
+_FROM: Final = "0x0c2c51a0990aee1d73c1228de158688341557508"
+_TO: Final = "0x0100000000000000000000000000000000000000"
+_AUTHORIZATION: Final = {
+    "chainId": "0x0",
+    "address": _TO,
+    "nonce": "0x0",
+    "yParity": "0x0",
+    "r": "0x0",
+    "s": "0x0",
+}
+_HASH: Final = "0x01" + "00" * 31
+_FEES: Final = {"maxFeePerGas": "0x77359400", "maxPriorityFeePerGas": "0x3b9aca00"}
+
+
+def _rule_error(reason: str) -> dict[str, object]:
+    """The error of a request that a rule of the method rejects: code -32000, invalid input."""
+    return {"code": -32000, "message": "Invalid input", "data": f"transaction: {reason}"}
+
+
+_INACTIVE: Final = _rule_error("a field is not active at the fork of the block")
+_BLOB_FEE: Final = _rule_error("maxFeePerBlobGas: no blobVersionedHashes")
+_EMPTY_HASHES: Final = _rule_error("blobVersionedHashes: empty")
+_NO_BERLIN: Final = _rule_error("no access list before Berlin")
+
+REQUEST_RULES: Final = [
+    # The type is ignored: the other fields decide the kind.
+    ("call-type-access-list-before-berlin", "eth_call", {"type": "0x1"}, "0x17", "0x"),
+    ("call-type-blob-before-cancun", "eth_call", {"type": "0x3"}, "0x29", "0x"),
+    ("call-type-set-code-before-prague", "eth_call", {"type": "0x4"}, "0x2c", "0x"),
+    ("call-type-unknown", "eth_call", {"type": "0x7f"}, "latest", "0x"),
+    ("estimate-type-blob-before-cancun", "eth_estimateGas", {"type": "0x3"}, "0x29", "0x5208"),
+    (
+        "create-al-type-set-code-before-prague",
+        "eth_createAccessList",
+        {"type": "0x4"},
+        "0x2c",
+        {"accessList": [], "gasUsed": "0x5208"},
+    ),
+    (
+        "call-gas-price-before-london",
+        "eth_call",
+        {"gas": "0x5208", "gasPrice": "0x3b9aca00"},
+        "0x1a",
+        "0x",
+    ),
+    # A field whose EIP is not active at the block is invalid, even when it is zero or empty.
+    ("call-fork-inactive-access-list", "eth_call", {"accessList": []}, "0x17", _INACTIVE),
+    (
+        "estimate-fork-inactive-access-list",
+        "eth_estimateGas",
+        {"accessList": []},
+        "0x17",
+        _INACTIVE,
+    ),
+    (
+        "call-fork-inactive-fee-fields-zero",
+        "eth_call",
+        {"maxFeePerGas": "0x0", "maxPriorityFeePerGas": "0x0"},
+        "0x1a",
+        _INACTIVE,
+    ),
+    (
+        "call-fork-inactive-priority-fee",
+        "eth_call",
+        {"maxPriorityFeePerGas": "0x3b9aca00"},
+        "0x1a",
+        _INACTIVE,
+    ),
+    ("estimate-fork-inactive-fee-fields", "eth_estimateGas", _FEES, "0x1a", _INACTIVE),
+    ("create-al-fork-inactive-fee-fields", "eth_createAccessList", _FEES, "0x1a", _INACTIVE),
+    (
+        "call-fork-inactive-blob-hashes",
+        "eth_call",
+        {"blobVersionedHashes": [_HASH]},
+        "0x29",
+        _INACTIVE,
+    ),
+    (
+        "call-fork-inactive-authorization-list",
+        "eth_call",
+        {"authorizationList": [_AUTHORIZATION]},
+        "0x2c",
+        _INACTIVE,
+    ),
+    # Blob fields without blob hashes are invalid at every fork.
+    ("call-empty-blob-hashes", "eth_call", {"blobVersionedHashes": []}, "latest", _EMPTY_HASHES),
+    (
+        "call-blob-fee-empty-blob-hashes",
+        "eth_call",
+        {"blobVersionedHashes": [], "maxFeePerBlobGas": "0x1"},
+        "latest",
+        _EMPTY_HASHES,
+    ),
+    ("call-blob-fee-without-hashes", "eth_call", {"maxFeePerBlobGas": "0x1"}, "latest", _BLOB_FEE),
+    (
+        "call-blob-fee-without-hashes-before-cancun",
+        "eth_call",
+        {"maxFeePerBlobGas": "0x1"},
+        "0x29",
+        _BLOB_FEE,
+    ),
+    (
+        "estimate-empty-blob-hashes",
+        "eth_estimateGas",
+        {"blobVersionedHashes": []},
+        "latest",
+        _EMPTY_HASHES,
+    ),
+    (
+        "estimate-blob-fee-without-hashes",
+        "eth_estimateGas",
+        {"maxFeePerBlobGas": "0x1"},
+        "latest",
+        _BLOB_FEE,
+    ),
+    (
+        "estimate-blob-fee-without-hashes-before-cancun",
+        "eth_estimateGas",
+        {"maxFeePerBlobGas": "0x1"},
+        "0x29",
+        _BLOB_FEE,
+    ),
+    (
+        "create-al-empty-blob-hashes",
+        "eth_createAccessList",
+        {"blobVersionedHashes": []},
+        "latest",
+        _EMPTY_HASHES,
+    ),
+    (
+        "create-al-blob-fee-without-hashes",
+        "eth_createAccessList",
+        {"maxFeePerBlobGas": "0x1"},
+        "latest",
+        _BLOB_FEE,
+    ),
+    (
+        "create-al-blob-fee-without-hashes-before-cancun",
+        "eth_createAccessList",
+        {"maxFeePerBlobGas": "0x1"},
+        "0x29",
+        _BLOB_FEE,
+    ),
+    # Before Berlin, eth_createAccessList rejects every request.
+    ("create-al-fork-inactive", "eth_createAccessList", {}, "0x17", _NO_BERLIN),
+]
+
+
+@pytest.mark.parametrize(
+    ("method", "fields", "block", "expected"),
+    [pytest.param(*case[1:], id=case[0]) for case in REQUEST_RULES],
+)
+def test_request_rule(method: str, fields: dict[str, object], block: str, expected: object) -> None:
+    """Each request of the fixture gets the answer of the fixture, or its error code."""
+    params = [{"from": _FROM, "to": _TO, **fields}, block]
+    answer = _answer(json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}))
+    # A rejection is compared whole, so that it names the rule that rejects the request.
+    if isinstance(expected, dict) and "code" in expected:
+        assert answer["error"] == expected
+    else:
+        assert answer["result"] == expected
+
+
+# The code of the two requests of `call-type-legacy-with-access-list`, with and without type 0.
+# It reads the balance of 0x01 followed by zeros, then returns the gas left.
+_GAS_LEFT_CODE: Final = "0x73010000000000000000000000000000000000000031505a60005260206000f3"
+
+
+def test_type_zero_with_access_list() -> None:
+    """A type 0 with an access list runs as the same request without its type."""
+    request = {
+        "accessList": [{"address": _TO, "storageKeys": []}],
+        "from": _FROM,
+        "gas": "0x493e0",
+        "input": _GAS_LEFT_CODE,
+    }
+    expected = "0x" + "00" * 29 + "01572b"
+    assert _call("eth_call", [{**request, "type": "0x0"}, "latest"]) == expected
+    assert _call("eth_call", [request, "latest"]) == expected
+
+
+def test_type_zero_with_fee_fields() -> None:
+    """A type 0 with fee caps runs with those caps, as its fixture of execution-apis expects."""
+    request = {"from": _FROM, "gas": "0x493e0", "input": "0x3a60005260206000f3", **_FEES}
+    expected = "0x" + "00" * 28 + "3c5742d4"
+    assert _call("eth_call", [{**request, "type": "0x0"}, "latest"]) == expected
+
+
+# A transaction of block 58 whose trace has an SLOAD or SSTORE step that fails.
+_FAILED_STORAGE_STEP: Final = "0x9117624aeba24b35fec724154870d2ebf04b6a06ce0cf1f8905875039a2b69d8"
+
+
+def test_trace_failed_storage_step() -> None:
+    """A storage step that fails runs no opcode, so its entry has no storage, as the source says."""
+    logs = _call("debug_traceTransaction", [_FAILED_STORAGE_STEP])["structLogs"]
+    failed = [
+        index
+        for index, entry in enumerate(logs)
+        if entry["op"] in ("SLOAD", "SSTORE") and "error" in entry
+    ]
+    assert failed
+    for index in failed:
+        assert "storage" not in logs[index]

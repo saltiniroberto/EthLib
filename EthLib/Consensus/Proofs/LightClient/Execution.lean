@@ -12,6 +12,8 @@ A valid header binds that data to any body whose root is its body root, or names
 
 Before Gloas the data is the payload root at node 25, and from Gloas a block hash.
 
+From Gloas, a header of a slot from Capella to Fulu climbs from that hash to its execution root.
+
 From Deneb the binding reaches the blob gas fields of [EIP-4844].
 
 Before Gloas, the fork of a header from Capella can be later than the fork of its block.
@@ -931,6 +933,72 @@ theorem isValidLightClientHeader_executionBlockHash {config : Config}
   exact isValidNormalizedMerkleBranch_value (by split <;> decide) climbs body rooted
     (BeaconBlockBody.nodeRoot_executionBlockHash bodyCapella bodyBefore body)
 
+omit [NeZero preset.BYTES_PER_LOGS_BLOOM.toNat] [NeZero preset.SYNC_COMMITTEE_SIZE.toNat]
+  [NeZero preset.MAX_COMMITTEES_PER_SLOT.toNat] [NeZero preset.PTC_SIZE.toNat]
+  [NeZero preset.INCLUSION_LIST_COMMITTEE_SIZE.toNat] in
+/-- The root that a Gloas header rebuilds for an execution header, for every slot, branch and fork.
+
+At the genesis slot it is the root of the empty execution header of the given fork.
+
+Otherwise the block hash climbs to it as field 12 of the execution header, by a slice of the branch.
+
+The slice ends before the last 4 nodes, which climb from the payload at node 25 to the body root.
+
+It has the 5 nodes before those when the given fork is from Deneb, and 4 nodes otherwise.
+
+A branch too short for that slice gives an error. -/
+theorem rebuildLcExecutionRoot_eq {slot : Slot} {blockHash : Hash32} {branch : List Bytes32}
+    {payloadFork : Fork} :
+    rebuildLcExecutionRoot (preset := preset) slot blockHash branch payloadFork =
+      if slot = GENESIS_SLOT then
+        LightClientError.liftRoot
+          (SszType.hashTreeRoot (ExecutionPayloadHeader.empty preset payloadFork))
+      else
+        let depth := if .dencun ≤ payloadFork then 5 else 4
+        LightClientError.liftRoot (computeMerkleBranchRoot blockHash
+          (branch.extract (branch.length - (4 + depth)) (branch.length - 4)) depth 12) := by
+  have payload : Nat.log2 EXECUTION_PAYLOAD_GINDEX = 4 := by decide +kernel
+  have deneb : Nat.log2 44 = 5 := by decide +kernel
+  have capella : Nat.log2 28 = 4 := by decide +kernel
+  unfold rebuildLcExecutionRoot
+  by_cases genesis : slot = GENESIS_SLOT
+  · simp [genesis]
+  · -- Both indices are 12 at their depth, and the two cuts of the branch make one slice.
+    by_cases later : Fork.dencun ≤ payloadFork <;>
+      simp [genesis, later, payload, deneb, capella, payloadHeaderBlockHashGindex,
+        getSubtreeIndex, gindexDepth, gindexBelow, bind, Except.bind, pure, Except.pure,
+        LightClientError.liftRoot, Except.mapError, List.drop_take] <;>
+      congr 3
+
+omit [NeZero preset.BYTES_PER_LOGS_BLOOM.toNat] [NeZero preset.SYNC_COMMITTEE_SIZE.toNat]
+  [NeZero preset.MAX_COMMITTEES_PER_SLOT.toNat] [NeZero preset.PTC_SIZE.toNat]
+  [NeZero preset.INCLUSION_LIST_COMMITTEE_SIZE.toNat] in
+/-- From Gloas, the execution root of a header is rebuilt for a slot before Gloas.
+
+The slot must be from Capella or from Deneb, since the configuration does not order these forks.
+
+The rebuilt execution header is that of Deneb for a slot from Deneb, and of Capella otherwise. -/
+theorem getLcExecutionRoot_rebuild {config : Config} (gloas : .glamsterdam ≤ fork)
+    {header : LightClientHeader preset fork}
+    (earlier : computeEpochAtSlot preset header.beacon.slot < config.GLOAS_FORK_EPOCH)
+    (started : config.CAPELLA_FORK_EPOCH ≤ computeEpochAtSlot preset header.beacon.slot ∨
+      config.DENEB_FORK_EPOCH ≤ computeEpochAtSlot preset header.beacon.slot) :
+    getLcExecutionRoot config header =
+      rebuildLcExecutionRoot (preset := preset) header.beacon.slot (header.executionBlockHash gloas)
+        (header.executionBranch (Nat.le_trans (by decide) gloas)).toList
+        (if config.DENEB_FORK_EPOCH ≤ computeEpochAtSlot preset header.beacon.slot then .dencun
+          else .shapella) := by
+  have altair : Fork.altair ≤ fork := Nat.le_trans (by decide) gloas
+  have notGloas : ¬ config.GLOAS_FORK_EPOCH ≤ computeEpochAtSlot preset header.beacon.slot :=
+    UInt64.not_le.mpr earlier
+  unfold getLcExecutionRoot
+  simp only [LightClientError.requireFork, altair, ↓reduceIte, gloas, dite_true, notGloas, bind,
+    Except.bind]
+  split_ifs with deneb capella
+  · rfl
+  · rfl
+  · exact absurd (started.resolve_right deneb) capella
+
 /-! ## The headers that the client checks -/
 
 omit [NeZero preset.BYTES_PER_LOGS_BLOOM.toNat] [NeZero preset.SYNC_COMMITTEE_SIZE.toNat]
@@ -945,7 +1013,7 @@ theorem initializeLightClientStore_header_valid {config : Config} {trustedBlockR
   obtain ⟨_, -, rest⟩ := Base.bind_ok_iff.mp computed
   obtain ⟨verdict, valid, rest⟩ := Base.bind_ok_iff.mp rest
   obtain ⟨_, checked, -⟩ := Base.bind_ok_iff.mp rest
-  obtain rfl := LightClientError.require_ok.mp checked
+  obtain rfl := Base.ensure_ok_iff.mp checked
   exact valid
 
 omit [NeZero preset.BYTES_PER_LOGS_BLOOM.toNat] [NeZero preset.SYNC_COMMITTEE_SIZE.toNat]
@@ -957,12 +1025,8 @@ theorem validateLightClientUpdate_attestedHeader_valid {config : Config}
     {update : LightClientUpdate preset fork} {currentSlot : Slot} {genesisValidatorsRoot : Root}
     (accepted : validateLightClientUpdate config checks store update currentSlot
       genesisValidatorsRoot = .ok ()) :
-    isValidLightClientHeader config update.attestedHeader = .ok true := by
-  unfold validateLightClientUpdate at accepted
-  simp only [Base.bind_ok_iff, LightClientError.require_ok] at accepted
-  obtain ⟨_, -, _, -, verdict, valid, _, checked, -⟩ := accepted
-  subst checked
-  exact valid
+    isValidLightClientHeader config update.attestedHeader = .ok true :=
+  (validateLightClientUpdate_eq_ok_iff.mp accepted).2.2.1
 
 omit [NeZero preset.BYTES_PER_LOGS_BLOOM.toNat] [NeZero preset.SYNC_COMMITTEE_SIZE.toNat]
   [NeZero preset.MAX_COMMITTEES_PER_SLOT.toNat] [NeZero preset.PTC_SIZE.toNat]
@@ -985,7 +1049,7 @@ theorem validateLightClientUpdate_finalizedHeader_valid {config : Config}
   · contradiction
   obtain ⟨verdict, valid, rest⟩ := Base.bind_ok_iff.mp checked
   obtain ⟨_, required, -⟩ := Base.bind_ok_iff.mp rest
-  obtain rfl := LightClientError.require_ok.mp required
+  obtain rfl := Base.ensure_ok_iff.mp required
   exact valid
 
 end EthLib.Consensus

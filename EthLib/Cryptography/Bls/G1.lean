@@ -17,16 +17,20 @@ Affine addition needs one inversion, which costs about `log p` multiplications.
 Jacobian doubling and addition need none, and one inversion at the end gives the affine form.
 
 The formulas are those of the explicit-formulas database, for short Weierstrass curves with `a = 0`:
-<https://hyperelliptic.org/EFD/>
+<https://hyperelliptic.org/EFD/g1p/auto-shortw-jacobian-0.html>
 
-The code is generic in the base field, as for `Fp2`.
+No formula reads the constant `4`, so they hold on every curve `y^2 = x^3 + b`, for inputs on it.
+
+The code reads only the field operations of its base field.
+
+So `G2` runs the same code over `Fp2`, and proofs can run it over another field.
 -/
 
 @[expose] public section
 
 namespace EthLib.Cryptography.Bls
 
-/-- A G1 point in Jacobian projective coordinates.
+/-- A point in Jacobian projective coordinates: a point of `G1` over `Fp`, of `G2` over `Fp2`.
 
 `z = 0` is the point at infinity.
 
@@ -38,6 +42,8 @@ structure G1 (F : Type := Fp) where
 deriving Inhabited, BEq, Repr
 
 namespace G1
+
+section BaseField
 
 variable {F : Type} [BaseField F]
 
@@ -52,10 +58,14 @@ def generatorY : Nat :=
 /-- Affine generator of G1, embedded with `z = 1`. -/
 def generator : G1 F := ⟨BaseField.ofNat generatorX, BaseField.ofNat generatorY, BaseField.one⟩
 
-/-- The point at infinity. -/
-def zero : G1 F := ⟨BaseField.one, BaseField.one, BaseField.zero⟩
+end BaseField
 
-@[inline] def isInfinity (p : G1 F) : Bool := BaseField.isZero p.z
+variable {F : Type} [FieldOps F]
+
+/-- The point at infinity. -/
+def zero : G1 F := ⟨FieldOps.one, FieldOps.one, FieldOps.zero⟩
+
+@[inline] def isInfinity (p : G1 F) : Bool := FieldOps.isZero p.z
 
 /-- Jacobian point doubling for `a = 0` curves.
 
@@ -63,19 +73,25 @@ These are the `dbl-2009-l` formulas of the explicit-formulas database.
 
 Each product by 2, 3 or 8 is written as additions, which are cheaper than a multiplication. -/
 def double (p : G1 F) : G1 F :=
-  if BaseField.isZero p.z then p else
+  -- At infinity `Z3 = 2*Y1*Z1` is 0 anyway, so the point is returned without the work.
+  if FieldOps.isZero p.z then p else
+    -- dbl-2009-l: `A = X1^2`, `B = Y1^2`, `C = B^2`.
     let A := p.x * p.x
     let B := p.y * p.y
     let C := B * B
+    -- `D = 2*((X1+B)^2-A-C)`.
     let t := (p.x + B) * (p.x + B) - A - C
     let D := t + t
+    -- `E = 3*A`, `F = E^2`.
     let E := A + A + A
     let F := E * E
+    -- `X3 = F-2*D`.
     let x' := F - (D + D)
-    -- 8 C as three doublings.
+    -- `Y3 = E*(D-X3)-8*C`, with `8*C` as three doublings.
     let C2 := C + C
     let C4 := C2 + C2
     let y' := E * (D - x') - (C4 + C4)
+    -- `Z3 = 2*Y1*Z1`.
     let z' := (p.y + p.y) * p.z
     ⟨x', y', z'⟩
 
@@ -88,23 +104,33 @@ Each product by 2 is written as an addition.
 
 Equal points double, and opposite points sum to the point at infinity. -/
 def addGeneral (p q : G1 F) : G1 F :=
+  -- add-2007-bl: `Z1Z1 = Z1^2`, `Z2Z2 = Z2^2`, `U1 = X1*Z2Z2`, `U2 = X2*Z1Z1`.
   let z1z1 := p.z * p.z
   let z2z2 := q.z * q.z
   let u1 := p.x * z2z2
   let u2 := q.x * z1z1
+  -- `S1 = Y1*Z2*Z2Z2`, `S2 = Y2*Z1*Z1Z1`.
   let s1 := p.y * q.z * z2z2
   let s2 := q.y * p.z * z1z1
-  if BaseField.beq u1 u2 then
-    if BaseField.beq s1 s2 then double p else zero
+  -- `H = 0` when `U1 = U2`, and the formulas then give the point at infinity even for equal points.
+  --
+  -- So equal points double, and opposite points give the point at infinity.
+  if FieldOps.beq u1 u2 then
+    if FieldOps.beq s1 s2 then double p else zero
   else
+    -- `H = U2-U1`, `I = (2*H)^2`, `J = H*I`.
     let h := u2 - u1
     let h2 := h + h
     let i := h2 * h2
     let j := h * i
+    -- `r = 2*(S2-S1)`, `V = U1*I`.
     let r := (s2 - s1) + (s2 - s1)
     let v := u1 * i
+    -- `X3 = r^2-J-2*V`.
     let x' := r * r - j - (v + v)
+    -- `Y3 = r*(V-X3)-2*S1*J`.
     let y' := r * (v - x') - (s1 + s1) * j
+    -- `Z3 = ((Z1+Z2)^2-Z1Z1-Z2Z2)*H`.
     let z' := ((p.z + q.z) * (p.z + q.z) - z1z1 - z2z2) * h
     ⟨x', y', z'⟩
 
@@ -114,22 +140,31 @@ These are the general formulas with `z2 = 1`, so `u1 = x1` and `s1 = y1`.
 
 The last coordinate `((z1 + 1)^2 - z1^2 - 1) * h` simplifies to `2 * z1 * h`.
 
-They take 11 multiplications instead of 20, and give the same coordinates. -/
+They take 11 multiplications instead of 16, and give the same coordinates. -/
 def addMixed (p q : G1 F) : G1 F :=
+  -- madd-2007-bl: `Z1Z1 = Z1^2`, `U2 = X2*Z1Z1`, `S2 = Y2*Z1*Z1Z1`.
   let z1z1 := p.z * p.z
   let u2 := q.x * z1z1
   let s2 := q.y * p.z * z1z1
-  if BaseField.beq p.x u2 then
-    if BaseField.beq p.y s2 then double p else zero
+  -- `H = 0` when `U2 = X1`, and the formulas then give the point at infinity even for equal points.
+  --
+  -- So equal points double, and opposite points give the point at infinity.
+  if FieldOps.beq p.x u2 then
+    if FieldOps.beq p.y s2 then double p else zero
   else
+    -- `H = U2-X1`, `I = 4*HH` computed as `(2*H)^2` without `HH`, and `J = H*I`.
     let h := u2 - p.x
     let h2 := h + h
     let i := h2 * h2
     let j := h * i
+    -- `r = 2*(S2-Y1)`, `V = X1*I`.
     let r := (s2 - p.y) + (s2 - p.y)
     let v := p.x * i
+    -- `X3 = r^2-J-2*V`.
     let x' := r * r - j - (v + v)
+    -- `Y3 = r*(V-X3)-2*Y1*J`.
     let y' := r * (v - x') - (p.y + p.y) * j
+    -- `Z3 = (Z1+H)^2-Z1Z1-HH`, which is `2*Z1*H`, computed as such.
     let z' := (p.z + p.z) * h
     ⟨x', y', z'⟩
 
@@ -139,18 +174,18 @@ Every point decompressed from bytes has `z = 1`, and then the mixed formulas app
 
 So most additions in a multi-scalar multiplication take that shorter path. -/
 def add (p q : G1 F) : G1 F :=
-  if BaseField.isZero p.z then q else
-  if BaseField.isZero q.z then p else
-  if BaseField.beq q.z BaseField.one then addMixed p q else addGeneral p q
+  if FieldOps.isZero p.z then q else
+  if FieldOps.isZero q.z then p else
+  if FieldOps.beq q.z FieldOps.one then addMixed p q else addGeneral p q
 
 instance : Add (G1 F) := ⟨add⟩
 instance : Neg (G1 F) := ⟨neg⟩
 
 /-- Project a Jacobian point to affine `(x, y)`. Undefined at infinity. -/
 def toAffine (p : G1 F) : F × F :=
-  if BaseField.isZero p.z then (BaseField.zero, BaseField.zero)
+  if FieldOps.isZero p.z then (FieldOps.zero, FieldOps.zero)
   else
-    let zinv  := BaseField.inverse p.z
+    let zinv  := FieldOps.inverse p.z
     let zinv2 := zinv * zinv
     let zinv3 := zinv2 * zinv
     (p.x * zinv2, p.y * zinv3)
@@ -177,6 +212,10 @@ def mulModulus (p : G1 F) : G1 F :=
   let a := mulNat (mulNat p blsX) blsX
   add (mulNat (mulNat (add a (neg p)) blsX) blsX) p
 
+section BaseField
+
+variable {F : Type} [BaseField F]
+
 /-- A cube root of unity in the base field, other than `1`.
 
 Of the two such roots, it is the one for which the map below acts as `[-t^2]` on `G1`. -/
@@ -191,17 +230,19 @@ It keeps a point on `y^2 = x^3 + 4`, since `β^3 = 1`.
 In Jacobian coordinates it scales `X` alone, since `x = X / Z^2`. -/
 @[inline] def sigma (p : G1 F) : G1 F := ⟨beta * p.x, p.y, p.z⟩
 
+end BaseField
+
 /-- Whether two Jacobian triples denote the same point.
 
 Two finite triples agree when `X1 Z2^2 = X2 Z1^2` and `Y1 Z2^3 = Y2 Z1^3`.
 
 Two triples at infinity agree, and a finite triple never agrees with one at infinity. -/
 def projectiveEq (p q : G1 F) : Bool :=
-  if BaseField.isZero p.z then BaseField.isZero q.z
-  else if BaseField.isZero q.z then false
+  if FieldOps.isZero p.z then FieldOps.isZero q.z
+  else if FieldOps.isZero q.z then false
   else
-    BaseField.beq (p.x * (q.z * q.z)) (q.x * (p.z * p.z)) &&
-    BaseField.beq (p.y * ((q.z * q.z) * q.z)) (q.y * ((p.z * p.z) * p.z))
+    FieldOps.beq (p.x * (q.z * q.z)) (q.x * (p.z * p.z)) &&
+    FieldOps.beq (p.y * ((q.z * q.z) * q.z)) (q.y * ((p.z * p.z) * p.z))
 
 /-! ## Multi-scalar multiplication
 

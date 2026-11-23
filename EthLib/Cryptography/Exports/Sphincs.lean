@@ -21,14 +21,15 @@ public section
 
 namespace EthLib.Cryptography.Sphincs.Exports
 
-open EthLib.Exports (Result)
+open EthLib.Exports (Result ExportError toResult)
 
 open EthLib.Cryptography.Sphincs
 open EthLib.Cryptography.Sphincs.Constants
 
-/-- Run a fallible leanSPHINCS computation, with its error as a code and a message. -/
-def runSphincs {α : Type} (act : Except SphincsError α) : Result α :=
-  act.mapError fun e => (e.code, e.message)
+/-- An error reaches Python with its code and its own message. -/
+instance : ExportError SphincsError where
+  code := SphincsError.code
+  message := SphincsError.message
 
 /-! ## Sizes
 
@@ -88,19 +89,13 @@ def constSigSize (_ : Unit) : UInt64 :=
 
 /-! ## Operations -/
 
-/-- Read a fixed-size input, rejecting any other length with the given error. -/
-private def readExact (n : Nat) (bytes : ByteArray) (bad : Nat → SphincsError) :
-    Except SphincsError (Vector UInt8 n) :=
-  -- Too short or too long is refused: no padding, no truncation.
-  if h : bytes.size = n then .ok ⟨bytes.data, h⟩ else .error (bad bytes.size)
-
 /-- The public key `PK.seed | PK.root` of `SK.seed`.
 
 It builds the whole top tree, `2^10` one-time keys. -/
 @[export eth_sphincs_key_gen]
 def keyGenExport (seed : ByteArray) : Result ByteArray :=
-  runSphincs do
-    let seed ← readExact SEED_LEN seed .badSeedSize
+  toResult (ε := SphincsError) none do
+    let seed ← Base.exactBytes SEED_LEN seed .badSeedSize
     -- The secret half is dropped: the seed regrows it.
     let (_, pk) := keyGen seed
     return encodePublicKey pk
@@ -110,9 +105,9 @@ def keyGenExport (seed : ByteArray) : Result ByteArray :=
 The message digest picks the FORS instance, so no index crosses the boundary. -/
 @[export eth_sphincs_sign]
 def signExport (seed : ByteArray) (msg : ByteArray) : Result ByteArray :=
-  runSphincs do
-    let seed ← readExact SEED_LEN seed .badSeedSize
-    let msg ← readExact MESSAGE_LEN msg .badMessageSize
+  toResult none do
+    let seed ← Base.exactBytes SEED_LEN seed .badSeedSize
+    let msg ← Base.exactBytes MESSAGE_LEN msg .badMessageSize
     -- Signing rebuilds the public key from the seed, since `H_msg` hashes `PK.root`.
     let sig ← sign ⟨seed⟩ msg
     return encodeSignature sig
@@ -120,10 +115,10 @@ def signExport (seed : ByteArray) (msg : ByteArray) : Result ByteArray :=
 /-- Whether a signature signs a message under a public key, as 1 or 0. -/
 @[export eth_sphincs_verify]
 def verifyExport (pk : ByteArray) (msg : ByteArray) (sig : ByteArray) : Result UInt8 :=
-  runSphincs do
+  toResult none do
     -- Only the lengths are checked: every correctly sized string decodes.
     let pk ← decodePublicKey pk
-    let msg ← readExact MESSAGE_LEN msg .badMessageSize
+    let msg ← Base.exactBytes MESSAGE_LEN msg .badMessageSize
     let sig ← decodeSignature sig
     return if verify pk msg sig then 1 else 0
 

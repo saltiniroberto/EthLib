@@ -2,7 +2,7 @@ module
 
 public import EthLib.Base.BigEndian
 public import EthLib.Cryptography.Hash.Sha256
-public import EthLib.Execution.Blocks.Log
+public import EthLib.Execution.Evm.Log
 
 /-!
 # `Blocks.Requests`
@@ -105,22 +105,28 @@ def wordAt (data : List UInt8) (position : Nat) : Nat :=
 def fieldAt (data : List UInt8) (offset size : Nat) : List UInt8 :=
   (data.drop (offset + 32)).take size
 
-/-- The deposit request of the data of a deposit log: its five fields, one after the other.
-
-The data must have 576 bytes, and the head must give each field its offset.
-
-Each field must start with its size. -/
+/-- The deposit request of the data of a deposit log: its five fields, one after the other. -/
 def depositRequestOfEvent (data : ByteArray) : Except DepositError ByteArray := do
   let bytes := data.data.toList
+  -- EIP-6110: the data of a deposit log has 576 bytes.
   if bytes.length ≠ DEPOSIT_EVENT_LENGTH then throw (.wrongLength bytes.length)
   -- The head holds the offset of each field, one word for each.
+  --
+  -- The public key starts at 160, the withdrawal credentials at 256 and the amount at 320.
+  --
+  -- The signature starts at 384 and the index at 512.
   DEPOSIT_EVENT_FIELDS.zipIdx.forM fun ((offset, _), field) =>
     if wordAt bytes (32 * field) = offset then pure () else
       throw (.wrongOffset field (wordAt bytes (32 * field)))
   -- Each field starts with its size.
+  --
+  -- The public key has 48 bytes, the withdrawal credentials 32 and the amount 8.
+  --
+  -- The signature has 96 bytes and the index 8.
   DEPOSIT_EVENT_FIELDS.zipIdx.forM fun ((offset, size), field) =>
     if wordAt bytes offset = size then pure () else
       throw (.wrongSize field (wordAt bytes offset))
+  -- The request is the five fields in that order, without their sizes and padding.
   return ⟨(DEPOSIT_EVENT_FIELDS.flatMap fun (offset, size) => fieldAt bytes offset size).toArray⟩
 
 /-- Whether a log is a deposit: it comes from the deposit contract, with the deposit topic first.
@@ -129,6 +135,9 @@ The deposit contract is the one of the chain, at `depositContract`.
 
 It can emit other events, and their logs are not deposits. -/
 def isDepositLog (depositContract : Address) (log : Log) : Bool :=
+  -- EIP-6110: the log comes from the deposit contract, here the contract of the chain.
+  --
+  -- Its first topic is `DEPOSIT_EVENT_SIGNATURE_HASH`.
   log.address = depositContract && log.topics.head? = some DEPOSIT_EVENT_SIGNATURE_HASH
 
 /-- The data of the deposit requests of a block: the request of each deposit log, in order.
@@ -138,8 +147,12 @@ The deposit contract of the chain is at `depositContract`.
 The logs are those of the receipts of the block, in order. -/
 def depositRequests (depositContract : Address) (logs : List Log) :
     Except DepositError ByteArray := do
+  -- EIP-6110: each deposit log of the block, in order, gives one request.
+  --
+  -- A deposit log whose data has another layout makes the block invalid.
   let requests ← (logs.filter (isDepositLog depositContract)).mapM fun log =>
     depositRequestOfEvent log.data
+  -- The requests, one after the other.
   return requests.foldl (· ++ ·) .empty
 
 /-! ## The requests hash -/
@@ -148,7 +161,9 @@ def depositRequests (depositContract : Address) (logs : List Log) :
 
 Each list is its type byte, then its data, and the lists come in the order of their types. -/
 def requestsHash (requests : List ByteArray) : Hash32 :=
+  -- EIP-7685: `sha256(sha256(r_1) || ... || sha256(r_k))` over the lists `r_i` in order.
   Cryptography.Hash.Sha256.hash32
+    -- Only a list of more than 1 byte, one with data, enters the hash.
     ((requests.filter (·.size > 1)).foldl (fun acc r => acc ++ Cryptography.Hash.sha256 r) .empty)
 
 end EthLib.Execution.Blocks

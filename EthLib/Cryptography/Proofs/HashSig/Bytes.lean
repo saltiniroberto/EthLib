@@ -66,7 +66,7 @@ private theorem mod_div_mod (z a b c : Nat) (h : a + c ≤ b) :
 theorem ofBV_ofNat (n z : Nat) : ofBV n (BitVec.ofNat (8 * n) z) = uintToBytes n z := by
   apply Vector.ext
   intro i hi
-  simp only [getElem_ofBV, uintToBytes, Vector.getElem_ofFn]
+  simp only [getElem_ofBV, Base.uintToBytes_eq_div, Vector.getElem_ofFn]
   apply UInt8.toNat.inj
   simp only [UInt8.toNat_ofBitVec, BitVec.extractLsb'_toNat, BitVec.toNat_ofNat,
     Nat.shiftRight_eq_div_pow]
@@ -80,7 +80,7 @@ theorem ofBV_eq_uintToBytes (n : Nat) {w : Nat} (y : BitVec w) :
     ofBV n y = uintToBytes n y.toNat := by
   apply Vector.ext
   intro i hi
-  simp only [getElem_ofBV, uintToBytes, Vector.getElem_ofFn]
+  simp only [getElem_ofBV, Base.uintToBytes_eq_div, Vector.getElem_ofFn]
   apply UInt8.toNat.inj
   simp only [UInt8.toNat_ofBitVec, BitVec.extractLsb'_toNat, Nat.shiftRight_eq_div_pow]
   rw [show (256 : Nat) ^ i = 2 ^ (8 * i) by rw [pow_mul]; norm_num]
@@ -171,6 +171,13 @@ theorem extractLsb'_byte_low {w : Nat} (x : BitVec w) (lo m i : Nat) (h : 8 * i 
   simp only [BitVec.extractLsb'_toNat, Nat.shiftRight_eq_div_pow]
   -- Dividing by `2^(8i)` inside `mod 2^m` keeps the low byte.
   rw [mod_div_mod _ (8 * i) m 8 h, Nat.div_div_eq_div_mul, ← pow_add]
+
+/-- A field of a field of a bit vector is a field of the vector, at the sum of the offsets. -/
+theorem extractLsb'_extractLsb'_add {w : Nat} (x : BitVec w) (a m b n : Nat) (h : b + n ≤ m) :
+    (x.extractLsb' a m).extractLsb' b n = x.extractLsb' (a + b) n := by
+  apply BitVec.eq_of_getLsbD_eq
+  intro i hi
+  simp [hi, show b + i < m by omega, Nat.add_assoc]
 
 /-- Byte `i < 16` of an answer is byte `i` of its low 128 bits. -/
 theorem getElem_ofOutput_of_lt (x : HashOutput) (i : Nat) (hi : i < 16) :

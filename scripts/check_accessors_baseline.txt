@@ -1,0 +1,12 @@
+# Defaulting accessors that the specification uses: none remain.
+#
+# `xs[i]!`, `get!`, `set!`, `panic` and the like return a default value, or change nothing,
+# in place of failing.
+# The kernel and the compiled code agree on that value, so no check fails.
+#
+# One entry per line: the accessor, the declaration, and how many sites the check counts there.
+# `lake exe check-accessors` fails on a site not listed here.
+# It also fails on an entry that no longer matches.
+# So this file is always the exact list.
+# Remove or lower an entry in the pull request that removes its sites.
+# Never add one: a new site is fixed, not listed.

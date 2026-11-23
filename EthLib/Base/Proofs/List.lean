@@ -19,9 +19,19 @@ Two lists of distinct elements that each hold every element with a nonzero term 
 
 A change of one term of a sum over distinct elements changes the sum by the same amount.
 
+A sum of a value where a test holds, and zero elsewhere, is its sum over the passing entries.
+
 Dropping the front where a test holds keeps each member that fails the test.
 
 Numbering the front of a list gives the front of the numbered list.
+
+An array holds an element that passes a test whenever a search for one finds it.
+
+A first match of a longer array that lies in a prefix is the first match there.
+
+The largest of a list of numbers bounds each of them.
+
+If pieces of one nonzero length determine their values, so do the joined pieces.
 -/
 
 @[expose] public section
@@ -153,6 +163,15 @@ theorem sum_map_add_eq_of_eq_off {α : Type} {f g : α → Nat} {a : α}
       rw [h x hxa]
       omega
 
+/-- A sum of a value where a test holds, and zero elsewhere, is its sum over the passing entries. -/
+theorem sum_map_ite_eq_sum_filter {α : Type} (test : α → Prop) [DecidablePred test]
+    (value : α → Nat) (entries : List α) :
+    (entries.map fun entry => if test entry then value entry else 0).sum =
+      ((entries.filter fun entry => test entry).map value).sum := by
+  induction entries with
+  | nil => rfl
+  | cons entry rest ih => by_cases passes : test entry <;> simp [passes, ih]
+
 /-- Dropping the front where a test holds keeps each member that fails the test. -/
 theorem mem_dropWhile_of_eq_false {α : Type} {test : α → Bool} {member : α}
     (failed : test member = false) {list : List α} (found : member ∈ list) :
@@ -170,5 +189,58 @@ theorem zipIdx_take {α : Type} (l : List α) (i : Nat) : (l.take i).zipIdx = l.
   intro n
   simp only [List.getElem?_zipIdx, List.getElem?_take]
   split <;> simp
+
+/-- An array holds an element that passes a test whenever a search for one finds it. -/
+theorem any_eq_true_of_find?_eq_some {α : Type} {p : α → Bool} {xs : Array α} {x : α}
+    (found : xs.find? p = some x) : xs.any p = true :=
+  Array.any_eq_true'.mpr ⟨x, Array.mem_of_find?_eq_some found, Array.find?_some found⟩
+
+/-- Each element of a list of numbers is at most their largest, folded from zero. -/
+theorem le_foldr_max : ∀ {values : List Nat} {value : Nat}, value ∈ values →
+    value ≤ values.foldr max 0
+  | _ :: _, _, .head _ => Nat.le_max_left _ _
+  | _ :: _, _, .tail _ member => Nat.le_trans (le_foldr_max member) (Nat.le_max_right _ _)
+
+/-- A first match of a longer array that lies in a prefix is the first match there. -/
+theorem _root_.Array.findIdx?_of_prefix {α : Type} {u s : Array α} {p : α → Bool} {k : Nat}
+    (inside : k < s.size) (same : ∀ j < s.size, u[j]? = s[j]?) (found : u.findIdx? p = some k) :
+    s.findIdx? p = some k := by
+  obtain ⟨lt, hit, earlier⟩ := Array.findIdx?_eq_some_iff_getElem.mp found
+  have get : ∀ j (lj : j < s.size) (lu : j < u.size), u[j] = s[j] := by
+    intro j lj lu
+    have := same j lj
+    rw [Array.getElem?_eq_getElem lu, Array.getElem?_eq_getElem lj] at this
+    exact Option.some.inj this
+  refine Array.findIdx?_eq_some_iff_getElem.mpr ⟨inside, ?_, fun j lt' => ?_⟩
+  · rw [← get k inside lt]; exact hit
+  · rw [← get j (Nat.lt_trans lt' inside) (Nat.lt_trans lt' lt)]; exact earlier j lt'
+
+/-- If pieces of one nonzero length determine their values, so do the joined pieces. -/
+theorem flatMap_inj_of_length {α β : Type} {f : α → List β} {n : Nat} (pos : 0 < n)
+    (length : ∀ x, (f x).length = n) (inj : ∀ x y, f x = f y → x = y) :
+    ∀ {l l' : List α}, l.flatMap f = l'.flatMap f → l = l' := by
+  intro l
+  induction l with
+  | nil =>
+    intro l' h
+    cases l' with
+    | nil => rfl
+    | cons y l' =>
+      have := congrArg List.length h
+      simp only [List.flatMap_nil, List.flatMap_cons, List.length_nil, List.length_append,
+        length] at this
+      omega
+  | cons x l ih =>
+    intro l' h
+    cases l' with
+    | nil =>
+      have := congrArg List.length h
+      simp only [List.flatMap_nil, List.flatMap_cons, List.length_nil, List.length_append,
+        length] at this
+      omega
+    | cons y l' =>
+      simp only [List.flatMap_cons] at h
+      obtain ⟨hxy, hl⟩ := List.append_inj h (by rw [length, length])
+      rw [inj x y hxy, ih hl]
 
 end EthLib.Base

@@ -1,10 +1,12 @@
 module
 
 public import EthLib.Execution.Blocks
+public import EthLib.Execution.ErrorFormat
 public import EthLib.Execution.Evm
 public import EthLib.Execution.Fees
 public import EthLib.Execution.History
 public import EthLib.Execution.Network
+public import EthLib.Execution.Rpc
 public import EthLib.Execution.State
 public import EthLib.Execution.Transactions
 public import EthLib.Execution.Trie

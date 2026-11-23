@@ -2,6 +2,8 @@ module
 
 public import EthLib.Engine.PayloadBodies
 public import EthLib.Engine.Proofs.Json
+public import EthLib.Execution.Proofs.Rpc.Json
+import EthLib.Base.Proofs.Toolchain.JsonBasic
 
 /-!
 # Proofs: `engine_getPayloadBodiesByHash` and `engine_getPayloadBodiesByRange`
@@ -31,6 +33,14 @@ When the range reaches the latest known block, the last entry is that block's en
 The store holds the body of that block, so the entry is not `null`.
 
 A range that starts past the latest known block has an empty answer.
+
+The decoders read back the parameters that the writers write.
+
+They read no JSON value other than what the writers write.
+
+A body reads back from its JSON at its version, and so does each answer.
+
+The withdrawals and the access list come back as `null` where they were `null`.
 -/
 
 public section
@@ -110,7 +120,7 @@ theorem bodiesByHash_eq_ok_iff (store : BodyStore) (hashes : List Hash32)
 /-- A request by hash fails exactly when it is too large. -/
 theorem bodiesByHash_eq_error_iff (store : BodyStore) (hashes : List Hash32) (e : EngineError) :
     bodiesByHash store hashes = .error e ↔
-      store.maxRequest < hashes.length ∧ e = .tooLargeRequest := by
+      store.maxRequest < hashes.length ∧ e = .tooLargeRequest hashes.length store.maxRequest := by
   unfold bodiesByHash checkRequestSize
   by_cases h : store.maxRequest < hashes.length
   · simp [h, throw, throwThe, MonadExceptOf.throw, bind, Except.bind, eq_comm]
@@ -178,7 +188,8 @@ theorem bodiesByRange_eq_error_iff (store : BodyStore) (start count : UInt64) (e
     bodiesByRange store start count = .error e ↔
       (start = 0 ∧ e = .invalidParams "start: below 1") ∨
       (start ≠ 0 ∧ count = 0 ∧ e = .invalidParams "count: below 1") ∨
-      (start ≠ 0 ∧ count ≠ 0 ∧ store.maxRequest < count.toNat ∧ e = .tooLargeRequest) := by
+      (start ≠ 0 ∧ count ≠ 0 ∧ store.maxRequest < count.toNat ∧
+        e = .tooLargeRequest count.toNat store.maxRequest) := by
   unfold bodiesByRange checkRequestSize
   by_cases hs : start = 0
   · subst hs; simp [throw, throwThe, MonadExceptOf.throw, bind, Except.bind, eq_comm]
@@ -302,5 +313,151 @@ theorem getPayloadBodiesByRangeV2_eq_ok_iff (store : BodyStore) (start count : U
   | ok bodies =>
     obtain ⟨hs, hc, hle, rfl⟩ := (bodiesByRange_eq_ok_iff store start count bodies).1 hb
     simp [Functor.map, Except.map, hs, hc, hle, eq_comm, Function.comp_def]
+
+/-- A JSON value reads as a request by hash exactly when it is an array of one array of hashes.
+
+That array holds the hashes in order, each `0x` and 64 lowercase hex digits. -/
+theorem bodiesByHashParams_eq_ok_iff {params : Lean.Json} {hashes : List Hash32} :
+    bodiesByHashParams params = .ok hashes ↔
+      params = .arr #[.arr (hashes.map fun h => .str (hexString h.toList)).toArray] := by
+  cases params with
+  | arr items =>
+    obtain ⟨xs⟩ := items
+    simp only [bodiesByHashParams, Serialization.JsonRpc.paramsArray]
+    match xs with
+    | [] => simp [bind, Except.bind, pure, Except.pure]
+    | [h] =>
+      simp only [Lean.Json.arr.injEq, Array.mk.injEq, List.cons.injEq, and_true,
+        ← Serialization.JsonRpc.array_fixed_false_eq_ok_iff (what := "hashes")
+          (w := "block hash")]
+      simp [bind, Except.bind, pure, Except.pure]
+    | _ :: _ :: _ => simp [bind, Except.bind, pure, Except.pure]
+  | _ => simp [bodiesByHashParams, Serialization.JsonRpc.paramsArray, bind, Except.bind]
+
+/-- A JSON value reads as a request by range exactly when it is an array of two quantities.
+
+The first is the start, and the second is the count.
+
+Each is `0x` and its lowercase hex digits, without leading zeros. -/
+theorem bodiesByRangeParams_eq_ok_iff {params : Lean.Json} {start count : UInt64} :
+    bodiesByRangeParams params = .ok (start, count) ↔
+      params = .arr #[Serialization.JsonRpc.quantityJson start.toNat,
+        Serialization.JsonRpc.quantityJson count.toNat] := by
+  cases params with
+  | arr items =>
+    obtain ⟨xs⟩ := items
+    simp only [bodiesByRangeParams, Serialization.JsonRpc.paramsArray]
+    match xs with
+    | [] => simp [bind, Except.bind, pure, Except.pure]
+    | [_] => simp [bind, Except.bind, pure, Except.pure]
+    | [s, c] =>
+      simp only [Lean.Json.arr.injEq, Array.mk.injEq, List.cons.injEq, and_true,
+        ← Serialization.JsonRpc.uint64_eq_ok_iff_quantityJson (what := "start")
+          (j := s) (x := start),
+        ← Serialization.JsonRpc.uint64_eq_ok_iff_quantityJson (what := "count")
+          (j := c) (x := count)]
+      cases hs : Serialization.JsonRpc.uint64 "start" s <;>
+        cases hc : Serialization.JsonRpc.uint64 "count" c <;>
+        simp [hs, hc, bind, Except.bind, pure, Except.pure]
+    | _ :: _ :: _ :: _ => simp [bind, Except.bind, pure, Except.pure]
+  | _ => simp [bodiesByRangeParams, Serialization.JsonRpc.paramsArray, bind, Except.bind]
+
+/-- The decoder of a request by hash reads back the hashes that the writer writes. -/
+theorem bodiesByHashParams_json (hashes : List Hash32) :
+    bodiesByHashParams (bodiesByHashParamsJson hashes) = .ok hashes :=
+  bodiesByHashParams_eq_ok_iff.mpr (by
+    simp [bodiesByHashParamsJson, Serialization.JsonRpc.listJson, Serialization.JsonRpc.dataJson])
+
+/-- The decoder of a request by range reads back the start and the count that the writer writes. -/
+theorem bodiesByRangeParams_json (start count : UInt64) :
+    bodiesByRangeParams (bodiesByRangeParamsJson start count) = .ok (start, count) :=
+  bodiesByRangeParams_eq_ok_iff.mpr rfl
+
+/-! ## The answer as JSON -/
+
+/-- A body of version 1 reads back from its JSON, with `null` withdrawals read as absent. -/
+theorem bodyV1OfJson_json (b : ExecutionPayloadBodyV1) : bodyV1OfJson (bodyV1Json b) = .ok b := by
+  have hd : [("transactions", Serialization.JsonRpc.listJson
+      (Serialization.JsonRpc.dataJson ·.data.toList)
+      b.transactions), ("withdrawals", Serialization.JsonRpc.optionJson
+      (Serialization.JsonRpc.listJson Execution.Rpc.withdrawalJson) b.withdrawals)].Pairwise
+      fun a b => a.1 ≠ b.1 := by simp
+  obtain ⟨fs, hfs, hp⟩ := Serialization.JsonRpc.fields_mkObj_filter "body" hd
+  have hl := Serialization.JsonRpc.lookup_of_perm_filter hp hd
+  have hon : Serialization.JsonRpc.hasOnly fs bodyFieldsV1 = true :=
+    Serialization.JsonRpc.hasOnly_of_perm hp (by
+      intro p hp
+      have := (List.mem_filter.mp hp).1
+      simp only [List.mem_cons, List.not_mem_nil, or_false] at this
+      rcases this with rfl | rfl <;> simp [bodyFieldsV1])
+  have wp : ∀ x, (Serialization.JsonRpc.listJson Execution.Rpc.withdrawalJson x).isNull = false :=
+    fun x => Base.Toolchain.Json.isNull_arr _
+  have hT : fs.lookup "transactions" = some (Serialization.JsonRpc.listJson
+      (Serialization.JsonRpc.dataJson ·.data.toList) b.transactions) := by
+    simp [hl, Serialization.JsonRpc.listJson]
+  have hW : fs.lookup "withdrawals" =
+      b.withdrawals.map (Serialization.JsonRpc.listJson Execution.Rpc.withdrawalJson) := by
+    rw [hl]
+    cases b.withdrawals <;> simp [List.lookup, wp, Serialization.JsonRpc.optionJson]
+  unfold bodyV1OfJson bodyV1Json
+  simp only [bind, Except.bind, hfs, hon, ite_true, Serialization.JsonRpc.field, hT, pure,
+    Except.pure, Serialization.JsonRpc.array_bytes_listJson, hW]
+  rcases b with ⟨t, w⟩
+  cases w <;> simp [Execution.Rpc.array_withdrawal_listJson] <;> rfl
+
+/-- A body of version 2 reads back from its JSON, with `null` fields read as absent. -/
+theorem bodyV2OfJson_json (b : ExecutionPayloadBodyV2) : bodyV2OfJson (bodyV2Json b) = .ok b := by
+  have hd : [("transactions", Serialization.JsonRpc.listJson
+      (Serialization.JsonRpc.dataJson ·.data.toList) b.transactions), ("withdrawals",
+      Serialization.JsonRpc.optionJson (Serialization.JsonRpc.listJson Execution.Rpc.withdrawalJson)
+      b.withdrawals), ("blockAccessList", Serialization.JsonRpc.optionJson
+      (Serialization.JsonRpc.dataJson ·.data.toList) b.blockAccessList)].Pairwise
+      fun a b => a.1 ≠ b.1 := by simp
+  obtain ⟨fs, hfs, hp⟩ := Serialization.JsonRpc.fields_mkObj_filter "body" hd
+  have hl := Serialization.JsonRpc.lookup_of_perm_filter hp hd
+  have hon : Serialization.JsonRpc.hasOnly fs bodyFieldsV2 = true :=
+    Serialization.JsonRpc.hasOnly_of_perm hp (by
+      intro p hp
+      have := (List.mem_filter.mp hp).1
+      simp only [List.mem_cons, List.not_mem_nil, or_false] at this
+      rcases this with rfl | rfl | rfl <;> simp [bodyFieldsV2, bodyFieldsV1])
+  have wp : ∀ x, (Serialization.JsonRpc.listJson Execution.Rpc.withdrawalJson x).isNull = false :=
+    fun x => Base.Toolchain.Json.isNull_arr _
+  have ap : ∀ x : ByteArray,
+      (Serialization.JsonRpc.dataJson x.data.toList).isNull = false :=
+    fun x => Base.Toolchain.Json.isNull_str _
+  have hT : fs.lookup "transactions" = some (Serialization.JsonRpc.listJson
+      (Serialization.JsonRpc.dataJson ·.data.toList) b.transactions) := by
+    simp [hl, Serialization.JsonRpc.listJson]
+  have hW : fs.lookup "withdrawals" =
+      b.withdrawals.map (Serialization.JsonRpc.listJson Execution.Rpc.withdrawalJson) := by
+    rw [hl]
+    cases b.withdrawals <;> simp [List.lookup, wp, Serialization.JsonRpc.optionJson]
+  have hA : fs.lookup "blockAccessList" =
+      b.blockAccessList.map (Serialization.JsonRpc.dataJson ·.data.toList) := by
+    rw [hl]
+    cases b.blockAccessList <;> simp [List.lookup, ap, Serialization.JsonRpc.optionJson]
+  unfold bodyV2OfJson bodyV2Json
+  simp only [bind, Except.bind, hfs, hon, ite_true, Serialization.JsonRpc.field, hT, pure,
+    Except.pure, Serialization.JsonRpc.array_bytes_listJson, hW, hA]
+  rcases b with ⟨⟨t, w⟩, a⟩
+  cases w <;> cases a <;> simp [Execution.Rpc.array_withdrawal_listJson,
+    Serialization.JsonRpc.bytes_dataJson] <;> rfl
+
+/-- An answer of version 1 reads back from its JSON, with `null` at the same entries. -/
+theorem payloadBodiesV1OfJson_json (bodies : List (Option ExecutionPayloadBodyV1)) :
+    payloadBodiesV1OfJson (payloadBodiesV1Json bodies) = .ok bodies := by
+  unfold payloadBodiesV1OfJson payloadBodiesV1Json
+  rw [Serialization.JsonRpc.array_listJson_of _ (Serialization.JsonRpc.nullable_optionJson
+    bodyV1OfJson_json fun _ => Base.Toolchain.Json.isNull_mkObj _)]
+  rfl
+
+/-- An answer of version 2 reads back from its JSON, with `null` at the same entries. -/
+theorem payloadBodiesV2OfJson_json (bodies : List (Option ExecutionPayloadBodyV2)) :
+    payloadBodiesV2OfJson (payloadBodiesV2Json bodies) = .ok bodies := by
+  unfold payloadBodiesV2OfJson payloadBodiesV2Json
+  rw [Serialization.JsonRpc.array_listJson_of _ (Serialization.JsonRpc.nullable_optionJson
+    bodyV2OfJson_json fun _ => Base.Toolchain.Json.isNull_mkObj _)]
+  rfl
 
 end EthLib.Engine

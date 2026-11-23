@@ -1,12 +1,16 @@
 module
 
+public import EthLib.Execution.ErrorFormat
 public import EthLib.Cryptography.Hash.Sha256
 public import EthLib.Execution.Evm.Words
 
 /-!
 # `Evm.Precompiles.Sha256`
 
-The SHA-256 precompile at address `0x02`, from Appendix E of the Yellow Paper.
+The SHA-256 precompile at address `0x02`, from Appendix E of the Yellow Paper, Shanghai version.
+
+The source is `Paper.tex` at `efc5f9a`:
+<https://github.com/ethereum/yellowpaper/blob/efc5f9a1f356cba376c978eedb63cb0363c2aa85/Paper.tex>
 
 It charges 60 gas, plus 12 for each 32-byte word of call data, then hashes the whole call data.
 
@@ -20,7 +24,7 @@ namespace EthLib.Execution.Evm.Precompiles.Sha256
 open EthLib.Execution.Evm (wordCount)
 
 /-- The size of the output in bytes: one SHA-256 digest. -/
-def OUTPUT_BYTES : Nat := 32
+def OUTPUT_BYTES : Nat := Cryptography.Hash.Sha256.DIGEST_SIZE_BYTES
 
 /-- The price of every call, from Appendix E of the Yellow Paper. -/
 def GAS_BASE : Nat := 60
@@ -29,13 +33,26 @@ def GAS_BASE : Nat := 60
 def GAS_PER_WORD : Nat := 12
 
 /-- The gas a call with `size` bytes of call data is charged. -/
-def gasCost (size : Nat) : Nat := GAS_BASE + GAS_PER_WORD * wordCount size
+def gasCost (size : Nat) : Nat :=
+  -- `g_r = 60 + 12 * ceil(||I_d|| / 32)`.
+  GAS_BASE + GAS_PER_WORD * wordCount size
 
 /-- The one way a SHA-256 call can fail. -/
 inductive Sha256Error where
   /-- The gas given was below the price, so the call consumes all its gas. -/
   | outOfGas (cost gas : Nat)
-  deriving Repr, DecidableEq
+  deriving DecidableEq
+
+/-- A constructor of the error, named in full, applied to its arguments. -/
+def sha256ErrorFormat (name : String) (args : List Std.Format) (prec : Nat) : Std.Format :=
+  constructorFormat ("EthLib.Execution.Evm.Precompiles.Sha256.Sha256Error." ++ name) args prec
+
+/-- The form of the error in Lean syntax, with each value named. -/
+def Sha256Error.reprPrec : Sha256Error → Nat → Std.Format
+  | .outOfGas cost gas, p =>
+    sha256ErrorFormat "outOfGas" [namedArg "cost" cost, namedArg "gas" gas] p
+
+instance : Repr Sha256Error := ⟨Sha256Error.reprPrec⟩
 
 /-- The stable code of an error, one per constructor.
 
@@ -51,7 +68,13 @@ Returns the 32-byte digest, or the error that consumes all the gas.
 
 The gas is charged first, then the whole call data is hashed. -/
 def sha256 (data : ByteArray) (gas : Nat) : Except Sha256Error ByteArray :=
+  -- `g_r`, the price of the call.
   let cost := gasCost data.size
+  -- Appendix E, `Xi_PRE`: `(empty, 0, A, ())` if `g < g_r`, else `(sigma, g - g_r, A, o)`.
+  --
+  -- Here the call returns an error or the output, and the call frame applies the rest.
+  --
+  -- `o[0..31] = SHA256(I_d)`.
   if gas < cost then .error (.outOfGas cost gas) else .ok (Cryptography.Hash.sha256 data)
 
 end EthLib.Execution.Evm.Precompiles.Sha256

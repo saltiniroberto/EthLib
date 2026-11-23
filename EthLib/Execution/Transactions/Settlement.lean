@@ -1,7 +1,7 @@
 module
 
 public import EthLib.Execution.Evm.Environment
-public import EthLib.Execution.Fees.BlobGas
+public import EthLib.Execution.Transactions.BlobGas
 public import EthLib.Execution.State.Tracker
 public import EthLib.Execution.Transactions.Validity
 
@@ -32,6 +32,10 @@ Section 6.2 of the Yellow Paper, Berlin version, defines the refund and the paym
 
 Source: [`Paper.tex` at `beacfbd`][yp-berlin].
 
+The step comments write the equations of the paper in ASCII.
+
+The prices `p` and `f` and the cap of a fifth are in the [Shanghai version][yp-shanghai].
+
 The EIPs that change them:
 
 - [EIP-1559][eip1559], the price per gas, the priority fee and the burn
@@ -59,6 +63,7 @@ The EIPs of Glamsterdam that change them:
 - [EIP-8037][eip8037], the state gas, its reservoir and the two counts of a block
 
 [yp-berlin]: https://github.com/ethereum/yellowpaper/blob/beacfbd29ccc04dfd790f2282d4c4b1c0afc9b5a/Paper.tex
+[yp-shanghai]: https://github.com/ethereum/yellowpaper/blob/efc5f9a1f356cba376c978eedb63cb0363c2aa85/Paper.tex
 [eip1559]: https://eips.ethereum.org/EIPS/eip-1559#specification
 [eip3529]: https://eips.ethereum.org/EIPS/eip-3529#specification
 [eip4844]: https://eips.ethereum.org/EIPS/eip-4844#gas-accounting
@@ -81,13 +86,12 @@ open EthLib.Execution.Fees.BlobBaseFee
 
 /-- The base fee per gas of a block at `fork`, or 0 before London, which has none. -/
 def baseFeeOf {fork : Fork} (env : BlockEnvironment fork) : Nat :=
+  -- `H_f` from London; before it, a price of 0 gives the beneficiary the whole price.
   if h : .london ≤ fork then env.baseFeePerGas h else 0
 
 /-- The base fee per blob gas of a block at `fork`, or 0 before Dencun, which has no blobs. -/
 def blobGasPriceOf {fork : Fork} (env : BlockEnvironment fork) : Nat :=
-  if h : .dencun ≤ fork then
-    getBaseFeePerBlobGas (env.blobSchedule h) (env.excessBlobGas h).toNat
-  else 0
+  if h : .dencun ≤ fork then env.blobBaseFee h else 0
 
 /-! ## The price per gas -/
 
@@ -111,15 +115,31 @@ A maximum fee below the base fee gives the base fee, and the checks of the block
 
 [EIP-1559](https://eips.ethereum.org/EIPS/eip-1559#specification) defines it. -/
 def effectiveGasPrice (baseFee : Nat) : Transaction → Nat
+  -- `p = T_p` if `T_x` is 0 or 1.
   | .legacy tx => tx.gasPrice.toNat
   | .accessList tx => tx.gasPrice.toNat
+  -- `p = f + H_f` if `T_x = 2`.
+  --
+  -- Blob and set code transactions, of EIP-4844 and EIP-7702, price like `T_x = 2`.
   | .feeMarket tx => feeMarket tx.maxPriorityFeePerGas.toNat tx.maxFeePerGas.toNat
   | .blob tx => feeMarket tx.maxPriorityFeePerGas.toNat tx.maxFeePerGas.toNat
   | .setCode tx => feeMarket tx.maxPriorityFeePerGas.toNat tx.maxFeePerGas.toNat
 where
   /-- The base fee plus the priority fee, capped so that the sum stays within the maximum fee. -/
   feeMarket (maxPriorityFee maxFee : Nat) : Nat :=
+    -- `p = f + H_f`, with `f = min(T_f, T_m - H_f)`.
+    --
+    -- A maximum fee below the base fee makes `T_m - H_f` stop at 0 here.
     min maxPriorityFee (maxFee - baseFee) + baseFee
+
+/-- The base fee per gas at which a transaction pays for its gas, in a block at `fork`.
+
+It is the base fee of the block.
+
+A simulation can lower it to 0 for a transaction with a maximum fee per gas of 0. -/
+def paidBaseFee {fork : Fork} (env : BlockEnvironment fork) (tx : Transaction)
+    (lifted : LiftedRules := {}) : Nat :=
+  if lifted.zeroFee && tx.maxFeePerGas == 0 then 0 else baseFeeOf env
 
 /-! ## The gas of the run -/
 
@@ -139,14 +159,24 @@ From Glamsterdam, the execution gas is at most `2^24` minus the intrinsic gas.
 
 The rest of the gas goes to the state gas reservoir.
 
+A simulation can lift that cap, so that all the gas past the intrinsic gas is execution gas.
+
 [EIP-8037][eip8037] defines the split.
 
 [eip8037]: https://eips.ethereum.org/EIPS/eip-8037#transaction-level-gas-accounting-reservoir-model -/
-def allocateGas (fork : Fork) (tx : Transaction) (intrinsic : Nat) : GasAllocation :=
+def allocateGas (fork : Fork) (tx : Transaction) (intrinsic : Nat) (lifted : LiftedRules := {}) :
+    GasAllocation :=
+  -- The gas past the intrinsic gas, the Yellow Paper's `g = T_g - g_0`.
   let evmGas := tx.gas.toNat - intrinsic
   if fork ≥ .glamsterdam then
-    let execution := min (TX_MAX_GAS_LIMIT - intrinsic) evmGas
-    ⟨execution, evmGas - execution⟩
+    -- A simulation can lift the cap of `2^24`: all of `g` is then execution gas.
+    if lifted.gasCap then ⟨evmGas, 0⟩
+    else
+      -- The execution gas is the least of `g` and `2^24` minus the intrinsic gas.
+      let execution := min (TX_MAX_GAS_LIMIT - intrinsic) evmGas
+      -- The rest of `g` fills the state gas reservoir.
+      ⟨execution, evmGas - execution⟩
+  -- Before Glamsterdam, all of `g` is execution gas, with no reservoir.
   else ⟨evmGas, 0⟩
 
 /-! ## The gas used -/
@@ -161,19 +191,25 @@ def maxRefundQuotient (fork : Fork) : Nat :=
 
 It is the counter, at most the gas used divided by the quotient of the fork. -/
 def gasRefund (fork : Fork) (used refundCounter : Nat) : Nat :=
+  -- `min(floor((T_g - g') / 5), A_r)`; before London the divisor is 2 and the counter `A'_r`.
   min (used / maxRefundQuotient fork) refundCounter
 
 /-- The gas that a transaction uses at `fork`, from the gas left and the refund counter.
-
-It is the gas limit minus the gas left, minus the refund.
 
 From Pectra, it is at least the call data floor.
 
 From Glamsterdam, the gas left holds the execution gas left and the state gas reservoir left. -/
 def gasUsed (fork : Fork) (sender : Address) (tx : Transaction) (gasLeft refundCounter : Nat) :
     Nat :=
+  -- The gas used before the refund, the Yellow Paper's `T_g - g'`.
+  --
+  -- From Glamsterdam the gas left also holds the state gas left in the reservoir.
   let used := tx.gas.toNat - gasLeft
+  -- The gas used after the refund, `T_g - g*`.
   let afterRefund := used - gasRefund fork used refundCounter
+  -- From Pectra, the floor of EIP-7623 applies.
+  --
+  -- The gas used is then at least the call data floor.
   if fork ≥ .pectra then max afterRefund (calldataFloor fork sender tx) else afterRefund
 
 /-! ## The payments -/
@@ -194,6 +230,11 @@ structure Settlement where
 
 It is the gas used times the price per gas above the base fee. -/
 def priorityFeeOf (baseFee used : Nat) (tx : Transaction) : Nat :=
+  -- The priority fee per gas is the price per gas minus the base fee.
+  --
+  -- The fee is the gas used after the refund times that priority fee per gas.
+  --
+  -- That is the Shanghai paper's `(T_g - g*) f`.
   used * (effectiveGasPrice baseFee tx - baseFee)
 
 /-- Where the wei of a transaction from `sender` go at `fork` and at a base fee of `baseFee`. -/
@@ -202,8 +243,10 @@ def settlement (fork : Fork) (baseFee : Nat) (sender : Address) (tx : Transactio
   let used := gasUsed fork sender tx gasLeft refundCounter
   let price := effectiveGasPrice baseFee tx
   { gasUsed := used
+    -- The gas left after the refund, times the price per gas: the Shanghai paper's `g* p`.
     senderRefund := (tx.gas.toNat - used) * price
     priorityFee := priorityFeeOf baseFee used tx
+    -- The base fee of the gas used, which the paper credits to no account.
     burned := used * baseFee }
 
 /-! ## The gas of the block -/
@@ -239,6 +282,7 @@ Before Glamsterdam the state gas is 0, so it is the gas of the transactions.
 
 [eip8037]: https://eips.ethereum.org/EIPS/eip-8037#block-level-gas-accounting -/
 def gasUsed (counts : BlockGas) : Nat :=
+  -- EIP-8037 sets the gas used of the header to the larger of the two counts.
   max counts.execution counts.state
 
 end BlockGas
@@ -266,9 +310,15 @@ That execution gas is never below the call data floor.
 def transactionBlockGas (fork : Fork) (sender : Address) (tx : Transaction)
     (gasLeft refundCounter : Nat) (stateGasUsed : Int) : BlockGas :=
   if fork ≥ .glamsterdam then
+    -- The state gas used, where a negative amount counts as 0.
     let state := stateGasUsed.toNat
+    -- The gas used before the refund minus that state gas, at least the call data floor.
+    --
+    -- The gas left here already holds the state gas left in the reservoir.
     ⟨max (tx.gas.toNat - gasLeft - state) (calldataFloor fork sender tx), state,
+      -- The blob gas of the transaction.
       calculateTotalBlobGas tx⟩
+  -- Before Glamsterdam, the gas used after the refund, then the blob gas.
   else ⟨gasUsed fork sender tx gasLeft refundCounter, 0, calculateTotalBlobGas tx⟩
 
 /-! ## The changes to the state -/
@@ -285,12 +335,24 @@ The fee is the gas limit times the price per gas, plus the fee of the blobs.
 
 It fails if the sender does not hold the fee.
 
-This is only the deduction: the checks of the block ask for the balance at the maximum fees. -/
+This is only the deduction: the checks of the block ask for the balance at the maximum fees.
+
+A simulation can charge a transaction with a maximum fee per gas of 0 at a base fee of 0. -/
 def buyGas {fork : Fork} (env : BlockEnvironment fork) (state : TransactionState)
-    (sender : Address) (tx : Transaction) : Except StateError TransactionState := do
-  let fee := tx.gas.toNat * effectiveGasPrice (baseFeeOf env) tx +
+    (sender : Address) (tx : Transaction) (lifted : LiftedRules := {}) :
+    Except StateError TransactionState := do
+  -- The fee is the gas limit times the price per gas, plus the fee of the blobs.
+  --
+  -- The fee of the blobs is their blob gas times the base fee per blob gas, 0 without blobs.
+  --
+  -- A simulation can charge a maximum fee per gas of 0 at a base fee of 0.
+  let fee := tx.gas.toNat * effectiveGasPrice (paidBaseFee env tx lifted) tx +
     calculateTotalBlobGas tx * blobGasPriceOf env
+  -- The nonce of the sender grows by one.
   let state ← state.incrementNonce fork sender
+  -- The balance of the sender loses the fee.
+  --
+  -- The checks of the block make this hold; a short balance is an error here.
   state.modifyState fork sender fun account =>
     if fee ≤ account.balance.toNat then
       .ok { account with balance := BitVec.ofNat 256 (account.balance.toNat - fee) }
@@ -307,6 +369,11 @@ That fee still touches the beneficiary, so an empty beneficiary is deleted.
 From Paris, a change that leaves an account empty deletes it anyway. -/
 def payBeneficiary (fork : Fork) (state : TransactionState) (coinbase : Address) (fee : Nat) :
     Except StateError TransactionState :=
+  -- From Spurious Dragon until Paris, a balance of 0 after the fee credits nothing.
+  --
+  -- The beneficiary is then deleted if its account exists and is empty.
+  --
+  -- Otherwise, the beneficiary gets the fee.
   if fork ≥ .spuriousDragon ∧ fork < .paris ∧ (state.getAccount coinbase).balance.toNat + fee = 0
   then
     .ok (if state.accountExistsAndIsEmpty coinbase then state.destroyAccount coinbase else state)
@@ -318,12 +385,17 @@ The sender gets back its refund, then the beneficiary gets the priority fee.
 
 From Glamsterdam the gas left includes the state gas reservoir left, so the sender gets it back.
 
+A simulation can charge a transaction with a maximum fee per gas of 0 at a base fee of 0.
+
 It returns the state and the gas used. -/
 def settleGas {fork : Fork} (env : BlockEnvironment fork) (state : TransactionState)
-    (sender : Address) (tx : Transaction) (gasLeft refundCounter : Nat) :
-    Except StateError (TransactionState × Nat) := do
-  let s := settlement fork (baseFeeOf env) sender tx gasLeft refundCounter
+    (sender : Address) (tx : Transaction) (gasLeft refundCounter : Nat)
+    (lifted : LiftedRules := {}) : Except StateError (TransactionState × Nat) := do
+  -- A simulation can charge a maximum fee per gas of 0 at a base fee of 0.
+  let s := settlement fork (paidBaseFee env tx lifted) sender tx gasLeft refundCounter
+  -- The sender gets back the wei of its refund.
   let state ← creditEther fork state sender s.senderRefund
+  -- The beneficiary gets the priority fee.
   let state ← payBeneficiary fork state env.coinbase s.priorityFee
   return (state, s.gasUsed)
 

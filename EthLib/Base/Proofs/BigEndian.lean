@@ -7,50 +7,30 @@ public import EthLib.Base.BigEndian
 
 Reading and writing big-endian bytes undo each other.
 
-- A list of `k` bytes holds a value below `256 ^ k`.
 - Writing `n` on `len` bytes gives bytes that read back as `n % 256 ^ len`.
 - On `a + b` bytes, `n` is `n / 256 ^ b` on the first `a` bytes, then `n` on the last `b`.
+- Byte `i` of `n` on `len` bytes is the digit of `n` worth `256 ^ (len - 1 - i)`.
 - Zero on `len` bytes is `len` zero bytes.
 - Reading `k` bytes and writing the value back on `k` bytes gives the same bytes.
+- Two numbers below `256 ^ len` that write the same `len` bytes are equal.
 -/
 
 @[expose] public section
 
 namespace EthLib.Base
 
-/-- Folding from any start value shifts it by one factor of 256 per byte. -/
-theorem foldl_bytesToNat (bytes : List UInt8) (acc : Nat) :
-    bytes.foldl (fun acc b => acc * 256 + b.toNat) acc
-      = acc * 256 ^ bytes.length + bytesToNat bytes := by
-  induction bytes generalizing acc with
-  | nil => simp [bytesToNat]
-  | cons b rest ih =>
-    -- Unfold one byte on both sides, then use the induction hypothesis twice.
-    have h0 := ih (b.toNat)
-    have h1 := ih (acc * 256 + b.toNat)
-    simp only [bytesToNat, List.foldl_cons, List.length_cons, Nat.zero_mul, Nat.zero_add] at *
-    rw [h1, h0, Nat.pow_succ, Nat.add_mul, Nat.add_assoc, Nat.mul_assoc, Nat.mul_comm 256]
+/-- Zero bytes write nothing. -/
+theorem natToBytes_zero (n : Nat) : natToBytes 0 n = [] := rfl
+
+/-- The counter is always four bytes. -/
+theorem natToBytes4_size (n : Nat) : (natToBytes4 n).size = 4 := by
+  simp [natToBytes4, ByteArray.size, natToBytes_length]
 
 /-- Appending bytes on the right shifts the earlier value left by their count. -/
 theorem bytesToNat_append (a b : List UInt8) :
     bytesToNat (a ++ b) = bytesToNat a * 256 ^ b.length + bytesToNat b := by
   rw [bytesToNat, List.foldl_append, foldl_bytesToNat]
   rfl
-
-/-- A list of `k` bytes is worth less than `256 ^ k`. -/
-theorem bytesToNat_lt (bytes : List UInt8) : bytesToNat bytes < 256 ^ bytes.length := by
-  induction bytes with
-  | nil => simp [bytesToNat]
-  | cons b rest ih =>
-    -- The first byte is the most significant one, worth `256 ^ rest.length` per unit.
-    have hcons : bytesToNat (b :: rest) = b.toNat * 256 ^ rest.length + bytesToNat rest := by
-      simpa [bytesToNat] using foldl_bytesToNat rest b.toNat
-    have hb : b.toNat + 1 ≤ 256 := b.toNat_lt
-    rw [hcons, List.length_cons, Nat.pow_succ, Nat.mul_comm _ 256]
-    -- `b * 256^r + v < (b + 1) * 256^r ≤ 256 * 256^r`.
-    calc b.toNat * 256 ^ rest.length + bytesToNat rest
-        < (b.toNat + 1) * 256 ^ rest.length := by rw [Nat.succ_mul]; omega
-      _ ≤ 256 * 256 ^ rest.length := Nat.mul_le_mul_right _ hb
 
 /-- Writing `n` on `len` bytes and reading it back gives `n % 256 ^ len`. -/
 theorem bytesToNat_natToBytes (len n : Nat) :
@@ -75,6 +55,17 @@ theorem natToBytes_add (a b n : Nat) :
     -- Both sides end with the lowest byte, and the higher bytes are `n / 256` written on `a + b`.
     rw [← Nat.add_assoc, natToBytes_succ, ih, natToBytes_succ, List.append_assoc,
       Nat.div_div_eq_div_mul, Nat.pow_succ, Nat.mul_comm 256]
+
+/-- Byte `i` of a number written on `len` bytes is its digit worth `256 ^ (len - 1 - i)`. -/
+theorem getElem_natToBytes {len n i : Nat} (hi : i < len) :
+    (natToBytes len n)[i]'(by rw [natToBytes_length]; exact hi) =
+      UInt8.ofNat (n / 256 ^ (len - 1 - i) % 256) := by
+  have hsplit := natToBytes_add (i + 1) (len - 1 - i) n
+  rw [show i + 1 + (len - 1 - i) = len by omega, natToBytes_succ] at hsplit
+  simp only [hsplit]
+  rw [List.getElem_append_left (by simp [natToBytes_length]),
+    List.getElem_append_right (by simp [natToBytes_length])]
+  simp [natToBytes_length]
 
 /-- A number written on `len` bytes keeps only its remainder modulo `256 ^ len`. -/
 theorem natToBytes_mod (len n : Nat) : natToBytes len (n % 256 ^ len) = natToBytes len n := by
@@ -120,6 +111,11 @@ theorem natToBytes_bytesToNat (bytes : List UInt8) :
 theorem bytesToNat_inj {a b : List UInt8} (length : a.length = b.length)
     (same : bytesToNat a = bytesToNat b) : a = b := by
   rw [← natToBytes_bytesToNat a, ← natToBytes_bytesToNat b, length, same]
+
+/-- Two numbers below `256 ^ len` that write the same `len` bytes are equal. -/
+theorem natToBytes_inj {len a b : Nat} (ha : a < 256 ^ len) (hb : b < 256 ^ len)
+    (h : natToBytes len a = natToBytes len b) : a = b := by
+  rw [← bytesToNat_natToBytes_of_lt ha, ← bytesToNat_natToBytes_of_lt hb, h]
 
 /-- The first byte is worth `256` to the power of the number of bytes after it. -/
 theorem bytesToNat_cons (b : UInt8) (rest : List UInt8) :

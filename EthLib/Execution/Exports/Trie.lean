@@ -1,6 +1,6 @@
 module
 
-public import EthLib.Base.Exports.Proofs.PyValue
+public import EthLib.Base.Exports.PyValue
 public import EthLib.Cryptography.Hash.Keccak
 public import EthLib.Execution.Trie.HexPrefix
 public import EthLib.Execution.Trie.Proof
@@ -29,7 +29,8 @@ public section
 
 namespace EthLib.Execution.Trie.Exports
 
-open EthLib.Exports (Result PyValue pyExport)
+open EthLib.Exports (ExportError Result PyValue UnreadArgument oneLine pyExport rejectArgument
+  toResult)
 
 open EthLib.Base
 open EthLib.Serialization.Rlp
@@ -42,9 +43,14 @@ def ofPairItem (item : Item) : Except RlpError (ByteArray × ByteArray) := do
 
 /-- The items of the RLP list that `input` encodes, or an error naming `what`. -/
 def readList (input : ByteArray) (what : String) : Result (List Item) := do
-  let .ok item := decode input | throw (0, s!"{what} is not one RLP item")
-  let .ok items := item.toItems | throw (0, s!"{what} is not an RLP list")
+  let .ok item := decode input | rejectArgument none s!"{what} is not one RLP item"
+  let .ok items := item.toItems | rejectArgument none s!"{what} is not an RLP list"
   return items
+
+/-- In the trie exports, a trie with no root reaches Python with its code and a message. -/
+instance : ExportError TrieError where
+  code := TrieError.code
+  message := fun e => s!"{repr e}"
 
 /-- The root of the trie that sets the pairs of `input` in order, from an empty trie.
 
@@ -56,11 +62,16 @@ A `secured` other than 0 hashes each key before it becomes a path. -/
 @[export eth_trie_root]
 def rootExport (secured : UInt8) (input : ByteArray) : Result ByteArray := do
   let .ok pairs := (← readList input "pairs").mapM ofPairItem
-    | throw (0, "a pair is not a list of a key and a value")
+    | rejectArgument none "a pair is not a list of a key and a value"
   let trie := pairs.foldl (fun trie (key, value) => trieSet trie key value) ⟨secured != 0, []⟩
   match root Cryptography.Hash.Keccak.keccak256 trie with
   | .ok hash => return ⟨hash.toArray⟩
-  | .error e => throw (e.code, s!"trie has no root: {repr e}")
+  | .error e => toResult "trie has no root" (.error e)
+
+/-- A proof that does not verify reaches Python with its code, and its message is on one line. -/
+instance : ExportError ProofError where
+  code := ProofError.code
+  message := oneLine
 
 /-- The value of `key` in the trie of `root`, as the nodes of `proof` show.
 
@@ -72,15 +83,19 @@ A root of another length than 32 bytes, or a proof that does not verify, is an e
 @[export eth_trie_verify_proof]
 def verifyProofExport (root : ByteArray) (secured : UInt8) (key proof : ByteArray) :
     Result ByteArray := do
-  if h : root.size = 32 then
-    let .ok nodes := (← readList proof "proof").mapM Item.toBytes
-      | throw (0, "a node of the proof is not a byte string")
-    match verifyProof Cryptography.Hash.Keccak.keccak256 ⟨root.data, h⟩ (secured != 0) key nodes with
-    | .ok (some value) => return value
-    | .ok none => return .empty
-    | .error e => throw (e.code, s!"proof does not verify: {repr e}")
-  else
-    throw (0, s!"bad root size: {root.size}, expected 32")
+  let root ← toResult none (Base.exactBytes 32 root fun size =>
+    UnreadArgument.mk s!"bad root size: {size}, expected 32")
+  let .ok nodes := (← readList proof "proof").mapM Item.toBytes
+    | rejectArgument none "a node of the proof is not a byte string"
+  match ← toResult "proof does not verify"
+      (verifyProof Cryptography.Hash.Keccak.keccak256 root (secured != 0) key nodes) with
+  | some value => return value
+  | none => return .empty
+
+/-- A range that does not verify reaches Python with its code, and its message is on one line. -/
+instance : ExportError RangeError where
+  code := RangeError.code
+  message := oneLine
 
 /-- Check a range of the trie of a 32-byte root from a 32-byte start, with Keccak-256.
 
@@ -88,8 +103,8 @@ It returns whether the trie holds a key after the last entry. -/
 def verifyRangeOf (args : Hash32 × Hash32 × List (Hash32 × ByteArray) × List ByteArray) :
     Result Bool := do
   let (root, start, entries, proof) := args
-  (verifyRange Cryptography.Hash.Keccak.keccak256 root start entries proof).mapError fun e =>
-    (e.code, s!"range does not verify: {repr e}")
+  toResult "range does not verify"
+    (verifyRange Cryptography.Hash.Keccak.keccak256 root start entries proof)
 
 /-- Check a range of the trie of a 32-byte root from a 32-byte start, with Keccak-256.
 
@@ -113,7 +128,7 @@ def hexPrefixOf (args : List Nat × Bool) : Result ByteArray := do
   let (nibbles, isLeaf) := args
   let path ← nibbles.mapM fun n =>
     if h : n < 16 then pure (⟨n, h⟩ : Nibble)
-    else throw (0, s!"{n} is not a nibble")
+    else rejectArgument none s!"{n} is not a nibble"
   return nibbleListToCompact path isLeaf
 
 /-- The hex-prefix encoding of a path of nibbles, for a leaf or an extension.

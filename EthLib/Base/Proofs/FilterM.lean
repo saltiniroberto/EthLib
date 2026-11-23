@@ -1,7 +1,7 @@
 module
 
 public import EthLib.Base.Except
-import all Init.Data.List.Control
+import EthLib.Base.Proofs.Toolchain.ListControl
 
 /-!
 # `Base.Proofs.FilterM`
@@ -10,7 +10,9 @@ What a successful filter over a list in `Except` returns: only elements of the l
 
 It keeps each element of the list that passes the test, and only those, in their order.
 
-Lean core states no lemma about such a filter, so this module reads its definition.
+It succeeds only when the test succeeds on each element.
+
+Lean core states no lemma about such a filter, so this module cites the equations of its definition.
 -/
 
 @[expose] public section
@@ -25,11 +27,11 @@ theorem mem_of_filterAuxM_ok {test : α → Except ε Bool} :
     ∀ {list kept out : List α}, List.filterAuxM test list kept = .ok out →
       ∀ value ∈ out, value ∈ list ∨ value ∈ kept
   | [], kept, out, computed => by
-    simp only [List.filterAuxM, pure, Except.pure, Except.ok.injEq] at computed
+    simp only [Toolchain.List.filterAuxM_nil, pure, Except.pure, Except.ok.injEq] at computed
     subst computed
     exact fun _ member => .inr member
   | first :: rest, kept, out, computed => by
-    simp only [List.filterAuxM, bind_ok_iff] at computed
+    simp only [Toolchain.List.filterAuxM_cons, bind_ok_iff] at computed
     obtain ⟨chosen, _, computed⟩ := computed
     intro value member
     rcases mem_of_filterAuxM_ok computed value member with inside | earlier
@@ -44,7 +46,7 @@ theorem mem_of_filterAuxM_ok {test : α → Except ε Bool} :
 theorem mem_of_filterM_ok {test : α → Except ε Bool} {list out : List α}
     (computed : list.filterM test = .ok out) {value : α} (member : value ∈ out) :
     value ∈ list := by
-  simp only [List.filterM, bind_ok_iff, pure, Except.pure, Except.ok.injEq] at computed
+  simp only [Toolchain.List.filterM_eq, bind_ok_iff, pure, Except.pure, Except.ok.injEq] at computed
   obtain ⟨reversed, filtered, rfl⟩ := computed
   rcases mem_of_filterAuxM_ok filtered value (List.mem_reverse.mp member) with inside | none
   · exact inside
@@ -55,11 +57,11 @@ private theorem mem_filterAuxM_ok {test : α → Except ε Bool} :
     ∀ {list kept out : List α}, List.filterAuxM test list kept = .ok out →
       (∀ value ∈ kept, value ∈ out) ∧ ∀ value ∈ list, test value = .ok true → value ∈ out
   | [], kept, out, computed => by
-    simp only [List.filterAuxM, pure, Except.pure, Except.ok.injEq] at computed
+    simp only [Toolchain.List.filterAuxM_nil, pure, Except.pure, Except.ok.injEq] at computed
     subst computed
     exact ⟨fun _ member => member, fun _ member => absurd member List.not_mem_nil⟩
   | first :: rest, kept, out, computed => by
-    simp only [List.filterAuxM, bind_ok_iff] at computed
+    simp only [Toolchain.List.filterAuxM_cons, bind_ok_iff] at computed
     obtain ⟨chosen, chosenOk, computed⟩ := computed
     obtain ⟨keeps, passes⟩ := mem_filterAuxM_ok computed
     refine ⟨fun value member => keeps value ?_, fun value member test => ?_⟩
@@ -76,7 +78,7 @@ private theorem mem_filterAuxM_ok {test : α → Except ε Bool} :
 theorem mem_filterM_ok_of_test {test : α → Except ε Bool} {list out : List α}
     (computed : list.filterM test = .ok out) {value : α} (member : value ∈ list)
     (passes : test value = .ok true) : value ∈ out := by
-  simp only [List.filterM, bind_ok_iff, pure, Except.pure, Except.ok.injEq] at computed
+  simp only [Toolchain.List.filterM_eq, bind_ok_iff, pure, Except.pure, Except.ok.injEq] at computed
   obtain ⟨reversed, filtered, rfl⟩ := computed
   exact List.mem_reverse.mpr ((mem_filterAuxM_ok filtered).2 value member passes)
 
@@ -85,11 +87,11 @@ private theorem passes_of_filterAuxM_ok {test : α → Except ε Bool} :
     ∀ {list kept out : List α}, List.filterAuxM test list kept = .ok out →
       ∀ value ∈ out, value ∈ kept ∨ test value = .ok true
   | [], kept, out, computed => by
-    simp only [List.filterAuxM, pure, Except.pure, Except.ok.injEq] at computed
+    simp only [Toolchain.List.filterAuxM_nil, pure, Except.pure, Except.ok.injEq] at computed
     subst computed
     exact fun _ member => .inl member
   | first :: rest, kept, out, computed => by
-    simp only [List.filterAuxM, bind_ok_iff] at computed
+    simp only [Toolchain.List.filterAuxM_cons, bind_ok_iff] at computed
     obtain ⟨chosen, chosenOk, computed⟩ := computed
     intro value member
     rcases passes_of_filterAuxM_ok computed value member with earlier | passes
@@ -104,7 +106,7 @@ private theorem passes_of_filterAuxM_ok {test : α → Except ε Bool} :
 theorem passes_of_mem_filterM_ok {test : α → Except ε Bool} {list out : List α}
     (computed : list.filterM test = .ok out) {value : α} (member : value ∈ out) :
     test value = .ok true := by
-  simp only [List.filterM, bind_ok_iff, pure, Except.pure, Except.ok.injEq] at computed
+  simp only [Toolchain.List.filterM_eq, bind_ok_iff, pure, Except.pure, Except.ok.injEq] at computed
   obtain ⟨reversed, filtered, rfl⟩ := computed
   rcases passes_of_filterAuxM_ok filtered value (List.mem_reverse.mp member) with none | passes
   · cases none
@@ -116,10 +118,10 @@ private theorem sublist_of_filterAuxM_ok {test : α → Except ε Bool} :
     ∀ {list kept out : List α}, List.filterAuxM test list kept = .ok out →
       ∃ chosen : List α, chosen.Sublist list ∧ out = chosen.reverse ++ kept
   | [], kept, out, computed => by
-    simp only [List.filterAuxM, pure, Except.pure, Except.ok.injEq] at computed
+    simp only [Toolchain.List.filterAuxM_nil, pure, Except.pure, Except.ok.injEq] at computed
     exact ⟨[], List.Sublist.slnil, by simp [computed]⟩
   | first :: rest, kept, out, computed => by
-    simp only [List.filterAuxM, bind_ok_iff] at computed
+    simp only [Toolchain.List.filterAuxM_cons, bind_ok_iff] at computed
     obtain ⟨chosen, -, computed⟩ := computed
     obtain ⟨part, sub, rfl⟩ := sublist_of_filterAuxM_ok computed
     cases chosen
@@ -129,7 +131,7 @@ private theorem sublist_of_filterAuxM_ok {test : α → Except ε Bool} :
 /-- A filter that a computation runs returns a part of its list, in order. -/
 theorem sublist_of_filterM_ok {test : α → Except ε Bool} {list out : List α}
     (computed : list.filterM test = .ok out) : out.Sublist list := by
-  simp only [List.filterM, bind_ok_iff, pure, Except.pure, Except.ok.injEq] at computed
+  simp only [Toolchain.List.filterM_eq, bind_ok_iff, pure, Except.pure, Except.ok.injEq] at computed
   obtain ⟨reversed, filtered, rfl⟩ := computed
   obtain ⟨chosen, sub, rfl⟩ := sublist_of_filterAuxM_ok filtered
   simpa using sub
@@ -138,10 +140,10 @@ theorem sublist_of_filterM_ok {test : α → Except ε Bool} {list out : List α
 private theorem filterAuxM_exists_ok {test : α → Except ε Bool} :
     ∀ {list : List α}, (∀ value ∈ list, ∃ passes, test value = .ok passes) →
       ∀ kept : List α, ∃ out, List.filterAuxM test list kept = .ok out
-  | [], _, kept => ⟨kept, rfl⟩
+  | [], _, kept => ⟨kept, Toolchain.List.filterAuxM_nil test kept⟩
   | first :: rest, tested, kept => by
     obtain ⟨passes, passesOk⟩ := tested first List.mem_cons_self
-    simp only [List.filterAuxM]
+    simp only [Toolchain.List.filterAuxM_cons]
     rw [passesOk]
     exact filterAuxM_exists_ok
       (fun value member => tested value (List.mem_cons_of_mem _ member)) _
@@ -151,6 +153,38 @@ theorem filterM_exists_ok {test : α → Except ε Bool} {list : List α}
     (tested : ∀ value ∈ list, ∃ passes, test value = .ok passes) :
     ∃ out, list.filterM test = .ok out := by
   obtain ⟨out, computed⟩ := filterAuxM_exists_ok tested []
-  exact ⟨out.reverse, by simp only [List.filterM, computed]; rfl⟩
+  exact ⟨out.reverse, by simp only [Toolchain.List.filterM_eq, computed]; rfl⟩
+
+/-- A filter started with any kept list succeeds only when the test succeeds on each element. -/
+private theorem filterAuxM_ok_of_mem {test : α → Except ε Bool} :
+    ∀ {list kept out : List α}, List.filterAuxM test list kept = .ok out →
+      ∀ value ∈ list, ∃ passes, test value = .ok passes
+  | [], _, _, _ => fun _ member => absurd member List.not_mem_nil
+  | first :: rest, kept, out, computed => by
+    simp only [Toolchain.List.filterAuxM_cons, bind_ok_iff] at computed
+    obtain ⟨chosen, chosenOk, computed⟩ := computed
+    intro value member
+    rcases List.mem_cons.mp member with rfl | later
+    · exact ⟨chosen, chosenOk⟩
+    · exact filterAuxM_ok_of_mem computed value later
+
+/-- A filter that a computation runs succeeds only when the test succeeds on each element. -/
+theorem filterM_ok_of_mem {test : α → Except ε Bool} {list out : List α}
+    (computed : list.filterM test = .ok out) :
+    ∀ value ∈ list, ∃ passes, test value = .ok passes := by
+  simp only [Toolchain.List.filterM_eq, bind_ok_iff] at computed
+  obtain ⟨reversed, filtered, -⟩ := computed
+  exact filterAuxM_ok_of_mem filtered
+
+/-- A filter that a computation runs keeps nothing exactly when no element passes the test. -/
+theorem eq_nil_iff_of_filterM_ok {test : α → Except ε Bool} {list out : List α}
+    (computed : list.filterM test = .ok out) :
+    out = [] ↔ ∀ value ∈ list, test value ≠ .ok true := by
+  rw [List.eq_nil_iff_forall_not_mem]
+  constructor
+  · intro none value member passes
+    exact none value (mem_filterM_ok_of_test computed member passes)
+  · intro none value member
+    exact none value (mem_of_filterM_ok computed member) (passes_of_mem_filterM_ok computed member)
 
 end EthLib.Base

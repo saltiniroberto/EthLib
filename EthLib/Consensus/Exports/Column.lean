@@ -28,16 +28,15 @@ public section
 
 namespace EthLib.Consensus.Exports
 
-open EthLib.Exports (Result PyValue pyExport)
+open EthLib.Exports (Result PyValue UnreadArgument pyExport rejectArgument toResult)
 open Base Cryptography.Kzg Cryptography.Kzg.Constants Serialization.Ssz
 open Cryptography.Kzg.Exports (runKzgWithSetup)
-open Serialization.Ssz.Exports (runSsz)
 
 /-- The preset and a fork from Fulu on, which the names name. -/
 def columnPresetAndFork (name fork : ByteArray) : Result (Preset × Fork) := do
   let preset ← presetOf (← nameOf name)
   let fork ← forkOf fork
-  if fork < .fusaka then throw (0, s!"no data column sidecar at {fork.name}")
+  if fork < .fusaka then rejectArgument none s!"no data column sidecar at {fork.name}"
   return (preset, fork)
 
 /-- The preset and a fork from Fulu up to Gloas, which the names name, with the fork's bound. -/
@@ -45,12 +44,12 @@ def fuluPresetAndFork (name fork : ByteArray) :
     Result (Preset × (fork : Fork) ×' fork < .glamsterdam) := do
   let (preset, fork) ← columnPresetAndFork name fork
   if beforeGloas : fork < .glamsterdam then return (preset, ⟨fork, beforeGloas⟩)
-  else throw (0, s!"no form of this check at {fork.name}")
+  else rejectArgument none s!"no form of this check at {fork.name}"
 
 /-- Read a sidecar, with the code of a decoding error. -/
 def readSidecar (preset : Preset) (fork : Fork) (data : ByteArray) :
     Result (DataColumnSidecar preset fork) :=
-  runSsz "input rejected" (SszType.deserialize (DataColumnSidecar preset fork) data)
+  toResult "input rejected" (SszType.deserialize (DataColumnSidecar preset fork) data)
 
 /-- From Gloas, the commitments in the bid of the block of a sidecar, from the signed block.
 
@@ -60,15 +59,15 @@ From Gloas a block whose root is not the root that the sidecar names fails with 
 def bidCommitmentsOf {preset : Preset} {fork : Fork} (sidecar : DataColumnSidecar preset fork)
     (block : ByteArray) : Result (Since .glamsterdam fork (BlobKZGCommitments preset fork)) := do
   if beforeGloas : fork < .glamsterdam then
-    if !block.isEmpty then throw (0, s!"no block for a sidecar at {fork.name}")
+    if !block.isEmpty then rejectArgument none s!"no block for a sidecar at {fork.name}"
     return (absurd · (not_glamsterdam_le beforeGloas))
   else
     let gloas := not_lt_glamsterdam beforeGloas
-    let signed ← runSsz "block rejected"
+    let signed ← toResult "block rejected"
       (SszType.deserialize (SignedBeaconBlock preset fork) block)
-    let root ← runSsz "block rejected" (SszType.hashTreeRoot signed.message)
+    let root ← toResult "block rejected" (SszType.hashTreeRoot signed.message)
     if root ≠ sidecar.beaconBlockRoot gloas then
-      throw (0, "the block is not the block of the sidecar")
+      rejectArgument none "the block is not the block of the sidecar"
     return signed.message.bidCommitments
 
 /-- Whether a sidecar, given as bytes, has a valid shape.
@@ -108,9 +107,11 @@ A sidecar or a block that does not decode has code 0. -/
 @[export eth_consensus_verify_data_column_sidecar_kzg_proofs]
 def verifyDataColumnSidecarKzgProofsExport (name fork data block : ByteArray) : Result Bool := do
   let (preset, fork) ← columnPresetAndFork name fork
-  let sidecar ← (SszType.deserialize (DataColumnSidecar preset fork) data).mapError
-    fun e => (0, s!"input rejected: {reprStr e}")
-  let commitments ← (bidCommitmentsOf sidecar block).mapError fun (_, message) => (0, message)
+  let sidecar ← toResult none
+    ((SszType.deserialize (DataColumnSidecar preset fork) data).mapError fun e =>
+      UnreadArgument.mk s!"input rejected: {reprStr e}")
+  let commitments ← toResult none ((bidCommitmentsOf sidecar block).mapError fun (_, message) =>
+    UnreadArgument.mk message)
   runKzgWithSetup fun setup => verifyDataColumnSidecarKzgProofs setup sidecar commitments
 
 /-- At Fulu: whether the branch of a partial header, given as bytes, climbs to its body root. -/
@@ -118,7 +119,7 @@ def verifyDataColumnSidecarKzgProofsExport (name fork data block : ByteArray) : 
 def verifyPartialDataColumnHeaderInclusionProofExport (name fork data : ByteArray) :
     Result Bool := do
   let (preset, ⟨fork, _⟩) ← fuluPresetAndFork name fork
-  let header ← runSsz "input rejected"
+  let header ← toResult "input rejected"
     (SszType.deserialize (PartialDataColumnHeader preset fork) data)
   return verifyPartialDataColumnHeaderInclusionProof preset header
 
@@ -131,17 +132,19 @@ A sidecar or a list of commitments that does not decode has code 0. -/
 def verifyPartialDataColumnSidecarKzgProofsExport (name fork data commitments : ByteArray)
     (columnIndex : UInt64) : Result Bool := do
   let (preset, ⟨fork, _⟩) ← fuluPresetAndFork name fork
-  let sidecar ← (SszType.deserialize (PartialDataColumnSidecar preset fork) data).mapError
-    fun e => (0, s!"input rejected: {reprStr e}")
-  let commitments ← (SszType.deserialize (BlobKZGCommitments preset fork) commitments).mapError
-    fun e => (0, s!"commitments rejected: {reprStr e}")
+  let sidecar ← toResult none
+    ((SszType.deserialize (PartialDataColumnSidecar preset fork) data).mapError fun e =>
+      UnreadArgument.mk s!"input rejected: {reprStr e}")
+  let commitments ← toResult none
+    ((SszType.deserialize (BlobKZGCommitments preset fork) commitments).mapError fun e =>
+      UnreadArgument.mk s!"commitments rejected: {reprStr e}")
   runKzgWithSetup fun setup =>
     verifyPartialDataColumnSidecarKzgProofs setup sidecar commitments columnIndex
 
 /-- The SSZ bytes of each value of a list. -/
 def encodeEach {α : Type} [SszType α] (what : String) (values : List α) :
     Result (List ByteArray) :=
-  values.mapM fun value => runSsz s!"{what} rejected" (SszType.serialize value)
+  values.mapM fun value => toResult s!"{what} rejected" (SszType.serialize value)
 
 /-- The matrix of the blobs, as the SSZ bytes of each of its entries. -/
 def computeMatrixOf (blobs : List Blob) : Result (List ByteArray) := do
@@ -163,8 +166,8 @@ def recoverMatrixOf (args : List (Vector UInt8 MATRIX_ENTRY_BYTES) × UInt64) :
     Result (List ByteArray) := do
   let (entries, count) := args
   let entries ← entries.mapM fun entry =>
-    (SszType.deserialize MatrixEntry ⟨entry.toArray⟩).mapError
-      fun e => (0, s!"entry rejected: {reprStr e}")
+    toResult none ((SszType.deserialize MatrixEntry ⟨entry.toArray⟩).mapError fun e =>
+      UnreadArgument.mk s!"entry rejected: {reprStr e}")
   encodeEach "entry" (← runKzgWithSetup fun setup => recoverMatrix setup entries count)
 
 /-- The full matrix of a count of rows, from the SSZ bytes of some of its entries, in a list.
@@ -180,8 +183,8 @@ def checkRows (rows : List (Array Cell × Array KZGProof)) :
     Result (List (Array Cell × Array KZGProof)) := do
   for (cells, proofs) in rows do
     unless cells.size = CELLS_PER_EXT_BLOB ∧ proofs.size = CELLS_PER_EXT_BLOB do
-      throw (0, s!"a row holds {cells.size} cells and {proofs.size} proofs, \
-        not {CELLS_PER_EXT_BLOB} of each")
+      rejectArgument none s!"a row holds {cells.size} cells and {proofs.size} proofs, \
+        not {CELLS_PER_EXT_BLOB} of each"
   return rows
 
 /-- The column sidecars of a signed block, from its bytes and the rows of its blobs. -/
@@ -190,12 +193,12 @@ def getDataColumnSidecarsFromBlockOf
     Result (List ByteArray) := do
   let (name, fork, block, rows) := args
   let (preset, fork) ← columnPresetAndFork name.toUTF8 fork.toUTF8
-  let signed ← runSsz "input rejected"
+  let signed ← toResult "input rejected"
     (SszType.deserialize (SignedBeaconBlock preset fork) block)
   if deneb : .dencun ≤ fork then
-    encodeEach "sidecar" (← runSsz "sidecars rejected"
+    encodeEach "sidecar" (← toResult "sidecars rejected"
       (getDataColumnSidecarsFromBlock deneb signed (← checkRows rows)))
-  else throw (0, s!"no blobs at {fork.name}")
+  else rejectArgument none s!"no blobs at {fork.name}"
 
 /-- The column sidecars of a signed block, as the SSZ bytes of each, in a list.
 
@@ -210,7 +213,7 @@ def getDataColumnSidecarsFromColumnSidecarOf
     Result (List ByteArray) := do
   let (name, fork, sidecar, rows) := args
   let (preset, fork) ← columnPresetAndFork name.toUTF8 fork.toUTF8
-  encodeEach "sidecar" (← runSsz "sidecars rejected"
+  encodeEach "sidecar" (← toResult "sidecars rejected"
     (getDataColumnSidecarsFromColumnSidecar (← readSidecar preset fork sidecar) (← checkRows rows)))
 
 /-- All the column sidecars of a block, as the SSZ bytes of each, in a list.

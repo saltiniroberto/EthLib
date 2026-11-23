@@ -215,8 +215,8 @@ theorem bytesToG2_g2ToBytes {q : Point2} (hq : q.isOnCurve = true) :
     simp only [bytesToFp_natToBytes, hq, bind, Except.bind, pure, Except.pure, ↓reduceIte]
     split
     · rename_i hzero
-      exact absurd ⟨congrArg Fp2.c0 hzero.1, congrArg Fp2.c1 hzero.1,
-        congrArg Fp2.c0 hzero.2, congrArg Fp2.c1 hzero.2⟩ hnz
+      exact absurd ⟨congrArg Cryptography.Fp2.c0 hzero.1, congrArg Cryptography.Fp2.c1 hzero.1,
+        congrArg Cryptography.Fp2.c0 hzero.2, congrArg Cryptography.Fp2.c1 hzero.2⟩ hnz
     · rfl
 
 /-- The 192 bytes of a pair: its point of the curve, then its point of the twist. -/
@@ -246,7 +246,7 @@ private theorem bufferRead_of_le {bytes : List UInt8} {start size : Nat}
   · intro j hj _
     rw [bufferRead_length] at hj
     have hlt : start + j < bytes.length := by omega
-    simp [bufferRead, EthLib.Base.byteAt_eq_getD, Array.getD_eq_getD_getElem?,
+    simp [bufferRead_eq, EthLib.Base.byteAt_eq_getD, Array.getD_eq_getD_getElem?,
       List.getElem?_eq_getElem hlt]
 
 /-- Dropping `size * i` bytes from blocks of `size` bytes leaves the blocks from `i` on. -/
@@ -280,12 +280,12 @@ private theorem bufferRead_split (data : ByteArray) (start a b : Nat) :
     · rw [bufferRead_length, List.length_take_of_le (by rw [bufferRead_length]; omega)]
     · intro j hj _
       rw [bufferRead_length] at hj
-      simp [bufferRead]
+      simp [bufferRead_eq]
   · apply List.ext_getElem
     · rw [bufferRead_length, List.length_drop, bufferRead_length, Nat.add_sub_cancel_left]
     · intro j hj _
       rw [bufferRead_length] at hj
-      simp [bufferRead, Nat.add_assoc]
+      simp [bufferRead_eq, Nat.add_assoc]
 
 /-- The bytes of block `i` of the encoded pairs, read by ECPAIRING. -/
 private theorem bufferRead_encodePairs {pairs : List (Point × Point2)} {i : Nat}

@@ -12,7 +12,14 @@ public import EthLib.Cryptography.Xmss.Serialization
 
 C-ABI exports for leanXMSS, callable from the Python C extension.
 
-Only key generation, signing, verification and reading a signature's leaf index cross the boundary, with the sizes.
+Key generation, signing, verification and reading a signature's leaf index cross the boundary.
+
+So do the sizes and the two parameters of a codeword, as constants.
+
+Key generation also returns the secret key, which holds the built top tree, as an opaque object.
+
+The C side keeps it per seed, and signs with it.
+
 The scheme is a black box to callers: no hash, chain or tree is exported.
 -/
 
@@ -20,14 +27,15 @@ public section
 
 namespace EthLib.Cryptography.Xmss.Exports
 
-open EthLib.Exports (Result)
+open EthLib.Exports (Result ExportError toResult)
 
 open EthLib.Cryptography.Xmss
 open EthLib.Cryptography.Xmss.Constants
 
-/-- Run a fallible leanXMSS computation, with its error as a code and a message. -/
-def runXmss {α : Type} (act : Except XmssError α) : Result α :=
-  act.mapError fun e => (e.code, e.message)
+/-- An error reaches Python with its code and its own message. -/
+instance : ExportError XmssError where
+  code := XmssError.code
+  message := XmssError.message
 
 /-! ## Sizes
 
@@ -75,47 +83,63 @@ def constPubKeySize (_ : Unit) : UInt64 :=
 def constSigSize (_ : Unit) : UInt64 :=
   UInt64.ofNat SIG_SIZE
 
-/-! ## Operations -/
+/-! ## Codeword parameters
 
-/-- Read a fixed-size input, rejecting any other length with the given error. -/
-private def readExact (n : Nat) (bytes : ByteArray) (bad : Nat → XmssError) :
-    Except XmssError (Vector UInt8 n) :=
-  -- Too short or too long is refused: no padding, no truncation.
-  if h : bytes.size = n then .ok ⟨bytes.data, h⟩ else .error (bad bytes.size)
+A digit of a digest is below `CHAIN_LENGTH`, and a codeword's chain digits sum to `TARGET_SUM`.
+
+No operation takes either as an argument.
+
+The test-vector generators read them to build signatures whose digest is not a codeword. -/
+
+@[export eth_xmss_const_chain_length]
+def constChainLength (_ : Unit) : UInt64 :=
+  UInt64.ofNat CHAIN_LENGTH
+
+@[export eth_xmss_const_target_sum]
+def constTargetSum (_ : Unit) : UInt64 :=
+  UInt64.ofNat TARGET_SUM
+
+/-! ## Operations -/
 
 /-- The public key grown from a seed.
 
 It builds the whole top tree, `2^16` one-time keys. -/
 @[export eth_xmss_key_gen]
-def keyGenExport (seed : ByteArray) : Result ByteArray :=
-  runXmss do
-    let seed ← readExact SEED_LEN seed .badSeedSize
-    -- The secret half is dropped: the seed regrows it.
-    let (_, pk) := keyGen seed
-    return encodePublicKey pk
+def keyGenExport (seed : ByteArray) : Result (ByteArray × SecretKey) :=
+  toResult (ε := XmssError) none do
+    -- The length is the only check, and the 32 bytes are read as four lanes.
+    let _ ← Base.exactBytes SEED_LEN seed .badSeedSize
+    -- The C side keeps the secret key per seed, so a first signature reuses its top tree.
+    let (pk, sk) := keyGen (Hash.Keccak.Lanes4.read seed 0)
+    return (encodePublicKey pk, sk)
 
-/-- Sign a message at a leaf index with the key grown from a seed. -/
+/-- The updated key and the signature of a message at a leaf index, signed with a secret key.
+
+The C side keeps the key of each seed, and passes it back here to sign.
+
+It returns the updated key even when signing fails, so a tree that signing built is not lost.
+
+A message of the wrong length leaves the key as it is. -/
 @[export eth_xmss_sign]
-def signExport (seed : ByteArray) (leafIndex : LeafIndex) (msg : ByteArray) :
-    Result ByteArray :=
-  runXmss do
-    let seed ← readExact SEED_LEN seed .badSeedSize
-    let msg ← readExact MESSAGE_LEN msg .badMessageSize
-    -- Signing needs no public key, so the top tree's root is never computed here.
-    let sig ← sign ⟨seed⟩ leafIndex msg
-    return encodeSignature sig
+def signExport (sk : SecretKey) (leafIndex : LeafIndex) (msg : ByteArray) :
+    SecretKey × Result ByteArray :=
+  match Base.exactBytes (ε := XmssError) MESSAGE_LEN msg .badMessageSize with
+  | .error err => (sk, toResult none (.error err))
+  | .ok _ =>
+    let (sig, sk) := sign sk leafIndex (Hash.Keccak.Lanes4.read msg 0)
+    (sk, toResult none (encodeSignature <$> sig))
 
 /-- Whether a signature signs a message under a public key, as 1 or 0.
 
 The leaf index travels inside the signature. -/
 @[export eth_xmss_verify]
 def verifyExport (pk : ByteArray) (msg : ByteArray) (sig : ByteArray) : Result UInt8 :=
-  runXmss do
+  toResult none do
     -- Only the lengths are checked: every correctly sized string decodes.
     let pk ← decodePublicKey pk
-    let msg ← readExact MESSAGE_LEN msg .badMessageSize
+    let _ ← Base.exactBytes MESSAGE_LEN msg .badMessageSize
     let sig ← decodeSignature sig
-    return if verify pk msg sig then 1 else 0
+    return if verify pk (Hash.Keccak.Lanes4.read msg 0) sig then 1 else 0
 
 /-- The leaf index a signature carries.
 
@@ -124,6 +148,6 @@ It is returned as a `UInt64`, so the C side reads it as any other exported integ
 A `UInt32` always fits, so the conversion drops nothing. -/
 @[export eth_xmss_signature_index]
 def signatureIndexExport (sig : ByteArray) : Result UInt64 :=
-  runXmss ((signatureIndex sig).map UInt32.toUInt64)
+  toResult none ((signatureIndex sig).map UInt32.toUInt64)
 
 end EthLib.Cryptography.Xmss.Exports

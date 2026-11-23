@@ -49,17 +49,17 @@ From Gloas a block carries a bid, and its payload arrives later in an envelope.
 
 The block itself is then checked in full, and only its payload may be optimistic.
 
-The [optimistic sync guide] has no text for Gloas, so EthLib reads it there, a choice of its own.
+For Gloas, EthLib defines optimistic sync by its own choice, as follows.
 
 From Gloas a root of the optimistic set names a block whose payload is not yet judged.
 
-The gossip rules of Gloas key the status of a payload by the root of its block the same way.
+From Gloas the status of a payload is keyed by the root of its block, in gossip too.
 
 From Gloas the ancestors of a payload are the payloads that it builds on, not every ancestor block.
 
 A bid builds on the payload whose block hash it names as its parent block hash.
 
-The [fork choice of Gloas] reads a full parent by the same test.
+A full parent is read by the same test.
 
 A block whose payload a child skipped, by building on that block alone, is not one of them.
 
@@ -67,7 +67,9 @@ So a valid payload clears itself and only the payloads that it builds on.
 
 An invalid one clears itself and only the payloads that build on it.
 
-From Gloas the rule of the latest valid hash is not defined, so the caller names the first block.
+From Gloas the first invalid block is the block of the earliest invalid payload.
+
+The removal from the store of the fork choice finds it.
 
 From Gloas the latest verified ancestor of a node reads only the payloads that the node holds.
 
@@ -83,9 +85,9 @@ It happens too at an empty anchor of a store started from a checkpoint.
 
 From Gloas the status of a node is trusted: a full node must name a payload that the store holds.
 
-From Gloas the second case of an optimistic node is not yet specified here.
+From Gloas an invalid payload drops only the blocks built on it and their descendants.
 
-It needs the removal of an invalid payload from the store of the fork choice.
+The block of that payload stays, so its node without the payload can keep a branch viable.
 
 The store holds the blocks of one fork, so a payload chain never crosses into Fulu.
 
@@ -93,8 +95,6 @@ From Heze the node also records whether a payload satisfies the inclusion lists 
 
 A payload not yet validated counts as satisfying them, until the execution layer judges it.
 
-[optimistic sync guide]: https://github.com/ethereum/consensus-specs/blob/aa16bb4c156184e9548a997d53efaf2a228a6304/specs/bellatrix/optimistic-sync.md
-[fork choice of Gloas]: https://github.com/ethereum/consensus-specs/blob/aa16bb4c156184e9548a997d53efaf2a228a6304/specs/gloas/fork-choice.md#new-get_parent_payload_status
 -/
 
 @[expose] public section
@@ -107,7 +107,7 @@ variable {preset : Preset} {fork : Fork}
 
 /-- The optimistic blocks of a node, beside the blocks it imported, by root.
 
-The guide keeps the states of the blocks there too, which no rule here reads. -/
+No rule here reads the states of the blocks, so the store keeps none. -/
 structure OptimisticStore (preset : Preset) (fork : Fork) where
   /-- The roots of the blocks imported optimistically whose payload is not yet judged.
 
@@ -128,28 +128,32 @@ From Gloas a block carries a bid, and the answer is whether the bid names a nonz
 
 The zero block hash stands for the empty payload there, a choice of EthLib. -/
 def isExecutionBlock (block : BeaconBlock preset fork) : Bool :=
+  -- From Gloas, the bid names a block hash other than zero.
   if gloas : .glamsterdam ≤ fork then
     (block.body.signedExecutionPayloadBid gloas).message.blockHash != Vector.replicate 32 0
+  -- From Bellatrix to Fulu, the payload of the block is not the empty payload.
   else if range : .bellatrix ≤ fork then
     block.body.executionPayload ⟨range, Nat.lt_of_not_le gloas⟩ != .empty preset fork
+  -- Before Bellatrix, no block carries a payload.
   else false
 
 /-- From Bellatrix: whether a block may be imported optimistically at a slot of the clock.
 
-Its parent must be known.
+The count of safe slots is `SAFE_SLOTS_TO_IMPORT_OPTIMISTICALLY` unless the user sets another.
 
-The parent carries a payload, or the slot of the block plus a count is at most the clock's slot.
+It fails when the parent is not known.
 
-The count is `SAFE_SLOTS_TO_IMPORT_OPTIMISTICALLY` unless the user sets another.
+It also fails when the slot of the block plus that count overflows 64 bits.
 
-It fails when the parent is not known, and when the slot plus the count overflows 64 bits.
-
-The sum is computed only when the parent carries no payload. -/
+That sum is computed only when the parent carries no payload. -/
 def OptimisticStore.isOptimisticCandidateBlock (store : OptimisticStore preset fork)
     (currentSlot : Slot) (block : BeaconBlock preset fork)
     (safeSlots : Slot := SAFE_SLOTS_TO_IMPORT_OPTIMISTICALLY) : Except ForkChoiceError Bool := do
+  -- The parent of the block is known.
   let some parent := store.blocks[block.parentRoot]? | throw (.unknownBlock block.parentRoot)
+  -- A parent that carries a payload makes the block a candidate.
   if isExecutionBlock parent then return true
+  -- Else `s + k` is at most the slot of the clock, for the slot `s` of the block and the count `k`.
   let enough ← (Uint64.addChecked block.slot safeSlots).mapError .arith
   return enough ≤ currentSlot
 
@@ -159,6 +163,7 @@ variable (store : OptimisticStore preset fork)
 
 /-- Whether a block, by its root, is optimistic. -/
 def isOptimistic (root : Root) : Bool :=
+  -- The root is among the optimistic roots.
   store.optimisticRoots.contains root
 
 /-- The roots of a known block and of its known ancestors, from the block up.
@@ -171,8 +176,10 @@ def chain (root : Root) : Except ForkChoiceError (List Root) :=
   | none => throw (.unknownBlock root)
   | some block =>
     match _parentFound : store.blocks[block.parentRoot]? with
+    -- An unknown parent ends the chain at the block.
     | none => pure [root]
     | some parent =>
+      -- Else the block, then the chain of its parent, whose slot is lower.
       if _lower : parent.slot < block.slot then
         return root :: (← chain block.parentRoot)
       else throw (.parentSlotNotLower root)
@@ -183,6 +190,7 @@ decreasing_by
 
 /-- From Gloas: whether a root names a known block whose bid names a block hash. -/
 def namesBlockHash (gloas : .glamsterdam ≤ fork) (hash : Hash32) (root : Root) : Bool :=
+  -- The block is known and the block hash of its bid is the hash.
   (store.blocks[root]?).any fun block =>
     (block.body.signedExecutionPayloadBid gloas).message.blockHash == hash
 
@@ -203,8 +211,12 @@ def payloadsOnChain (gloas : .glamsterdam ≤ fork) (expected : Option Hash32) :
     | none => payloadsOnChain gloas expected rest
     | some block =>
       let bid := (block.body.signedExecutionPayloadBid gloas).message
+      -- A root whose bid names the expected hash, or any at the start, is kept.
+      --
+      -- The chain then expects the parent block hash of that bid.
       if expected.all (· == bid.blockHash) then
         root :: payloadsOnChain gloas (some bid.parentBlockHash) rest
+      -- A root whose bid names another hash is skipped.
       else payloadsOnChain gloas expected rest
 
 /-- The roots of a known block and of the known blocks whose payloads its payload builds on.
@@ -217,6 +229,7 @@ From Gloas it keeps the blocks of the chain that the bids link by their block ha
 
 It fails as the chain of the block does. -/
 def payloadChain (root : Root) : Except ForkChoiceError (List Root) := do
+  -- The chain of the block, filtered from Gloas by the block hashes that the bids link.
   let roots ← store.chain root
   if gloas : .glamsterdam ≤ fork then return store.payloadsOnChain gloas none roots
   else return roots
@@ -231,6 +244,7 @@ It also fails when the chain has no second root, since the store then lacks that
 
 That happens at the first block of Gloas, which builds on a payload of Fulu. -/
 def buildsOnOptimistic (root : Root) : Except ForkChoiceError Bool := do
+  -- The second root of the payload chain is optimistic.
   let some parent := (← store.payloadChain root)[1]? | throw (.payloadNotVerified root)
   return store.isOptimistic parent
 
@@ -252,11 +266,15 @@ A pending head fails that way only when the payload of its block is not optimist
 def isHeadOptimistic : Except ForkChoiceError Bool :=
   if .glamsterdam ≤ fork then
     match store.head.payloadStatus with
+    -- A full head reads the payload of its block.
     | .full => return store.isOptimistic store.head.root
+    -- An empty head reads the payload that its block builds on.
     | .empty => store.buildsOnOptimistic store.head.root
+    -- A pending head reads the payload of its block, then the one it builds on.
     | .pending =>
       if store.isOptimistic store.head.root then return true
       else store.buildsOnOptimistic store.head.root
+  -- Before Gloas, whether the head block is optimistic.
   else return store.isOptimistic store.head.root
 
 /-- Two known blocks, by root, where the bid of the first builds on the payload of the second.
@@ -273,7 +291,7 @@ def PayloadLink (child parent : Root) : Prop :=
 
 /-- Before Gloas: the latest block of the chain of a known block that is not optimistic, by root.
 
-The guide assumes that the execution layer never found the block itself invalid.
+It assumes that the execution layer never found the block itself invalid.
 
 The walk follows parent roots, and also stops at the genesis block, whose parent root is zero.
 
@@ -284,7 +302,9 @@ def latestVerifiedBlock (root : Root) : Except ForkChoiceError Root :=
   match _found : store.blocks[root]? with
   | none => throw (.unknownBlock root)
   | some block =>
+    -- A block that is not optimistic, or the genesis block with a zero parent root, ends the walk.
     if !store.isOptimistic root || block.parentRoot == Vector.replicate 32 0 then pure root
+    -- Else the walk climbs to the parent, which is known and at a lower slot.
     else
       match _parentFound : store.blocks[block.parentRoot]? with
       | none => throw (.unknownBlock block.parentRoot)
@@ -303,6 +323,7 @@ A full node holds the payload of its block, so all of them; the caller vouches f
 An empty or pending node holds only the payloads that its block builds on: all but the first. -/
 def _root_.EthLib.Consensus.ForkChoiceNode.heldPayloads (node : ForkChoiceNode)
     (roots : List Root) : List Root :=
+  -- A full node holds every root of the chain, and any other node all but the first.
   if node.payloadStatus = .full then roots else roots.tail
 
 /-- The latest block of the chain of a node whose payload is not optimistic, by root.
@@ -324,10 +345,13 @@ The error then names the last root of those payloads, or the block of the node.
 It also fails as the payload chain of the block does. -/
 def latestVerifiedAncestor (node : ForkChoiceNode) : Except ForkChoiceError Root :=
   if .glamsterdam ≤ fork then do
+    -- From Gloas, the payloads that the node holds, from the block up.
     let held := node.heldPayloads (← store.payloadChain node.root)
+    -- The first of them that is not optimistic.
     let some ancestor := held.find? (!store.isOptimistic ·)
       | throw (.payloadNotVerified (held.getLastD node.root))
     return ancestor
+  -- Before Gloas, the walk of the chain of the block.
   else store.latestVerifiedBlock node.root
 
 /-- The optimistic roots after the payload of a known block is found valid.
@@ -342,6 +366,7 @@ Before Gloas those are all its known ancestors.
 
 It fails as the chain of the block does. -/
 def onValidPayload (root : Root) : Except ForkChoiceError (OptimisticStore preset fork) := do
+  -- The roots of the payload chain of the block leave the set, and every other root stays.
   let ancestors ← store.payloadChain root
   return { store with
     optimisticRoots := store.optimisticRoots.filter fun optimistic =>
@@ -355,12 +380,15 @@ It leaves the set, with each known descendant whose payload chain holds it.
 
 Before Gloas those are all its known descendants.
 
-From Gloas the rule of the latest valid hash is not defined, and the caller names the block.
+From Gloas it is the block of the earliest invalid payload.
+
+The removal from the store of the fork choice finds it.
 
 Every other root stays.
 
 It fails when an optimistic root is not a known block, or as the chain of one fails. -/
 def onInvalidatedPayload (first : Root) : Except ForkChoiceError (OptimisticStore preset fork) := do
+  -- An optimistic root stays unless its payload chain holds the first invalid block.
   let kept ← store.optimisticRoots.filterMapM fun optimistic => do
     return if (← store.payloadChain optimistic).contains first then none else some optimistic
   return { store with optimisticRoots := kept }
@@ -379,8 +407,10 @@ Otherwise it holds when no leaf above the justified block agrees with the checkp
 
 It fails as the filter of the tree does. -/
 def hasNoViableBranch : Except ForkChoiceError Bool :=
+  -- With the justified block in the store, the filtered tree is empty.
   if store.blocks.contains store.justifiedCheckpoint.root then
     return (← store.getFilteredNodeTree config).isEmpty
+  -- Without it, no branch counts as viable, a choice of EthLib.
   else pure true
 
 /-- From Heze: the store once the payload of a block moves from not validated to valid.
@@ -396,8 +426,10 @@ The store does not keep the status of a payload, so the caller must check that i
 It fails when the store keeps no payload for the block. -/
 def recordValidatedInclusionListSatisfaction (heze : .hegota ≤ fork) (root : Root)
     (satisfied : Bool) : Except ForkChoiceError (Store preset fork) := do
+  -- The store keeps the payload of the block.
   unless store.isPayloadVerified (Nat.le_trans (by decide) heze) root do
     throw (.payloadNotVerified root)
+  -- The answer is recorded for that block only.
   let satisfaction := (store.payloadInclusionListSatisfaction heze).insert root satisfied
   return { store with payloadInclusionListSatisfaction := fun _ => satisfaction }
 
@@ -416,8 +448,10 @@ A valid payload keeps the sources as they are.
 Any other status counts as invalidated, a choice of EthLib. -/
 def BlockSources.withPayloadStatus (sources : BlockSources preset fork)
     (status : PayloadValidationStatus) : BlockSources preset fork :=
+  -- A valid payload keeps the sources.
   if status = PAYLOAD_STATUS_VALID then sources
   else
+    -- A payload not yet validated is accepted, and any other status is not.
     let accepted := decide (status = PAYLOAD_STATUS_NOT_VALIDATED)
     { sources with engine := .constant accepted, inclusionListSatisfied := fun _ _ => accepted }
 
@@ -433,7 +467,9 @@ It fails when the payload is not optimistic, and as each of the two updates does
 def OptimisticStore.onValidatedPayload (optimistic : OptimisticStore preset fork)
     (store : Store preset fork) (heze : .hegota ≤ fork) (root : Root) (satisfied : Bool) :
     Except ForkChoiceError (OptimisticStore preset fork × Store preset fork) := do
+  -- The payload is optimistic.
   unless optimistic.isOptimistic root do throw (.payloadNotOptimistic root)
+  -- The store of the fork choice records the answer, and the payload chain leaves the set.
   let recorded ← store.recordValidatedInclusionListSatisfaction heze root satisfied
   return (← optimistic.onValidPayload root, recorded)
 
@@ -444,6 +480,7 @@ The optimistic store keeps the blocks that the fork choice drops for an invalid 
 It fails as the chain of such a block does. -/
 def OptimisticStore.invalidatedAbove (optimistic : OptimisticStore preset fork)
     (store : Store preset fork) : Except ForkChoiceError Bool :=
+  -- Some block that the fork choice dropped has the justified block on its chain.
   optimistic.blocks.keys.anyM fun root => do
     if store.blocks.contains root then return false
     return (← optimistic.chain root).contains store.justifiedCheckpoint.root
@@ -460,17 +497,20 @@ The optimistic store must hold only blocks that the fork choice accepted, so dro
 
 So a tree that empties with nothing invalidated, as in a long stall, does not count.
 
-The guide asks that every viable branch was invalidated, which needs history the store drops.
+A rule that every viable branch was invalidated would need history that the store drops.
 
 This rule approximates it: one invalidated block above the justified block is enough.
 
-From Gloas the second case is not yet specified, and the rule fails when the head is not optimistic.
+From Gloas a dropped block is one built on an invalid payload, or a descendant of one.
 
-It also fails as the optimism of the head does. -/
+A block whose own payload is invalid stays, so its node without the payload can stay viable.
+
+It fails as the optimism of the head, the chains of the dropped blocks or the filter does. -/
 def isOptimisticNode (config : Config) (optimistic : OptimisticStore preset fork)
     (store : Store preset fork) : Except ForkChoiceError Bool := do
+  -- The head is optimistic.
   if ← optimistic.isHeadOptimistic then return true
-  if .glamsterdam ≤ fork then throw (.forkNotYetSpecified fork)
+  -- Else a dropped block sits at or above the justified block, and no viable branch is left.
   if !(← optimistic.invalidatedAbove store) then return false
   store.hasNoViableBranch config
 
@@ -478,6 +518,7 @@ def isOptimisticNode (config : Config) (optimistic : OptimisticStore preset fork
 
 These are the domains of a block, of an attestation and its aggregation, and of a sync committee. -/
 def isOptimisticRestrictedDomain (domainType : DomainType) : Bool :=
+  -- The seven domains of proposal, attestation, aggregation and sync committee signing.
   [DOMAIN_BEACON_PROPOSER, DOMAIN_BEACON_ATTESTER, DOMAIN_SELECTION_PROOF,
     DOMAIN_AGGREGATE_AND_PROOF, DOMAIN_SYNC_COMMITTEE, DOMAIN_SYNC_COMMITTEE_SELECTION_PROOF,
     DOMAIN_CONTRIBUTION_AND_PROOF].contains domainType

@@ -47,6 +47,9 @@ Block 2675119 of the main network deleted that empty account after a call to it 
 The rule keeps that history, and applies when the child touched 0x03 or was a call to it. -/
 def touchedOnError (fork : Fork) (caller child : Evm fork Meter) : Std.ExtTreeSet Address :=
   let touched := caller.substate.touchedAccounts
+  -- 0x03 stays touched when the child touched it.
+  --
+  -- It also stays touched when the child was a call to it and its account exists and is empty.
   if fork ≥ .spuriousDragon ∧ fork < .paris ∧
       (RIPEMD160_ADDRESS ∈ child.substate.touchedAccounts ∨
         (child.message.currentTarget = RIPEMD160_ADDRESS ∧
@@ -60,7 +63,9 @@ From Spurious Dragon to Paris, they gain those of the child, and its target when
 def touchedOnSuccess (fork : Fork) (caller child : Evm fork Meter) : Std.ExtTreeSet Address :=
   let touched := caller.substate.touchedAccounts
   if fork ≥ .spuriousDragon ∧ fork < .paris then
+    -- The touched accounts of the child join those of the caller.
     let touched := touched.insertMany child.substate.touchedAccounts.toList
+    -- The target of the child is touched when its account exists and is empty.
     if child.state.accountExistsAndIsEmpty child.message.currentTarget then
       touched.insert child.message.currentTarget
     else touched
@@ -74,17 +79,26 @@ A child that succeeds also passes on its logs, its refund, its accounts to delet
 
 A child that fails passes on none of them. -/
 def incorporateChild (fork : Fork) (caller child : Evm fork Meter) : Evm fork Meter :=
+  -- The caller gets back the gas left of the child, and its reservoir from Glamsterdam (EIP-8037).
   let gas := GasMeter.absorb caller.gas child.gas child.error.isNone
   if child.error.isNone then
     { caller with
       gas
       state := child.state
       substate := {
+        -- The accounts to delete of the child join those of the caller.
         accountsToDelete :=
           caller.substate.accountsToDelete.insertMany child.substate.accountsToDelete.toList
+        -- The logs of the child follow those of the caller.
         logs := caller.substate.logs ++ child.substate.logs
+        -- No fork defines the logs that a simulation reports; the child's follow the caller's.
+        simulatedLogs := caller.substate.simulatedLogs ++ child.substate.simulatedLogs
         touchedAccounts := touchedOnSuccess fork caller child
+        -- The refund counter of the child adds to that of the caller.
         refundCounter := caller.substate.refundCounter + child.substate.refundCounter
+        -- From Berlin, the accessed addresses and storage keys of the child join the caller's.
+        --
+        -- The child started from the caller's sets, so its sets hold both.
         accessedAddresses := child.substate.accessedAddresses
         accessedStorageKeys := child.substate.accessedStorageKeys } }
   else

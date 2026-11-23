@@ -82,6 +82,9 @@ def init (block : BlockState) : AccessListBuilder := ⟨0, block, ∅⟩
 /-- Begin the position `index`, from the block state `block` that holds before it. -/
 def beginIndex (b : AccessListBuilder) (index : UInt32) (block : BlockState) :
     AccessListBuilder :=
+  -- EIP-7928 compares each write with the value just before the current index.
+  --
+  -- So the position keeps the state before it.
   { b with index, start := block }
 
 /-- The account at an address when the current position began, or the empty account. -/
@@ -122,18 +125,22 @@ def dropSlotChange (changes : Std.ExtTreeMap Bytes32 (Std.ExtTreeMap UInt32 U256
     let values := values.erase index
     if values.isEmpty then changes.erase key else changes.insert key values
 
-/-- Record a write of `value` at a key of the storage of an address.
-
-It is a change when the slot held another value when the position began.
-
-Otherwise the key counts as read, as EIP-7928 counts a write that changes nothing. -/
+/-- Record a write of `value` at a key of the storage of an address. -/
 def recordStorageWrite (b : AccessListBuilder) (address : Address) (key : Bytes32)
     (value : U256) : AccessListBuilder :=
+  -- A write is any change of value: the value after differs from the value before.
+  --
+  -- The pre-value is the value of the slot at the start of the position.
   if b.startStorage address key ≠ value then
     b.record address fun r =>
       { r with
         storageChanges := r.storageChanges.insert key
           ((r.storageChanges.getD key ∅).insert b.index value) }
+  -- A slot written with an unchanged value is a read.
+  --
+  -- A change that an earlier call recorded at this position is dropped, since the two cancel.
+  --
+  -- A write without a change must not remove the storage changes of earlier indices.
   else
     b.record address fun r =>
       { r with
@@ -144,40 +151,46 @@ def recordStorageWrite (b : AccessListBuilder) (address : Address) (key : Bytes3
 
 None stands for a deleted account, which has the fields of the empty account.
 
-The account joins the list, even when none of its fields changed.
-
-Its balance, nonce and code are each a change when they differ from the start of the position.
-
 The new code comes from the transaction `tx`. -/
 def recordAccountWrite (b : AccessListBuilder) (tx : TransactionState) (address : Address)
     (written : Option Account) : Except StateError AccessListBuilder := do
+  -- Each written account was accessed.
+  --
+  -- An address with no change of state must still be present, with empty lists of changes.
   let b := b.record address id
   let before := b.startAccount address
   let after := written.getD EMPTY_ACCOUNT
+  -- A balance equal to the balance before the transaction is not recorded as a change.
   let b := b.setField address (before.balance ≠ after.balance) after.balance
     (·.balanceChanges) fun r m => { r with balanceChanges := m }
+  -- Record the nonce after the transaction, when the nonce changed.
   let b := b.setField address (before.nonce ≠ after.nonce) after.nonce
     (·.nonceChanges) fun r m => { r with nonceChanges := m }
+  -- Record the runtime code after the transaction, for each deployed or modified contract.
+  --
+  -- The same rule records the delegation indicator of each successful delegation.
   let codeChanged := before.codeHash ≠ after.codeHash
   let code ← if codeChanged then tx.getCode after.codeHash else pure .empty
   return b.setField address codeChanged code (·.codeChanges) fun r m => { r with codeChanges := m }
 
 /-- Record what a transaction or a system call `tx` did, at the current position.
 
-The call has ended, and its writes have not yet joined the block.
-
-Each account it read joins the list, and each storage key it read counts as read.
-
-Each of its writes is compared with the start of the position. -/
+The call has ended, and its writes have not yet joined the block. -/
 def recordTransaction (b : AccessListBuilder) (tx : TransactionState) :
     Except StateError AccessListBuilder := do
+  -- Each account the call accessed joins the list, with empty changes if nothing else.
   let b := tx.accountReads.foldl (fun b address => b.record address id) b
+  -- A slot that `SLOAD` accessed and that is not written is a read.
+  --
+  -- A key that is also written with a change leaves the reads when the list is built.
   let b := tx.storageReads.foldl
     (fun b address keys => b.record address fun r =>
       { r with storageReads := r.storageReads.insertMany keys.toList })
     b
+  -- Each written account, compared with the state at the start of the position.
   let b ← tx.accountWrites.foldlM (fun b address written => b.recordAccountWrite tx address written)
     b
+  -- Each written slot, compared with the state at the start of the position.
   return tx.storageWrites.foldl
     (fun b address slots =>
       slots.foldl (fun b key value => b.recordStorageWrite address key value) b)
@@ -187,27 +200,34 @@ end AccessListBuilder
 
 /-- The entry of an account in the list, from its record.
 
-Each list is sorted: the slots and the read keys by value, and the changes by position.
-
 A read key that is also written is left out of the reads.
 
-A nonce is below 2^64 by EIP-2681, so it fits its field. -/
+EIP-2681 bounds a nonce by 2^64 - 1, so it fits its field.
+
+A block that passes its transition keeps that bound when the state before it meets it. -/
 def AccountRecord.toChanges (address : Address) (r : AccountRecord) : AccountChanges :=
+  -- The changes of each slot hold at least one change.
   let slots := (r.storageChanges.toList.filter fun (_, values) => !values.isEmpty).map
     fun (key, values) =>
       ({ slot := U256.fromBeBytes key
          changes := values.toList.map fun (index, value) => ⟨index, value⟩ } : SlotChanges)
+  -- A storage key never appears both among the storage changes and among the storage reads.
   let reads := (r.storageReads.toList.filter fun key => (r.storageChanges.getD key ∅).isEmpty).map
     U256.fromBeBytes
   { address
+    -- The storage changes, by ascending storage key.
     storageChanges := slots.mergeSort fun s t => s.slot.toNat ≤ t.slot.toNat
+    -- The storage reads, by ascending storage key.
     storageReads := reads.mergeSort fun s t => s.toNat ≤ t.toNat
+    -- The other changes, by ascending block access index, the order of the keys of a tree map.
     balanceChanges := r.balanceChanges.toList.map fun (index, balance) => ⟨index, balance⟩
+    -- From a state that meets EIP-2681, no nonce wraps in this conversion to 64 bits.
     nonceChanges := r.nonceChanges.toList.map fun (index, nonce) => ⟨index, UInt64.ofNat nonce⟩
     codeChanges := r.codeChanges.toList.map fun (index, code) => ⟨index, code⟩ }
 
 /-- The block access list of the builder, with its accounts sorted by address. -/
 def AccessListBuilder.build (b : AccessListBuilder) : BlockAccessList :=
+  -- The accounts, in lexicographic order of address.
   (b.accounts.toList.map fun (address, r) => r.toChanges address).mergeSort
     fun x y => BlockAccessList.addressKey x.address ≤ BlockAccessList.addressKey y.address
 

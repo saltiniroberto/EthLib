@@ -20,7 +20,7 @@ pytestmark = pytest.mark.archive
 @pytest.mark.parametrize(
     "case",
     [case for cases in CASES.values() for case in harness.in_shard(cases)],
-    ids=lambda case: f"{case.suite}:{case.id}",
+    ids=lambda case: harness.case_id(case.suite, case.id, case.group),
 )
 def test_case(case, request, record_property) -> None:
     harness.run(ROOTS[case.suite], case, DISAGREEMENTS[case.suite], request, record_property)
@@ -42,6 +42,13 @@ def test_every_network_is_placed(suite) -> None:
     timeline = catalogue.EXECUTION_FORKS + catalogue.BOGOTA_NETWORKS
     networks = {entry["fork"] for entry in catalogue.execution_index(catalogue.DEVNETS[suite])}
     assert sorted(networks - set(timeline)) == []
+
+
+@pytest.mark.parametrize("suite", catalogue.DEVNETS)
+def test_every_format_is_placed(suite) -> None:
+    # A format that is neither run, planned nor left out is new upstream.
+    index = catalogue.execution_index(catalogue.DEVNETS[suite])
+    assert harness.unplaced_formats(index) == []
 
 
 @pytest.mark.parametrize("suite", catalogue.DEVNETS)

@@ -6,35 +6,15 @@ public import EthLib.Engine.ForkchoiceUpdated
 /-!
 # `Exports.ForkchoiceUpdated`
 
-The C export of `engine_forkchoiceUpdated`, versions 1 to 4.
+The C export of `engine_forkchoiceUpdated`, versions 1 to 5.
 
 The configuration, the payload tree, the finalized block and the request cross as Python values.
 
 Each is the value of its JSON.
 
-The configuration is an object as for `engine_newPayload`.
-
-It holds the chain ID, the deposit contract address and the activations.
-
-The tree is a list of objects, each with a block hash, a parent hash and a validity flag.
-
-Each also has the number and the timestamp of its block, as quantities.
-
-No two of them have the same block hash.
-
-The finalized block that the execution layer knows is a block hash, or `null` for none.
-
-The request is a JSON-RPC request object, with its method and its parameters.
-
 The result is the value of the JSON of the response: the payload status and the payload ID.
 
-A JSON-RPC error has the code of its Engine API error: 32602, 38002, 38003 or 38005.
-
-Payload attributes on an applied valid head that pass every check start a build.
-
-The payload ID is then the ID of that build, from the head and the attributes, and else `null`.
-
-An unknown method and an argument that Lean cannot read have code 0.
+An argument that Lean cannot read has code 0.
 -/
 
 public section
@@ -42,58 +22,136 @@ public section
 namespace EthLib.Engine.Exports
 
 open Lean (Json)
-open EthLib.Exports (Result PyValue pyExport)
+open EthLib.Exports (Result PyValue UnreadArgument pyExport rejectArgument toResult)
 open EthLib.Base
 open EthLib.Base.ChainConfig.Exports (configOfJson)
+open EthLib.Serialization.JsonRpc (dataJson fixed uint)
 
-/-- One payload of the tree: its block hash, parent hash, validity, number and timestamp. -/
+/-- One block of the tree: its block hash, parent hash, validity, number and timestamp.
+
+A block of proof of work also has its total difficulty and that of its parent. -/
 def knownOfJson (j : Json) : Result (Hash32 × KnownPayload) := do
-  let some valid := (j.getObjValAs? Bool "valid").toOption | throw (0, "tree: no validity")
+  -- The validity flag is a boolean.
+  let some valid := (j.getObjValAs? Bool "valid").toOption
+    | rejectArgument none "tree: no validity"
+  -- The tree is an input that the export reads itself, so its errors have code 0.
+  let unread (e : String) : UnreadArgument :=
+    ⟨s!"tree: {reprStr (EngineError.invalidParams e)}"⟩
   let hash (name : String) : Result Hash32 :=
-    (Json.fixed name 32 (j.getObjValD name)).mapError fun e => (0, s!"tree: {reprStr e}")
-  let number (name : String) : Result UInt64 :=
-    (Json.uint64 name (j.getObjValD name)).mapError fun e => (0, s!"tree: {reprStr e}")
+    toResult none ((fixed name 32 (j.getObjValD name)).mapError unread)
+  -- The number and the timestamp of the block are quantities.
+  let number (name : String) : Result Nat :=
+    toResult none ((uint name (j.getObjValD name)).mapError unread)
+  let total (name : String) (v : Json) : Result Nat :=
+    toResult none ((uint name v).mapError unread)
+  -- A block of proof of work also has its total difficulty and that of its parent, as quantities.
+  --
+  -- They are both present or both absent.
+  --
+  -- Give no totals for a genesis block of a chain that starts at Paris.
+  --
+  -- The model then treats it as a payload, so its descendants pass the terminal block check.
+  let pow ← match (j.getObjVal? "totalDifficulty").toOption,
+      (j.getObjVal? "parentTotalDifficulty").toOption with
+    | some t, some p => pure (some (← total "totalDifficulty" t, ← total "parentTotalDifficulty" p))
+    | none, none => pure none
+    | _, _ => rejectArgument none "tree: one total difficulty without the other"
   return (← hash "blockHash",
-    ⟨← hash "parentHash", valid, ← number "number", ← number "timestamp"⟩)
+    ⟨← hash "parentHash", valid, ← number "number", ← number "timestamp", pow⟩)
 
-/-- The version of a method name `engine_forkchoiceUpdatedV1` to `engine_forkchoiceUpdatedV4`. -/
+/-- The version of a method name `engine_forkchoiceUpdatedV1` to `engine_forkchoiceUpdatedV5`. -/
 def forkchoiceUpdatedVersion (method : String) : Option Nat :=
-  ["engine_forkchoiceUpdatedV1", "engine_forkchoiceUpdatedV2",
-    "engine_forkchoiceUpdatedV3", "engine_forkchoiceUpdatedV4"].idxOf? method |>.map (· + 1)
+  methodVersion "forkchoiceUpdated" method
 
-/-- The response to an `engine_forkchoiceUpdated` request, against a tree of payloads.
+/-- The response to an `engine_forkchoiceUpdated` request, against a tree of known blocks.
 
-The execution layer may know a finalized block, from an earlier update. -/
-def forkchoiceUpdatedOf (args : PyValue × PyValue × PyValue × PyValue) : Result PyValue := do
-  let (config, tree, finalized, request) := args
+The execution layer may know a finalized block, from an earlier update.
+
+The terminal block hash and number are zero, since the check of the method does not read them. -/
+def forkchoiceUpdatedOf (args : PyValue × PyValue × PyValue × Nat × PyValue) :
+    Result PyValue := do
+  let (config, tree, finalized, terminalTotalDifficulty, request) := args
+  -- The terminal total difficulty is a Python integer below `2^256`.
+  unless terminalTotalDifficulty < 2 ^ 256 do
+    rejectArgument none
+      s!"config: a terminal total difficulty of {terminalTotalDifficulty}, not below 2^256"
+  let transition : TransitionConfiguration := {
+    terminalTotalDifficulty := BitVec.ofNat 256 terminalTotalDifficulty
+    terminalBlockHash := 0
+    terminalBlockNumber := 0 }
+  -- The configuration is an object as for `engine_newPayload`.
+  --
+  -- It holds the chain ID, the deposit contract address and the activations.
   let config ← configOfJson config.toJson
-  let .arr tree := tree.toJson | throw (0, "tree: not an array")
-  let tree ← tree.toList.mapM knownOfJson
+  -- The tree is a list of objects, one per block.
+  let .arr entries := tree.toJson | rejectArgument none "tree: not an array"
+  let tree ← entries.toList.mapM knownOfJson
   -- A tree holds each block once, so two payloads with one block hash are malformed input.
-  unless (tree.map (·.1)).Nodup do throw (0, "tree: two payloads with one block hash")
+  unless (tree.map (·.1)).Nodup do rejectArgument none "tree: two payloads with one block hash"
+  -- The finalized block that the execution layer knows is a block hash, or `null` for none.
   let finalized := finalized.toJson
   -- The known finalized block is an input that the export reads itself, so its errors have code 0.
   let finalized : Option Hash32 ← if finalized.isNull then pure none else
-    some <$> (Json.fixed "finalized" 32 finalized).mapError fun e => (0, s!"finalized: {reprStr e}")
+    some <$> toResult none ((fixed "finalized" 32 finalized).mapError fun e =>
+      UnreadArgument.mk s!"finalized: {reprStr (EngineError.invalidParams e)}")
+  -- The request is a JSON-RPC request object, with its method and its parameters.
   let request := request.toJson
   let some method := (request.getObjValAs? String "method").toOption
-    | throw (0, "request: no method")
-  let some version := forkchoiceUpdatedVersion method | throw (0, s!"no method {method}")
-  let answer := forkchoiceUpdatedCall config version tree finalized (request.getObjValD "params")
-  let (status, head, attributes) ←
-    answer.mapError fun e => (e.code, s!"engine error: {reprStr e}")
+    | rejectArgument none "request: no method"
+  -- An unknown method has code 0.
+  let some version := forkchoiceUpdatedVersion method
+    | rejectArgument none s!"no method {method}"
+  let params := request.getObjValD "params"
+  let answer := forkchoiceUpdatedCall config transition version tree finalized params
+  -- A JSON-RPC error has the code of its Engine API error: 32602, 38002, 38003 or 38005.
+  let result ← toResult "engine error" answer
   -- Step 8: valid attributes on an applied valid head start a build, named by its ID.
-  let id := match head, attributes with
-    | some h, some a => Engine.Json.dataJson (payloadId h a.2).toList
-    | _, _ => .null
-  let response := Json.mkObj [
-    ("payloadStatus", statusJson status none),
-    ("payloadId", id)]
-  return .ofJson response
+  --
+  -- The payload ID is that of the build, from the head and the attributes, and else `null`.
+  let (status, id) := forkchoiceUpdatedResponse result
+  if version < 5 then return .ofJson (forkchoiceUpdatedResponseJson status none id)
+  -- Step 2 of version 5: a valid head carries its inclusion list verdict, read from the tree.
+  --
+  -- That verdict is the boolean `inclusionListSatisfied`, which a valid head must give.
+  --
+  -- The verdict is an input, since the execution rules of Bogota are not in this library yet.
+  --
+  -- From version 5 the payload status has version 2, with the verdict of the head or `null`.
+  let satisfied ← if status.status = .valid then do
+      let head := (forkchoiceUpdatedParams version params).toOption.map (·.1.headBlockHash)
+      let entry := (entries.toList.zip tree).find? fun (_, (hash, _)) => some hash = head
+      let some verdict :=
+          entry.bind fun (j, _) => (j.getObjValAs? Bool "inclusionListSatisfied").toOption
+        | rejectArgument none "tree: no inclusion list verdict for the valid head"
+      pure verdict
+    else pure false
+  return .ofJson (forkchoiceUpdatedResponseV2Json status none
+    (inclusionListVerdict status satisfied) id)
 
-/-- The response to an `engine_forkchoiceUpdated` request, against a tree of payloads.
+/-- A forkchoice response read from its JSON: the status name, the hash, the error, the ID.
 
-The arguments are the configuration, the tree, the known finalized block and the request. -/
+The hash, the error and the ID are `None` in Python when the JSON has no value for them. -/
+def readForkchoiceResponseOf (response : PyValue) :
+    Result (String × Option ByteArray × Option String × Option ByteArray) := do
+  let (s, e, id) ← toResult "engine error" (forkchoiceUpdatedResponseOfJson response.toJson)
+  return (s.status.name, s.latestValidHash.map (⟨·.toArray⟩), e, id.map (⟨·.toArray⟩))
+
+/-- A forkchoice response read from its JSON, as `json.loads` gives it.
+
+The result is the status name, the latest valid hash, the validation error and the payload ID.
+
+A response that does not decode is an invalid parameter, with code 32602. -/
+@[export eth_engine_read_forkchoice_response]
+def readForkchoiceResponseExport (args : PyValue) : Result PyValue :=
+  pyExport readForkchoiceResponseOf args
+
+/-- The response to an `engine_forkchoiceUpdated` request, against a tree of known blocks.
+
+The arguments are the configuration, the tree and the known finalized block.
+
+The terminal total difficulty and the request follow.
+
+The terminal total difficulty must be below `2^256`, or the export raises with code 0. -/
 @[export eth_engine_forkchoice_updated]
 def forkchoiceUpdatedExport (args : PyValue) : Result PyValue :=
   pyExport forkchoiceUpdatedOf args

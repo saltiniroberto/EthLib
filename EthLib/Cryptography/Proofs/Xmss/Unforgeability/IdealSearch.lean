@@ -11,7 +11,11 @@ public import EthLib.Cryptography.Proofs.Xmss.Unforgeability.IdealBase
 
 In the second hop's ideal game, each derivation is drawn from a lazy table on its first use.
 
-A request runs two codeword searches, one per layer.
+A request runs a codeword search on the bottom layer.
+
+When the key does not keep the bottom tree, it builds it and runs the top layer's search too.
+
+Until a request fails, every kept tree holds the top signature of a search that succeeded.
 
 A search reads its randomizer base from the table, at the parameter, its address and the message.
 
@@ -24,7 +28,9 @@ A search reads its randomizer base from the table, at the parameter, its address
   When that search succeeded, the cache holds a trial with a codeword digest.
   So the repeat succeeds too.
 
-When every earlier search succeeded, a request fails with chance `<= Q / 2^95 + 2 exp(-4000)`.
+When every earlier search succeeded, and so every kept tree holds a top signature,
+
+a request fails with chance `<= Q / 2^95 + 2 exp(-4000)`.
 -/
 
 @[expose] public section
@@ -40,18 +46,17 @@ open XmssSecurity (OracleWorld HashSpec HashOutput HashInput)
 abbrev IdealState := SecretEncoding.SplitCache HashSpec PrfInput HashOutput
 
 /-- The hash of the second hop's game. -/
-abbrev hashD : ByteArray → OracleComp PrfSpec (Vector UInt8 32) :=
+abbrev hashD : Array UInt64 → OracleComp PrfSpec Lanes4 :=
   hashOf (HashSpec.withDerivationsLift PrfInput HashOutput)
 
-/-- One signing request of the second hop's game: the parameter, then the signature. -/
-def requestD (request : SignRequest) : OracleComp PrfSpec (Except XmssError Signature) := do
-  let pp ← publicParamOf prfD
-  signDerived hashD prfD pp request.leafIndex request.message
+/-- Every tree the key keeps holds a top signature, not an error. -/
+def KeptOk (sk : SecretKey) : Prop :=
+  ∀ t ∈ sk.cache, t.top.isOk = true
 
 /-- The hash input of trial `j` of a search of key `e` on `layer`, from the base `base`. -/
-def trialInput (pp : PublicParam) (layer : Layer) (e : UInt32) (msg : ByteArray)
+def trialInput (pp : PublicParam) (layer : Layer) (e : UInt32) (msg : Array UInt64)
     (base : Randomizer) (j : ℕ) : HashInput :=
-  (thInput pp (addrMsg layer e) (msg ++ packBytes (trialRandomizer base j))).data.toList
+  Hash.Keccak.lanesBytes (thInput pp (addrMsg layer e) (msg ++ (trialRandomizer base j).toArray))
 
 /-- Every search with a base in the table found a codeword.
 
@@ -179,27 +184,28 @@ end FailsAtMost
 /-! ## The search, over the public hash -/
 
 /-- The hash of the second hop's game is the query of `H`, lifted. -/
-theorem simulateQ_queryH (x : ByteArray) :
+theorem simulateQ_queryH (x : Array UInt64) :
     simulateQ (HashSpec.withDerivationsLift PrfInput HashOutput)
-      (queryH x : OracleComp OracleWorld (Vector UInt8 32)) = hashD x := by
-  simp [queryH, hashOf, HashSig.oracleHash]
+      (queryH x : OracleComp OracleWorld Lanes4) = hashD x := by
+  simp [queryH, HashSig.queryLanes, hashOf, HashSig.oracleHash]
   rfl
 
 /-- The search of the second hop's game is the search over `H`, lifted. -/
-theorem simulateQ_findCodeword (pp : PublicParam) (layer : Layer) (e : UInt32) (msg : ByteArray)
+theorem simulateQ_findCodeword (pp : PublicParam) (layer : Layer) (e : UInt32) (msg : Array UInt64)
     (base : Randomizer) (c fuel : ℕ) :
     simulateQ (HashSpec.withDerivationsLift PrfInput HashOutput)
       (Internal.findCodeword queryH pp layer e msg base c fuel :
         OracleComp OracleWorld _) =
       Internal.findCodeword hashD pp layer e msg base c fuel := by
   rw [findCodeword_map_monad (simulateQ (HashSpec.withDerivationsLift PrfInput HashOutput))
-    (fun b => simulateQ_pure _ b) (fun x f => simulateQ_bind _ x f) _
-    (fun f x => simulateQ_map _ x f)]
-  simp only [simulateQ_queryH]
+    (fun b => simulateQ_pure _ b) (fun x f => simulateQ_bind _ x f)]
+  have h : (fun x => simulateQ (HashSpec.withDerivationsLift PrfInput HashOutput)
+      (queryH x : OracleComp OracleWorld Lanes4)) = hashD := funext simulateQ_queryH
+  rw [h]
 
 /-- In the ideal game, the search runs as over the random oracle, and keeps the table. -/
 theorem run_findCodeword_idealImpl (pp : PublicParam) (layer : Layer) (e : UInt32)
-    (msg : ByteArray) (base : Randomizer) (c fuel : ℕ) (C : HashSpec.QueryCache)
+    (msg : Array UInt64) (base : Randomizer) (c fuel : ℕ) (C : HashSpec.QueryCache)
     (T : (PrfInput →ₒ HashOutput).QueryCache) :
     (simulateQ (SecretEncoding.idealImpl HashSpec PrfInput HashOutput)
         (Internal.findCodeword hashD pp layer e msg base c fuel)).run (C, T) =
@@ -209,37 +215,39 @@ theorem run_findCodeword_idealImpl (pp : PublicParam) (layer : Layer) (e : UInt3
 
 /-- A trial of the search over `H` is one query, whose answer's digest is tested. -/
 theorem codeword_messageDigest_queryH (pp : PublicParam) (layer : Layer) (e : UInt32)
-    (msg : ByteArray) (rho : Randomizer) :
+    (msg : Array UInt64) (rho : Randomizer) :
     (codeword? <$> messageDigest queryH pp layer e msg rho : OracleComp OracleWorld _) =
       (fun u => codeword? (halfOf 0 (ofOutput u))) <$>
         liftM (HashSpec.query
-          (thInput pp (addrMsg layer e) (msg ++ packBytes rho)).data.toList) := by
-  simp only [messageDigest, th, queryH, XmssSecurity.Concrete.oracleHash,
+          (Hash.Keccak.lanesBytes (thInput pp (addrMsg layer e) (msg ++ rho.toArray)))) := by
+  simp only [messageDigest, th, queryH, HashSig.queryLanes,
     map_eq_bind_pure_comp, bind_assoc, pure_bind, Function.comp_apply]
   rfl
 
 /-- A search whose window holds a cached trial with a codeword digest finds a trial. -/
 theorem isSome_of_mem_support_findCodeword (pp : PublicParam) (layer : Layer) (e : UInt32)
-    (msg : ByteArray) (base : Randomizer) (C : HashSpec.QueryCache)
+    (msg : Array UInt64) (base : Randomizer) (C : HashSpec.QueryCache)
     (h : ∃ j < MAX_RANDOMIZER_TRIALS, ∃ y,
       C (trialInput pp layer e msg base j) = some y ∧ (codeword? (halfOf 0 (ofOutput y))).isSome)
     {z} (hz : z ∈ support ((simulateQ HashSpec.romImpl
       (Internal.findCodeword queryH pp layer e msg base 0 MAX_RANDOMIZER_TRIALS)).run C)) :
     z.1.isSome := by
   obtain ⟨j, hj, y, hy, hcw⟩ := h
+  rw [Internal.findCodeword_eq] at hz
   exact Wots.isSome_of_mem_support_findFirst_romImpl (trialRandomizer base) _ _ _
     (codeword_messageDigest_queryH pp layer e msg) _ 0 C
     ⟨j, Nat.zero_le _, by omega, y, hy, hcw⟩ z hz
 
 /-- The trial a search finds is in its window, and cached with a codeword digest. -/
 theorem exists_cached_of_mem_support_findCodeword (pp : PublicParam) (layer : Layer) (e : UInt32)
-    (msg : ByteArray) (base : Randomizer) (C : HashSpec.QueryCache) {z}
+    (msg : Array UInt64) (base : Randomizer) (C : HashSpec.QueryCache) {z}
     (hz : z ∈ support ((simulateQ HashSpec.romImpl
       (Internal.findCodeword queryH pp layer e msg base 0 MAX_RANDOMIZER_TRIALS)).run C))
     {rho x} (hx : z.1 = some (rho, x)) :
     ∃ j < MAX_RANDOMIZER_TRIALS, ∃ y,
       z.2 (trialInput pp layer e msg base j) = some y ∧
         codeword? (halfOf 0 (ofOutput y)) = some x := by
+  rw [Internal.findCodeword_eq] at hz
   obtain ⟨j, -, hj, rfl, y, hy, hcw⟩ := Wots.exists_cached_of_mem_support_findFirst_romImpl
     (trialRandomizer base) _ _ _ (codeword_messageDigest_queryH pp layer e msg) _ 0 C z hz rho x hx
   exact ⟨j, by omega, y, hy, hcw⟩
@@ -249,22 +257,23 @@ theorem exists_cached_of_mem_support_findCodeword (pp : PublicParam) (layer : La
 /-- A trial and its randomizer fix the base. -/
 theorem trialRandomizer_inj_base {base base' : Randomizer} {j : ℕ}
     (h : trialRandomizer base j = trialRandomizer base' j) : base = base' := by
-  have hb : bytesToUint base < 2 ^ 128 :=
-    lt_of_lt_of_eq (Base.bytesToUint_lt base) (by simp [RANDOMIZER_LEN])
-  have hb' : bytesToUint base' < 2 ^ 128 :=
-    lt_of_lt_of_eq (Base.bytesToUint_lt base') (by simp [RANDOMIZER_LEN])
-  have hmod := Base.uintToBytes_inj (k := RANDOMIZER_LEN)
-    (lt_of_lt_of_eq (Nat.mod_lt _ (by norm_num)) (by simp [RANDOMIZER_LEN]))
-    (lt_of_lt_of_eq (Nat.mod_lt _ (by norm_num)) (by simp [RANDOMIZER_LEN])) h
-  have heq : bytesToUint base = bytesToUint base' := by omega
-  rw [← Base.uintToBytes_bytesToUint base, ← Base.uintToBytes_bytesToUint base', heq]
+  -- Both are `R_0 + j` modulo `2^128`, and the bases are below `2^128`.
+  have hmod := congrArg Hash.Keccak.Lanes2.toNat h
+  rw [toNat_trialRandomizer, toNat_trialRandomizer] at hmod
+  have hb := Hash.Keccak.Lanes2.toNat_lt base
+  have hb' := Hash.Keccak.Lanes2.toNat_lt base'
+  exact Hash.Keccak.Lanes2.toNat_injective (by omega)
 
 /-- The hash input of a trial fixes the base. -/
-theorem trialInput_injective_base (pp : PublicParam) (layer : Layer) (e : UInt32) (msg : ByteArray)
+theorem trialInput_injective_base (pp : PublicParam) (layer : Layer) (e : UInt32)
+    (msg : Array UInt64)
     (j : ℕ) : Function.Injective fun base => trialInput pp layer e msg base j := by
   intro base base' h
-  have hin := (thInput_inj (ByteArray.ext (Array.toList_inj.mp h))).2.2
-  exact trialRandomizer_inj_base (packBytes_injective (HashSig.byteArray_append_inj hin rfl).2)
+  have hin := (thInput_inj (Hash.Keccak.lanesBytes_injective h)).2.2
+  have hr := (Array.append_inj hin rfl).2
+  simp only [Hash.Keccak.Lanes2.toArray, List.toArray, Array.mk.injEq, List.cons.injEq,
+    and_true] at hr
+  exact trialRandomizer_inj_base (Hash.Keccak.Lanes2.ext hr.1 hr.2)
 
 /-- The digests whose image under an injective map is cached are at most the cache's size. -/
 theorem natCard_isSome_le_enncard (C : HashSpec.QueryCache) {g : Digest → HashInput}
@@ -278,7 +287,7 @@ theorem natCard_isSome_le_enncard (C : HashSpec.QueryCache) {g : Digest → Hash
 
 /-- **A uniform base puts some trial in the cache with probability at most `2^32 |C| / 2^128`.** -/
 theorem prEvent_trial_cached_le (C : HashSpec.QueryCache) (pp : PublicParam) (layer : Layer)
-    (e : UInt32) (msg : ByteArray) :
+    (e : UInt32) (msg : Array UInt64) :
     Pr{let u ← $ᵗ HashOutput}[∃ j < MAX_RANDOMIZER_TRIALS,
       (C (trialInput pp layer e msg (halfOf 0 (ofOutput u)) j)).isSome] ≤
       2 ^ 32 * (C.enncard / 2 ^ 128) := by
@@ -295,21 +304,21 @@ theorem prEvent_trial_cached_le (C : HashSpec.QueryCache) (pp : PublicParam) (la
 /-! ## One search -/
 
 /-- A derivation already in the table is read from it. -/
-theorem run_prfD_of_some {pp : PublicParam} {a : Address} {s : ByteArray} {st : IdealState}
+theorem run_prfD_of_some {pp : PublicParam} {a : Address} {s : Array UInt64} {st : IdealState}
     {u : HashOutput} (h : st.2 (pp, a, s) = some u) :
     (simulateQ (SecretEncoding.idealImpl HashSpec PrfInput HashOutput) (prfD pp a s)).run st =
       pure (ofOutput u, st) := by
   simp [prfD, SecretEncoding.idealImpl_run_derive_some h]
 
 /-- A derivation not yet in the table is drawn uniformly and stored. -/
-theorem run_prfD_of_none {pp : PublicParam} {a : Address} {s : ByteArray} {st : IdealState}
+theorem run_prfD_of_none {pp : PublicParam} {a : Address} {s : Array UInt64} {st : IdealState}
     (h : st.2 (pp, a, s) = none) :
     (simulateQ (SecretEncoding.idealImpl HashSpec PrfInput HashOutput) (prfD pp a s)).run st =
       (fun u => (ofOutput u, (st.1, st.2.cacheQuery (pp, a, s) u))) <$> ($ᵗ HashOutput) := by
   simp [prfD, SecretEncoding.idealImpl_run_derive_none h]
 
 /-- A search draws or reads its base, then runs the codeword search from it. -/
-theorem run_search (pp : PublicParam) (layer : Layer) (e : UInt32) (msg : ByteArray)
+theorem run_search (pp : PublicParam) (layer : Layer) (e : UInt32) (msg : Array UInt64)
     (st : IdealState) :
     (simulateQ (SecretEncoding.idealImpl HashSpec PrfInput HashOutput)
         (randomizerBase pp prfD layer e msg >>= fun base =>
@@ -339,7 +348,7 @@ A new search meets the cache with probability at most `Q / 2^96`.
 
 Otherwise its trials are fresh, and all fail with probability at most `exp(-4000)`. -/
 theorem failsAtMost_search (Q : ℕ) (pp : PublicParam) (layer : Layer) (e : UInt32)
-    (msg : ByteArray) :
+    (msg : Array UInt64) :
     FailsAtMost (fun r => r = none) Q ((Q : ℝ≥0∞) / 2 ^ 96 + ENNReal.ofReal (Real.exp (-4000)))
       (randomizerBase pp prfD layer e msg >>= fun base =>
         Internal.findCodeword hashD pp layer e msg base 0 MAX_RANDOMIZER_TRIALS) := by
@@ -384,7 +393,7 @@ theorem failsAtMost_search (Q : ℕ) (pp : PublicParam) (layer : Layer) (e : UIn
               subst hu'
               obtain ⟨j, hj, y, hy, hcw⟩ :=
                 exists_cached_of_mem_support_findCodeword pp' layer' e' msg' _ C hw hw1
-              exact ⟨j, hj, y, hy, by simp [hcw]⟩
+              exact ⟨j, hj, y, hy, by rw [hcw]; rfl⟩
             · rw [QueryCache.cacheQuery_of_ne _ _ hx] at hu'
               obtain ⟨j, hj, y, hy, hcw⟩ := hst pp' layer' e' msg' u' hu'
               exact ⟨j, hj, y, hC hy, hcw⟩
@@ -412,11 +421,11 @@ theorem allQueriesSatisfy_of_isQueryBoundP {α : Type} {oa : OracleComp PrfSpec 
   (isQueryBoundP_zero_iff oa _).1 ((isQueryBoundP_congr_pred fun _ => not_not.symm).1 h)
 
 /-- A hash call draws no base. -/
-theorem isQueryBoundP_hashD (x : ByteArray) : IsQueryBoundP (hashD x) IsRndQuery 0 :=
+theorem isQueryBoundP_hashD (x : Array UInt64) : IsQueryBoundP (hashD x) IsRndQuery 0 :=
   (isQueryBoundP_map_iff _ _ _).2 (by simp [IsRndQuery, OracleSpec.withDerivationsLift])
 
 /-- A derivation away from every base's address draws no base. -/
-theorem isQueryBoundP_prfD {pp : PublicParam} {a : Address} {s : ByteArray}
+theorem isQueryBoundP_prfD {pp : PublicParam} {a : Address} {s : Array UInt64}
     (ha : ∀ layer e, a ≠ addrRnd layer e) : IsQueryBoundP (prfD pp a s) IsRndQuery 0 :=
   (isQueryBoundP_map_iff _ _ _).2 (by
     simp only [isQueryBoundP_query_iff, IsRndQuery]
@@ -432,7 +441,7 @@ theorem addrParam_ne_addrRnd (layer : Layer) (e : UInt32) : addrParam ≠ addrRn
   encodeAddress_ne_of_type_ne _ _ _ _ _ _ (by decide)
 
 /-- A tweakable hash call draws no base. -/
-theorem isQueryBoundP_th (pp : PublicParam) (a : Address) (payload : ByteArray) :
+theorem isQueryBoundP_th (pp : PublicParam) (a : Address) (payload : Array UInt64) :
     IsQueryBoundP (th hashD pp a payload) IsRndQuery 0 :=
   isQueryBoundP_bind_zero _ _ (isQueryBoundP_hashD _) fun _ => isQueryBoundP_pure _ _ _
 
@@ -459,13 +468,13 @@ theorem isQueryBoundP_otsPublicLeaf (pp : PublicParam) (layer : Layer) (e : UInt
 theorem isQueryBoundP_node (pp : PublicParam) (layer : Layer) (level j : ℕ) :
     IsQueryBoundP (node hashD pp prfD layer level j) IsRndQuery 0 :=
   merkleNode_isQueryBoundP_zero _ _ (fun _ => isQueryBoundP_otsPublicLeaf _ _ _)
-    (fun _ _ _ _ => isQueryBoundP_th _ _ _) level j
+    (fun _ _ _ => isQueryBoundP_th _ _ _) ⟨level, j⟩
 
-/-- The path of a key draws no base. -/
-theorem isQueryBoundP_path (pp : PublicParam) (layer : Layer) (e : ℕ) :
-    IsQueryBoundP (path hashD pp prfD layer e) IsRndQuery 0 :=
-  merkleSiblings_isQueryBoundP_zero _ _ (fun _ => isQueryBoundP_otsPublicLeaf _ _ _)
-    (fun _ _ _ _ => isQueryBoundP_th _ _ _) _ _ _
+/-- A build of a tree draws no base. -/
+theorem isQueryBoundP_build (pp : PublicParam) (layer : Layer) (level j : ℕ) :
+    IsQueryBoundP (build hashD pp prfD layer level j) IsRndQuery 0 :=
+  merkleBuild_isQueryBoundP_zero _ _ (fun _ => isQueryBoundP_otsPublicLeaf _ _ _)
+    (fun _ _ _ => isQueryBoundP_th _ _ _) ⟨level, j⟩
 
 /-- The public parameter draws no base. -/
 theorem isQueryBoundP_publicParamOf : IsQueryBoundP (publicParamOf prfD) IsRndQuery 0 :=
@@ -492,10 +501,10 @@ theorem FailsAtMost.bind_of_noBase {α β : Type} {fail : β → Prop} {Q : ℕ}
 
 /-- A one-time signature fails as its search does. -/
 theorem failsAtMost_otsSign (Q : ℕ) (pp : PublicParam) (layer : Layer) (e : UInt32)
-    (msg : ByteArray) :
+    (msg : Array UInt64) :
     FailsAtMost (fun r => r = none) Q ((Q : ℝ≥0∞) / 2 ^ 96 + ENNReal.ofReal (Real.exp (-4000)))
       (otsSign hashD pp prfD layer e msg) := by
-  unfold otsSign
+  unfold otsSign Internal.otsSignTrials
   rw [← bind_assoc]
   refine (FailsAtMost.bind (ε₂ := 0) (failsAtMost_search Q pp layer e msg)
     fun r hr => ?_).mono_bound (add_zero _).le
@@ -505,64 +514,90 @@ theorem failsAtMost_otsSign (Q : ℕ) (pp : PublicParam) (layer : Layer) (e : UI
       FailsAtMost.bind_of_noBase (ofFnInOrder_isQueryBoundP_zero _ _ fun _ =>
         isQueryBoundP_chain _ _ _ _ _ _ _ _) fun _ => FailsAtMost.pure (by simp)
 
-/-- One layer's signature fails as its one-time signature does. -/
-theorem failsAtMost_signLayer (Q : ℕ) (pp : PublicParam) (layer : Layer) (e : ℕ)
-    (msg : ByteArray) :
+/-- The top key's signature of a root fails as its search does. -/
+theorem failsAtMost_signRootWith (Q : ℕ) (sk : SecretKey) (b : ℕ) (root : Digest) :
     FailsAtMost (fun r => r.toOption = none) Q
       ((Q : ℝ≥0∞) / 2 ^ 96 + ENNReal.ofReal (Real.exp (-4000)))
-      (signLayer hashD pp prfD layer e msg) := by
-  unfold signLayer
-  refine (FailsAtMost.bind (ε₂ := 0) (failsAtMost_otsSign Q pp layer _ msg)
+      (Internal.signRootWith hashD prfD sk b root) := by
+  unfold Internal.signRootWith
+  rw [Internal.otsSignTrials_hashTrials]
+  refine (FailsAtMost.bind (ε₂ := 0) (failsAtMost_otsSign Q sk.publicParam .top _ _)
     fun r hr => ?_).mono_bound (add_zero _).le
   rcases r with _ | ⟨rho, y⟩
   · exact absurd rfl hr
-  · exact FailsAtMost.bind_of_noBase (isQueryBoundP_path pp layer e) fun _ =>
-      FailsAtMost.pure (by simp [Except.toOption])
+  · exact FailsAtMost.pure (by simp [Except.toOption])
 
-/-- A signature fails at most as often as its two layers do. -/
-theorem failsAtMost_signDerived (Q : ℕ) (pp : PublicParam) (idx : LeafIndex) (msg : Message) :
-    FailsAtMost (fun r => r.toOption = none) Q
+/-- **A signature fails at most as often as its two searches do.**
+
+The key's kept trees must hold top signatures.
+
+The key that signing returns keeps them too, unless the request failed. -/
+theorem failsAtMost_signWithTrials (Q : ℕ) (sk : SecretKey) (hsk : KeptOk sk) (idx : LeafIndex)
+    (msg : Message) :
+    FailsAtMost (fun r => r.1.toOption = none ∨ ¬KeptOk r.2) Q
       (2 * ((Q : ℝ≥0∞) / 2 ^ 96 + ENNReal.ofReal (Real.exp (-4000))))
-      (signDerived hashD prfD pp idx msg) := by
-  unfold signDerived
-  rw [two_mul]
-  refine FailsAtMost.bind (failsAtMost_signLayer Q pp .bottom _ _) fun r hr => ?_
-  rcases r with err | bottom
+      (Internal.signWithTrials hashD prfD sk idx msg (hashTrials hashD)) := by
+  unfold Internal.signWithTrials
+  rw [Internal.otsSignTrials_hashTrials, two_mul]
+  refine FailsAtMost.bind (failsAtMost_otsSign Q sk.publicParam .bottom _ _) fun r hr => ?_
+  rcases r with _ | ⟨rho, y⟩
   · exact absurd rfl hr
-  refine FailsAtMost.bind_of_noBase (isQueryBoundP_pure _ _ _) fun bottom => ?_
-  refine FailsAtMost.bind_of_noBase (isQueryBoundP_node pp .bottom _ _) fun root => ?_
-  refine (FailsAtMost.bind (ε₂ := 0) (failsAtMost_signLayer Q pp .top _ _)
-    fun r hr => ?_).mono_bound (add_zero _).le
-  rcases r with err | top
-  · exact absurd rfl hr
-  exact FailsAtMost.bind_of_noBase (isQueryBoundP_pure _ _ _) fun _ =>
-    FailsAtMost.pure (by simp [Except.toOption])
-
-/-- A request fails at most as often as the two layers of its signature do. -/
-theorem failsAtMost_requestD (Q : ℕ) (request : SignRequest) :
-    FailsAtMost (fun r => r.toOption = none) Q
-      ((Q : ℝ≥0∞) / 2 ^ 95 + 2 * ENNReal.ofReal (Real.exp (-4000))) (requestD request) := by
-  refine (FailsAtMost.bind_of_noBase isQueryBoundP_publicParamOf fun pp =>
-    failsAtMost_signDerived Q pp _ _).mono_bound (le_of_eq ?_)
-  rw [mul_add, ← two_pow_mul_div_two_pow 1 95, pow_one]
+  dsimp only
+  unfold Internal.fetchTreeWith
+  split
+  · -- A kept tree holds a top signature, and no hash is called.
+    next t ht =>
+    have htok : t.top.isOk = true := hsk t (List.mem_of_find?_eq_some ht)
+    rw [pure_bind]
+    dsimp only
+    cases htt : t.top with
+    | error err => rw [htt] at htok; cases htok
+    | ok top =>
+      refine (FailsAtMost.pure ?_).mono_bound zero_le
+      rintro (h | h)
+      · cases h
+      · refine h fun u hu => ?_
+        rcases List.mem_cons.1 hu with rfl | hu
+        · rw [htt]
+          rfl
+        · exact hsk u (List.mem_filter.1 hu).1
+  · -- A new tree: its build draws no base, then the top key's search.
+    unfold Internal.cacheTreeWith
+    simp only [bind_assoc, pure_bind]
+    refine FailsAtMost.bind_of_noBase (isQueryBoundP_build sk.publicParam .bottom _ _)
+      fun tree => ?_
+    refine (FailsAtMost.bind (ε₂ := 0) (failsAtMost_signRootWith Q sk _ _)
+      fun top htop => ?_).mono_bound (add_zero _).le
+    rcases top with err | top
+    · exact absurd rfl htop
+    dsimp only
+    refine FailsAtMost.pure ?_
+    rintro (h | h)
+    · cases h
+    · refine h fun u hu => ?_
+      rcases List.mem_cons.1 (List.mem_of_mem_take hu) with rfl | hu
+      · rfl
+      · exact hsk u hu
 
 end Request
 
 /-- **One request in the ideal game.**
 
-Every search with a base in the table found a codeword.
+Every search with a base in the table found a codeword, and every kept tree holds a top signature.
 
 Count only the runs whose cache ends with at most `Q` entries.
 
 Then the request fails, or leaves a search without a codeword, with chance `<= Q / 2^95 + 2 e`.
 
 Here `e = exp(-4000)`. -/
-theorem prEvent_requestD_le (request : SignRequest) (st : IdealState) (hst : SearchesFound st)
-    (Q : ℕ) :
+theorem prEvent_signWithTrials_le (sk : SecretKey) (hsk : KeptOk sk) (request : SignRequest)
+    (st : IdealState) (hst : SearchesFound st) (Q : ℕ) :
     Pr{let z ← (simulateQ (SecretEncoding.idealImpl HashSpec PrfInput HashOutput)
-        (requestD request)).run st}[
-      (z.1.toOption = none ∨ ¬SearchesFound z.2) ∧ z.2.1.enncard ≤ Q] ≤
+        (Internal.signWithTrials hashD prfD sk request.leafIndex request.message
+          (hashTrials hashD))).run st}[
+      ((z.1.1.toOption = none ∨ ¬KeptOk z.1.2) ∨ ¬SearchesFound z.2) ∧ z.2.1.enncard ≤ Q] ≤
       (Q : ℝ≥0∞) / 2 ^ 95 + 2 * ENNReal.ofReal (Real.exp (-4000)) := by
-  exact failsAtMost_requestD Q request st hst
+  refine (failsAtMost_signWithTrials Q sk hsk _ _ st hst).trans (le_of_eq ?_)
+  rw [mul_add, ← two_pow_mul_div_two_pow 1 95, pow_one]
 
 end EthLib.Cryptography.Xmss.Unforgeability

@@ -15,6 +15,7 @@ from consensus.containers import CONTAINERS, FORKS as CONSENSUS_FORK
 from consensus.test_epoch_processing import HANDLERS as EPOCH_STEPS, runs as runs_epoch_step
 from consensus.test_fork import runs as runs_upgrade
 from consensus.test_fork_choice import (
+    COMPLIANCE as FORK_CHOICE_COMPLIANCE,
     FAST_CONFIRMATION,
     GLOAS_HANDLERS as GLOAS_FORK_CHOICE,
     HANDLERS as FORK_CHOICE,
@@ -33,7 +34,7 @@ from transactions.expected_errors import expected_template
 from transactions.test_inclusion_archive import names_in_block
 from transactions.test_transactions import CHAIN_ID, FORK_OF_NETWORK
 
-from . import legacy
+from . import legacy, reorg
 from .catalogue import BOGOTA_NETWORKS, Case
 
 # The groups that no runner covers yet, with the pull requests of the plan that bring them.
@@ -270,17 +271,17 @@ _BLOCK_EXCEPTIONS = {
     "INVALID_WITHDRAWALS_ROOT": r"wrongWithdrawalsRoot",
     "SYSTEM_CONTRACT_EMPTY": r"systemContractEmpty",
     "SYSTEM_CONTRACT_CALL_FAILED": r"system call to .* failed",
-    "RLP_STRUCTURES_ENCODING": r"does not decode|block rejected",
+    "RLP_STRUCTURES_ENCODING": r"does not decode|block invalid: encoding",
     "RLP_BLOCK_LIMIT_EXCEEDED": r"blockTooLarge",
     # From Amsterdam, a block carries only the hash of its access list.
     # So a list that breaks a rule of its form shows as a wrong hash.
-    "INCORRECT_BLOCK_FORMAT": r"block rejected|wrongBlockAccessListHash",
+    "INCORRECT_BLOCK_FORMAT": r"block invalid: encoding|wrongBlockAccessListHash",
     "INVALID_GAS_USED": r"wrongGasUsed",
     "INVALID_BLOCK_ACCESS_LIST": r"wrongBlockAccessListHash|blockAccessList",
     "BLOCK_ACCESS_LIST_GAS_LIMIT_EXCEEDED": r"blockAccessList .*tooManyItems",
     # A header without the field of the hash, or with one too many, does not decode.
-    "INVALID_BAL_HASH": r"wrongBlockAccessListHash|block rejected",
-    "INVALID_BLOCK_HASH": r"block rejected",
+    "INVALID_BAL_HASH": r"wrongBlockAccessListHash|block invalid: encoding",
+    "INVALID_BLOCK_HASH": r"block invalid: encoding",
 }
 
 
@@ -482,13 +483,28 @@ def _engine_payload(fixture: dict, payload: dict, state: bytes, recent: list) ->
 
     config, _ = chain_of(fixture)
     method = f"engine_newPayloadV{payload['newPayloadVersion']}"
+    # The chains start at Paris, so no parent is a block of proof of work to check as terminal.
     if "errorCode" in payload:
         with pytest.raises(engine.EngineError) as error:
-            engine.new_payload_on_chain(config, state, recent, method, payload["params"])
+            engine.new_payload_on_chain(
+                config,
+                state,
+                recent,
+                method,
+                payload["params"],
+                terminal_total_difficulty=0,
+                total_difficulty=0,
+            )
         assert -error.value.code == int(payload["errorCode"])
         return "error", state, recent
     status, header, accounts = engine.new_payload_on_chain(
-        config, state, recent, method, payload["params"]
+        config,
+        state,
+        recent,
+        method,
+        payload["params"],
+        terminal_total_difficulty=0,
+        total_difficulty=0,
     )
     expected = payload.get("validationError")
     if not expected:
@@ -529,6 +545,24 @@ def _shared_start(path: Path, fork: str) -> tuple[bytes, bytes]:
     return _start(shared["pre"], shared["genesis"], fork)
 
 
+def _engine_genesis(
+    fixture: dict,
+    pre: dict,
+    genesis: dict,
+    start: Callable[[str], tuple[bytes, bytes]] | None = None,
+) -> tuple[str, bytes, bytes]:
+    """The fork, the state and the header of the genesis block of an engine fixture, checked."""
+    from ethlib.cryptography.keccak import keccak256
+    from ethlib.serialization import rlp
+
+    header = _header_of_json(genesis)
+    assert "0x" + keccak256(header).hex() == genesis["hash"]
+    fork = active_fork(chain_of(fixture)[1], rlp.decode(header))
+    state, computed = start(fork) if start else _start(pre, genesis, fork)
+    assert computed == header
+    return fork, state, header
+
+
 def run_engine_chain(
     fixture: dict,
     pre: dict,
@@ -540,14 +574,9 @@ def run_engine_chain(
     The function `start` gives the state and the genesis header at a fork, when they are known.
     """
     from ethlib.cryptography.keccak import keccak256
-    from ethlib.serialization import rlp
 
-    header = _header_of_json(genesis)
-    assert "0x" + keccak256(header).hex() == genesis["hash"]
-    fork = active_fork(chain_of(fixture)[1], rlp.decode(header))
-    state, computed = start(fork) if start else _start(pre, genesis, fork)
+    fork, state, header = _engine_genesis(fixture, pre, genesis, start)
     recent = [(fork, header, [])]
-    assert computed == header
     kinds = Counter()
     for payload in fixture["engineNewPayloads"]:
         kind, state, recent = _engine_payload(fixture, payload, state, recent)
@@ -581,6 +610,12 @@ def _blockchain_test_engine_x(root: Path, case: Case) -> None:
     run_engine_chain(
         fixture, shared["pre"], shared["genesis"], lambda fork: _shared_start(path, fork)
     )
+
+
+def _blockchain_test_engine_reorg(root: Path, case: Case) -> None:
+    fixture = _fixtures(root / case.path)[case.id]
+    fork, state, header = _engine_genesis(fixture, fixture["pre"], fixture["genesisBlockHeader"])
+    reorg.run(fixture, chain_of(fixture)[0], state, (fork, header, []))
 
 
 def _shuffle(root: Path, case: Case) -> None:
@@ -709,8 +744,9 @@ def _transition(root: Path, case: Case) -> None:
 def _fork_choice(root: Path, case: Case) -> None:
     from consensus.test_fork_choice import run_case
 
-    # tests/<preset>/<fork>/<fork_choice, sync or fast_confirmation>/<handler>/<suite>/<case>
-    run_case(case.preset, case.fork, root / case.path)
+    # tests/<preset>/<fork>/<runner>/<handler>/<suite>/<case>
+    compliance = case.group.startswith("fork_choice_compliance/")
+    run_case(case.preset, case.fork, root / case.path, compliance)
 
 
 def _genesis(root: Path, case: Case) -> None:
@@ -733,13 +769,19 @@ def _container_forks(container: str) -> tuple[str, ...]:
     return tuple(forks[forks.index(first) : forks.index(dropped) if dropped else len(forks)])
 
 
-# The runner of each group, by format or by runner and handler.
-RUNNERS = {
+# The runner of each format of execution-spec-tests.
+FORMAT_RUNNERS = {
     "transaction_test": _transaction,
     "state_test": _state_test,
     "blockchain_test": _blockchain_test,
     "blockchain_test_engine": _blockchain_test_engine,
     "blockchain_test_engine_x": _blockchain_test_engine_x,
+    "blockchain_test_engine_reorg": _blockchain_test_engine_reorg,
+}
+
+# The runner of each group, by format or by runner and handler.
+RUNNERS = {
+    **FORMAT_RUNNERS,
     "shuffling/core": _shuffle,
     "networking/get_custody_groups": _custody_groups,
     "networking/compute_columns_for_custody_group": _custody_columns,
@@ -767,6 +809,8 @@ RUNNERS = {
     "sync/optimistic": _fork_choice,
     # The fast confirmation cases are fork choice cases whose checks also read the rule's store.
     **{f"fast_confirmation/{suite}": _fork_choice for suite in FAST_CONFIRMATION},
+    # The compliance cases are fork choice cases that a generator derives from block trees.
+    **{f"fork_choice_compliance/{suite}": _fork_choice for suite in FORK_CHOICE_COMPLIANCE},
     **{group: _transition for group in TRANSITION_GROUPS},
     **{f"genesis/{handler}": _genesis for handler in GENESIS},
     "legacy_ommers": legacy.run_ommers,

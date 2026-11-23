@@ -1,10 +1,13 @@
 module
 
 public import EthLib.Execution.Network.Blocks
+public import EthLib.Execution.Network.Bodies
 public import EthLib.Execution.Network.Cells
 public import EthLib.Execution.Network.Message
+public import EthLib.Execution.Network.Pool
 public import EthLib.Execution.Network.Protocol
 public import EthLib.Execution.Network.Receipts
+public import EthLib.Execution.Network.Session
 public import EthLib.Execution.Network.Snap
 public import EthLib.Execution.Network.SnapRange
 public import EthLib.Execution.Network.Status

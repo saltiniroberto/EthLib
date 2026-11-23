@@ -1,7 +1,7 @@
 module
 
 public import EthLib.Base.Exports
-public import EthLib.Base.Exports.Proofs.PyValue
+public import EthLib.Base.Exports.PyValue
 public import EthLib.Execution.History.Era1
 
 /-!
@@ -16,7 +16,12 @@ public section
 
 namespace EthLib.Execution.History.Exports
 
-open EthLib.Exports (Result PyValue pyExport)
+open EthLib.Exports (ExportError Result PyValue oneLine pyExport toResult)
+
+/-- A rejected file reaches Python with its code, and its message prints the error on one line. -/
+instance : ExportError Era1Error where
+  code := Era1Error.code
+  message := oneLine
 
 /-- The contents of an era1 file, as plain values.
 
@@ -28,7 +33,7 @@ Each other record is its type and its data. -/
 def decodeEra1Of (bytes : ByteArray) :
     Result (Nat × List (ByteArray × ByteArray × ByteArray × Nat) × List (Nat × ByteArray) ×
       ByteArray) := do
-  let era1 ← (decodeEra1 bytes).mapError fun e => (e.code, s!"era1 file rejected: {repr e}")
+  let era1 ← toResult "era1 file rejected" (decodeEra1 bytes)
   return (era1.startingNumber,
     era1.blocks.map fun b => (b.header, b.body, b.receipts, b.totalDifficulty.toNat),
     era1.others.map fun r => (r.type.toNat, r.data),

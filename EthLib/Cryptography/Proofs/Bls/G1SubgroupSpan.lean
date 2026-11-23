@@ -16,7 +16,7 @@ Two independent points of order `r` would make `r^2` divide `#E(Fp)`, by Lagrang
 
 So every point of order `r` in `G1` is a multiple of the generator.
 
-So each key that key validation accepts is `[a] g_1` with `a != 0`.
+So each key that key validation accepts is `[a] g_1` with `a ≠ 0`.
 
 Key validation is the one of draft-04, §2.5.
 <https://datatracker.ietf.org/doc/html/draft-irtf-cfrg-bls-signature-04>
@@ -66,19 +66,6 @@ private theorem prime_sq_dvd_card_of_independent {G : Type*} [AddCommGroup G] [F
   refine ⟨k, ?_⟩
   rw [hk]
   ring
-
-/-- `Valid` is required because singular `z != 0` triples also map to `0` under `toPoint`. -/
-theorem isInfinity_eq_true_iff_toPoint_eq_zero {P : G1} (hP : Valid P) :
-    P.isInfinity = true ↔ toPoint P = 0 := by
-  constructor
-  · intro h
-    exact Point.toAffine_of_Z_eq_zero (isZero_iff.mp h)
-  · intro h
-    -- A finite nonsingular representative maps to `Point.some`, never `0`.
-    by_contra hne
-    have hz : Fp.toZMod P.z ≠ 0 := fun hz0 => hne (isZero_iff.mpr hz0)
-    rw [toPoint, Point.toAffine_of_Z_ne_zero hP hz] at h
-    cases h
 
 /-- Rules out a rank-2 `r`-torsion subgroup inside `E(Fp)` once `#E(Fp) <= 2 * p + 1` meets Lagrange's theorem. -/
 theorem modulus_sq_gt_card_bound : 2 * Fp.modulus + 1 < Fr.modulus ^ 2 := by
@@ -149,8 +136,10 @@ theorem mul_generator_isInfinity_iff (s : Fr) :
     rw [Fr.val_zero]
     exact Nat.dvd_zero _
 
-/-- `KeyValidate` (`IRTF draft-irtf-cfrg-bls-signature-04 §2.5`) rejects `0` and requires `inSubgroup` so `a != 0`. -/
-theorem exists_mul_generator_of_keyValidatePoint {bytes : ByteArray} {P : G1}
+/-- Key validation (BLS signature draft-04, §2.5) rejects `0` and requires membership in `G1`.
+
+So the discrete logarithm `a` is not zero. -/
+theorem exists_mul_generator_of_keyValidatePoint {bytes : Vector UInt8 48} {P : G1}
     (h : keyValidatePoint bytes = .ok P) :
     Valid P ∧ ∃ a : Fr, a ≠ 0 ∧ toPoint P = toPoint (mul generator a) := by
   unfold keyValidatePoint at h
@@ -171,7 +160,7 @@ theorem exists_mul_generator_of_keyValidatePoint {bytes : ByteArray} {P : G1}
         cases h
         have hvalid : Valid P := uncompress_valid hunc
         obtain ⟨a, ha⟩ := exists_mul_generator_of_inSubgroup hvalid hsub
-        -- Because `P` is not at infinity, `toPoint P != 0`, forcing the discrete logarithm `a != 0`.
+        -- Because `P` is not at infinity, `toPoint P ≠ 0`, forcing the discrete logarithm `a ≠ 0`.
         refine ⟨hvalid, a, ?_, ha⟩
         intro ha0
         subst ha0

@@ -4,6 +4,7 @@ public import EthLib.Networking.Enr.V4
 public import EthLib.Cryptography.Proofs.Secp256k1.Sign
 public import EthLib.Cryptography.Proofs.Secp256k1.Encoding
 public import EthLib.Networking.Proofs.Enr.Record
+public import EthLib.Cryptography.Proofs.Ecdsa.Encoding
 
 /-!
 # Proofs: the "v4" identity scheme
@@ -61,14 +62,16 @@ theorem verifyV4_eq_true_iff {r : Enr} :
         (Base.bytesToNat (r.signature.data.toList.take 32))
         (Base.bytesToNat (r.signature.data.toList.drop 32)) = true := by
   unfold verifyV4
+  rw [Cryptography.Ecdsa.read?_eq, Cryptography.Ecdsa.SIGNATURE_LEN]
   constructor
   · intro h
     split at h
     · rename_i q content hq hc
-      split at h
-      · rename_i hsz
+      by_cases hsz : r.signature.size = 64
+      · simp only [hsz, ↓reduceIte] at h
         exact ⟨q, content, hq, hc, hsz, h⟩
-      · cases h
+      · simp only [hsz, ↓reduceIte] at h
+        cases h
     · cases h
   · rintro ⟨q, content, hq, hc, hsz, hv⟩
     rw [hq, hc]
@@ -108,17 +111,13 @@ theorem verifyV4_of_verify {r : Enr} {q : Point} {rr ss : Fn} {content : ByteArr
       rw [h0] at hv
       cases hv
     · rfl
-  have hlr := Base.natToBytes_length 32 rr.val
-  have hls := Base.natToBytes_length 32 ss.val
   have hmod (x : Fn) : x.val % 256 ^ 32 = x.val :=
     Nat.mod_eq_of_lt (lt_trans x.isLt (by decide : Fn.modulus < 256 ^ 32))
-  refine verifyV4_eq_true_iff.mpr ⟨q, content, publicKeyV4_of_get hcurve hinf hid hkey, hc,
-    by rw [hsig]; simp [ByteArray.size, hlr, hls], ?_⟩
-  have hlist :
-      r.signature.data.toList = Base.natToBytes 32 rr.val ++ Base.natToBytes 32 ss.val := by
-    rw [hsig]
-  rw [hlist, List.take_left' hlr, List.drop_left' hlr, Base.bytesToNat_natToBytes,
-    Base.bytesToNat_natToBytes, hmod, hmod]
+  -- The signature is the written form of `(r, s)`, so it reads back as `(r, s)`.
+  have hsig' : r.signature = Base.packBytes (Cryptography.Ecdsa.toBytes rr.val ss.val) := hsig
+  unfold verifyV4
+  simp only [publicKeyV4_of_get hcurve hinf hid hkey, hc, hsig', Cryptography.Ecdsa.read?_packBytes,
+    Cryptography.Ecdsa.toNats_toBytes, hmod]
   exact hv
 
 /-- A record verifies when its signature is the deterministic one from its private key `sk`.
@@ -317,6 +316,19 @@ theorem mem_insertPair {p x : ByteArray × Item} :
       · rintro (h | h | h) <;> simp [h]
       · rintro (h | h | h) <;> simp [h]
 
+/-- An insertion leaves the first pair of every other key in place. -/
+theorem find?_insertPair {p : ByteArray × Item} {key : ByteArray} (hp : p.1 ≠ key) :
+    (pairs : List (ByteArray × Item)) →
+      (insertPair p pairs).find? (·.1 = key) = pairs.find? (·.1 = key)
+  | [] => by simp [insertPair, hp]
+  | q :: rest => by
+    unfold insertPair
+    split
+    · simp [hp]
+    · by_cases hq : q.1 = key
+      · simp [hq]
+      · simp [hq, find?_insertPair hp rest]
+
 /-- In pairs whose keys strictly increase, the value of a key is that of its one pair. -/
 theorem get_of_mem {r : Enr} {key : ByteArray} {value : Item}
     (hk : r.pairs.Pairwise (fun p q => keyLt p.1 q.1)) (hmem : (key, value) ∈ r.pairs) :
@@ -388,5 +400,33 @@ theorem makeRecordV4_eq_ok {sk : Fn} {seq : UInt64} {pairs : List (ByteArray × 
         · unfold Enr.get at gkey ⊢
           rw [hpairs]
           exact gkey
+
+/-- A record that the builder makes holds the given value of every key other than its own two. -/
+theorem get_of_makeRecordV4 {sk : Fn} {seq : UInt64} {pairs : List (ByteArray × Item)} {r : Enr}
+    {key : ByteArray} (h : makeRecordV4 sk seq pairs = .ok r) (hid : KEY_ID ≠ key)
+    (hsk : KEY_SECP256K1 ≠ key) : r.get key = (pairs.find? (·.1 = key)).map (·.2) := by
+  unfold makeRecordV4 at h
+  dsimp only at h
+  generalize hall : insertPair (KEY_ID, .bytes SCHEME_V4)
+    (insertPair (KEY_SECP256K1, .bytes (Point.mul sk Point.generator).encodeCompressed) pairs)
+    = all at h
+  cases hc : checkKeys all with
+  | error e => simp [hc, bind, Except.bind] at h
+  | ok u =>
+    cases hs : signV4 sk ⟨.empty, seq, all⟩ with
+    | error e => simp [hc, hs, bind, Except.bind] at h
+    | ok signed =>
+      cases he : signed.encode with
+      | error e => simp [hc, hs, he, Except.mapError, bind, Except.bind] at h
+      | ok bytes =>
+        by_cases hsize : MAX_RECORD_SIZE < bytes.size
+        · simp [hc, hs, he, hsize, Except.mapError, bind, Except.bind, throw, throwThe,
+            MonadExceptOf.throw] at h
+        simp only [hc, hs, he, hsize, Except.mapError, bind, Except.bind, ↓reduceIte, pure,
+          Except.pure, Except.ok.injEq] at h
+        subst h
+        -- Signing keeps the pairs, and neither inserted pair has the key.
+        unfold Enr.get
+        rw [(seq_pairs_signV4 hs).2, ← hall, find?_insertPair hid, find?_insertPair hsk]
 
 end EthLib.Networking.Enr

@@ -4,6 +4,7 @@ public import EthLib.Cryptography.Bls.Errors
 public import EthLib.Cryptography.Montgomery
 public import EthLib.Cryptography.Hash.Sha256
 public import EthLib.Base.BigEndian
+public import EthLib.Base.Bytes
 
 /-!
 # `Fr`
@@ -73,11 +74,6 @@ Proofs use its lemmas, never its unfolding, which runs a Montgomery reduction. -
 @[inline] def zero : Fr := Montgomery.zero
 @[inline] def one  : Fr := Montgomery.one
 
-@[inline] def add (a b : Fr) : Fr := a + b
-@[inline] def sub (a b : Fr) : Fr := a - b
-@[inline] def neg (a : Fr)   : Fr := -a
-@[inline] def mul (a b : Fr) : Fr := a * b
-
 @[inline] def beq (a b : Fr) : Bool := a == b
 @[inline] def isZero (a : Fr) : Bool := a == zero
 
@@ -142,13 +138,16 @@ instance : HPow Fr Fr Fr := ⟨fun a b => powNat a b.val⟩
 
 /-- Decode a 32-byte big-endian integer as an element of `Fr`.
 
-It rejects an input of the wrong size, and an integer of at least `r`.
+It rejects an integer of at least `r`.
 
 The bytes go straight into limbs, with no integer between. -/
-def fromBytesBE (b : ByteArray) : Except BlsError Fr :=
-  if b.size ≠ 32 then .error .nonCanonicalFieldElement
+def fromBytesBE (b : Vector UInt8 32) : Except BlsError Fr :=
+  -- A vector always has 32 bytes, so this branch is never taken.
+  --
+  -- The test keeps the kernel from unfolding the limb decoder on bytes it does not know.
+  if (Base.packBytes b).size ≠ 32 then .error .nonCanonicalFieldElement
   else
-    match Montgomery.ofBytesBE b 0 with
+    match Montgomery.ofBytesBE (Base.packBytes b) 0 with
     | some a => .ok a
     | none => .error .nonCanonicalFieldElement
 
@@ -157,9 +156,14 @@ def fromBytesBE (b : ByteArray) : Except BlsError Fr :=
 
 /-- Hash the data, and convert the digest to an element of `Fr`.
 
-The output is not uniform over `Fr`. -/
+The element is `SHA-256(data) mod r`, with the digest read as a big-endian integer.
+
+The output is not uniform over `Fr`.
+-/
 def hashToBlsField (data : ByteArray) : Fr :=
+  -- The digest `d = SHA-256(data)`.
   let hashedData := Hash.sha256 data
+  -- The element is `d mod r`, with the 32 bytes of `d` read as a big-endian integer.
   Fr.ofNat (Base.bytesToNat hashedData.data.toList)
 
 end Fr

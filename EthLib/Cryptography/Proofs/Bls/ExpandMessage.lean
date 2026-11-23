@@ -13,13 +13,13 @@ public import Mathlib.Data.Rat.Floor
 
 Sources:
 
-- [RFC 9380 §5.2](https://www.rfc-editor.org/rfc/rfc9380#section-5.2), `hash_to_field`.
-- [RFC 9380 §5.3.1](https://www.rfc-editor.org/rfc/rfc9380#section-5.3.1), `expand_message_xmd`.
+- [RFC 9380 §5.2](https://www.rfc-editor.org/rfc/rfc9380#section-5.2), the hash to the field.
+- [RFC 9380 §5.3.1](https://www.rfc-editor.org/rfc/rfc9380#section-5.3.1), the message expansion.
 - [RFC 9380 §5.3.3](https://www.rfc-editor.org/rfc/rfc9380#section-5.3.3), DSTs over 255 bytes.
 - [RFC 8017 §4](https://www.rfc-editor.org/rfc/rfc8017#section-4), I2OSP and OS2IP.
 - [FIPS 180-4 §6.2](https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.180-4.pdf), SHA-256.
 
-The file restates `expand_message_xmd` and `hash_to_field` as a model over lists of bytes.
+The file restates the message expansion and the hash to the field as a model over lists of bytes.
 
 The model hashes with the FIPS 180-4 model of SHA-256.
 
@@ -68,7 +68,7 @@ def block (b0 dstPrime : List UInt8) : Nat → List UInt8
   | 1 => sha256 (b0 ++ i2osp 1 1 ++ dstPrime)
   | i + 2 => sha256 (strxor b0 (block b0 dstPrime (i + 1)) ++ i2osp (i + 2) 1 ++ dstPrime)
 
-/-- `expand_message_xmd` of RFC 9380 §5.3.1 with SHA-256.
+/-- The message expansion of RFC 9380 §5.3.1 with SHA-256.
 
 SHA-256 has `b_in_bytes = 32` and `s_in_bytes = 64`.
 
@@ -90,7 +90,9 @@ def securityLevel : Nat := 128
 /-- The bytes per element `L = ceil((ceil(log2(p)) + k) / 8)` of RFC 9380 §5. -/
 def fieldBytes : Nat := ⌈((Nat.clog 2 Fp.modulus + securityLevel : Nat) : ℚ) / 8⌉₊
 
-/-- `hash_to_field` of RFC 9380 §5.2 into `GF(p^2)`, where `m = 2`, with `expand_message_xmd`.
+/-- The hash to the field of RFC 9380 §5.2 into `GF(p^2)`, where `m = 2`.
+
+It reads the message expansion of §5.3.1.
 
 Each element is the pair `(e_0, e_1)` of its coordinates over `GF(p)`. -/
 def hashToField (msg dst : List UInt8) (count : Nat) :
@@ -105,27 +107,16 @@ end Spec
 
 /-! ## The pieces -/
 
-/-- The SHA-256 of the code is the model's on a message shorter than 2⁶¹ bytes. -/
+/-- The SHA-256 of the code is the model's on a message shorter than 2^61 bytes. -/
 private theorem hash_toList {x : ByteArray} (admitted : x.size < 2 ^ 61) :
     (Hash.Sha256.hash x).data.toList = Spec.sha256 x.data.toList := by
   rw [Hash.Sha256.hash_eq_spec x admitted, Spec.sha256, Array.toArray_toList]
 
-/-- The low byte of a number, as the code takes it. -/
-private theorem ofNat_and_255 (n : Nat) : UInt8.ofNat (n &&& 255) = UInt8.ofNat n := by
-  rw [show (255 : Nat) = 2 ^ 8 - 1 from rfl, Nat.and_two_pow_sub_one_eq_mod, UInt8.ofNat_mod_size]
-
-private theorem i2osp_one (n : Nat) : (i2osp n 1).data.toList = Spec.i2osp n 1 := by
-  simp only [i2osp, Spec.i2osp, Base.natToBytes, Base.natToBytes.go, Array.toList_ofFn,
-    List.ofFn_succ, List.ofFn_zero, ofNat_and_255]
-  simp
-
-private theorem i2osp_two (n : Nat) : (i2osp n 2).data.toList = Spec.i2osp n 2 := by
-  simp only [i2osp, Spec.i2osp, Base.natToBytes, Base.natToBytes.go, Array.toList_ofFn,
-    List.ofFn_succ, List.ofFn_zero, ofNat_and_255]
-  simp [Nat.shiftRight_eq_div_pow]
+/-- The code writes `n` on `len` bytes as the reference does. -/
+private theorem i2osp_toList (n len : Nat) : (i2osp n len).data.toList = Spec.i2osp n len := rfl
 
 @[simp] private theorem i2osp_size (n len : Nat) : (i2osp n len).size = len := by
-  simp [i2osp, ByteArray.size]
+  simp [i2osp, ByteArray.size, Base.natToBytes_length]
 
 private theorem strxor_toList (a b : ByteArray) :
     (strxor a b).data.toList = Spec.strxor a.data.toList b.data.toList :=
@@ -190,7 +181,7 @@ private theorem foldl_nextBlock (b0 dstPrime : ByteArray) (hb0 : b0.size = 32)
         = Spec.block b0.data.toList dstPrime.data.toList 1 := by
       rw [hash_toList (by simp only [ByteArray.size_append, i2osp_size]; omega), Spec.block,
         ByteArray.data_append, ByteArray.data_append, Array.toList_append, Array.toList_append,
-        i2osp_one]
+        i2osp_toList]
     simp [h1]
   | succ n ih =>
     obtain ⟨hl, hp, hs⟩ := ih
@@ -200,13 +191,13 @@ private theorem foldl_nextBlock (b0 dstPrime : ByteArray) (hb0 : b0.size = 32)
         = Spec.block b0.data.toList dstPrime.data.toList (n + 1 + 1) := by
       rw [hash_toList (by simp only [ByteArray.size_append, i2osp_size, strxor_size]; omega),
         Spec.block, ByteArray.data_append, ByteArray.data_append, Array.toList_append,
-        Array.toList_append, i2osp_one, strxor_toList, hp, show 2 + 1 * n = n + 2 by omega]
+        Array.toList_append, i2osp_toList, strxor_toList, hp, show 2 + 1 * n = n + 2 by omega]
     refine ⟨?_, hb, Hash.Sha256.hash_size _⟩
     rw [nextBlock, Array.toList_push, List.map_append, hl, List.range_succ (n := n + 1),
       List.map_append]
     simp only [List.map_cons, List.map_nil, hb]
 
-/-! ## `expand_message_xmd` -/
+/-! ## The message expansion -/
 
 /-- The tag that the code uses is the model's, and it has at most 255 bytes. -/
 private theorem shortDst_toList (dst : ByteArray) (hdst : dst.size + 17 < 2 ^ 61) :
@@ -228,7 +219,7 @@ private theorem shortDst_toList (dst : ByteArray) (hdst : dst.size + 17 < 2 ^ 61
     exact ⟨trivial, by omega⟩
 
 /--
-The message expansion is `expand_message_xmd` of RFC 9380 §5.3.1 with SHA-256.
+The message expansion is the one of RFC 9380 §5.3.1 with SHA-256.
 
 It holds for every message shorter than 2^61 - 323 bytes and every DST shorter than 2^61 - 17 bytes.
 
@@ -248,31 +239,33 @@ theorem expandMessageXmd_eq_spec (msg dst : ByteArray) (lenInBytes : Nat)
   · simp only [gt_iff_lt, hlen, ↓reduceIte, or_true]
     rfl
   by_cases hell : 255 < (lenInBytes + 32 - 1) / 32
-  · simp only [gt_iff_lt, hlen, hell, ↓reduceIte, true_or, sha256OutputSize]
+  · simp only [gt_iff_lt, hlen, hell, ↓reduceIte, true_or, Hash.Sha256.DIGEST_SIZE_BYTES]
     rfl
-  simp only [gt_iff_lt, hlen, hell, ↓reduceIte, or_self, sha256OutputSize]
+  simp only [gt_iff_lt, hlen, hell, ↓reduceIte, or_self, Hash.Sha256.DIGEST_SIZE_BYTES]
   obtain ⟨hD, hDsize⟩ := shortDst_toList dst hdst
   generalize (if 255 < dst.size then Hash.Sha256.hash (oversizeDstPrefix ++ dst) else dst) = D
     at hD hDsize ⊢
   have hlenD : D.data.toList.length = D.size := Array.length_toList
   rw [← hD, hlenD]
-  have hpad : Spec.i2osp 0 64 = (⟨Array.replicate sha256BlockSize 0⟩ : ByteArray).data.toList := by
+  have hpad : Spec.i2osp 0 64 =
+      (⟨Array.replicate Hash.Sha256.BLOCK_SIZE_BYTES 0⟩ : ByteArray).data.toList := by
     rw [Spec.i2osp, Base.natToBytes_zero_right, Array.toList_replicate]
     rfl
   set dp := D ++ i2osp D.size 1 with hdp_def
-  set mp := (⟨Array.replicate sha256BlockSize 0⟩ : ByteArray) ++ msg ++ i2osp lenInBytes 2
-    ++ i2osp 0 1 ++ dp with hmp_def
+  set mp := (⟨Array.replicate Hash.Sha256.BLOCK_SIZE_BYTES 0⟩ : ByteArray) ++ msg
+    ++ i2osp lenInBytes 2 ++ i2osp 0 1 ++ dp with hmp_def
   have hdp : dp.data.toList = D.data.toList ++ Spec.i2osp D.size 1 := by
-    rw [hdp_def, ByteArray.data_append, Array.toList_append, i2osp_one]
+    rw [hdp_def, ByteArray.data_append, Array.toList_append, i2osp_toList]
   have hdps : dp.size ≤ 256 := by
     rw [hdp_def, ByteArray.size_append, i2osp_size]
     omega
   have hmpl : mp.data.toList = Spec.i2osp 0 64 ++ msg.data.toList ++ Spec.i2osp lenInBytes 2
       ++ Spec.i2osp 0 1 ++ dp.data.toList := by
-    rw [hpad, ← i2osp_two, ← i2osp_one 0, hmp_def]
+    rw [hpad, ← i2osp_toList lenInBytes 2, ← i2osp_toList 0 1, hmp_def]
     simp only [ByteArray.data_append, Array.toList_append]
   have hmps : mp.size < 2 ^ 61 := by
-    have hz : (⟨Array.replicate sha256BlockSize 0⟩ : ByteArray).size = 64 := Array.size_replicate
+    have hz : (⟨Array.replicate Hash.Sha256.BLOCK_SIZE_BYTES 0⟩ : ByteArray).size = 64 :=
+      Array.size_replicate
     rw [hmp_def, ByteArray.size_append, ByteArray.size_append, ByteArray.size_append,
       ByteArray.size_append, hz, i2osp_size, i2osp_size]
     omega
@@ -297,7 +290,7 @@ theorem expandMessageXmd_eq_spec (msg dst : ByteArray) (lenInBytes : Nat)
     simp only [nextBlock] at hl
     simpa [List.flatMap_def] using congrArg (fun l => some (List.take lenInBytes l.flatten)) hl
 
-/-! ## `hash_to_field` -/
+/-! ## The hash to the field -/
 
 /-- The big-endian reading of the code is OS2IP. -/
 private theorem bytesToNat_eq_os2ip (bytes : List UInt8) :
@@ -318,17 +311,6 @@ theorem fieldBytes_eq : Spec.fieldBytes = 64 := by
   rw [Spec.fieldBytes, hlog, Spec.securityLevel]
   exact_mod_cast h
 
-/-- A loop that pushes one value per index builds the list of the values. -/
-private theorem foldl_push_toList {α : Type} (g : Nat → α) (n : Nat) (acc : Array α) :
-    ((List.range' 0 n).foldl (fun a i => a.push (g i)) acc).toList
-      = acc.toList ++ (List.range n).map g := by
-  induction n with
-  | zero => simp
-  | succ n ih =>
-    rw [List.range'_concat, List.foldl_append, List.foldl_cons, List.foldl_nil, Array.toList_push,
-      ih, List.range_succ, List.map_append, List.append_assoc]
-    simp
-
 /-- An element read by the code is OS2IP of its bytes, reduced modulo `p`. -/
 private theorem toZMod_fpFromBytesL (uniform : ByteArray) (off : Nat) :
     Fp.toZMod (fpFromBytesL (uniform.extract off (off + 64)) : Fp)
@@ -338,7 +320,7 @@ private theorem toZMod_fpFromBytesL (uniform : ByteArray) (off : Nat) :
   exact Fp.toZMod_ofNat _
 
 /--
-The hash to `Fp2` is `hash_to_field` of RFC 9380 §5.2 with `expand_message_xmd`.
+The hash to `Fp2` is the hash to the field of RFC 9380 §5.2, with the message expansion of §5.3.1.
 
 It holds for every message shorter than 2^61 - 323 bytes and every DST shorter than 2^61 - 17 bytes.
 
@@ -346,7 +328,7 @@ Each element is mapped to the pair of its coordinates in `ZMod p`.
 -/
 theorem hashToFieldFp2_eq_spec (msg dst : ByteArray) (count : Nat)
     (hmsg : msg.size + 323 < 2 ^ 61) (hdst : dst.size + 17 < 2 ^ 61) :
-    (hashToFieldFp2 msg dst count : Except BlsError (Array Fp2)).toOption.map
+    (hashToFieldFp2 msg dst count : Except BlsError (Vector Fp2 count)).toOption.map
         (fun us => us.toList.map fun u => (Fp.toZMod u.c0, Fp.toZMod u.c1))
       = Spec.hashToField msg.data.toList dst.data.toList count := by
   rw [Spec.hashToField, fieldBytes_eq, ← expandMessageXmd_eq_spec msg dst _ hmsg hdst]
@@ -355,14 +337,12 @@ theorem hashToFieldFp2_eq_spec (msg dst : ByteArray) (count : Nat)
   cases expandMessageXmd msg dst (count * 2 * 64) with
   | error e => rfl
   | ok uniform =>
-    simp only [bind, Except.bind, Std.Legacy.Range.forIn_eq_forIn_range',
-      List.forIn_pure_yield_eq_foldl, Std.Legacy.Range.size]
-    simp only [pure, Except.pure, Except.toOption, Option.map_some, Nat.sub_zero,
-      Nat.add_sub_cancel, Nat.div_one, foldl_push_toList, Array.mkEmpty_eq, List.map_map,
-      List.nil_append]
+    simp only [bind, Except.bind, pure, Except.pure, Except.toOption, Option.map_some]
     congr 1
-    apply List.map_congr_left
-    intro i _
-    simp only [Function.comp_apply, toZMod_fpFromBytesL, Nat.zero_add, Nat.add_comm 1]
+    apply List.ext_getElem
+    · simp
+    · intro i hi hj
+      simp only [Vector.toList_ofFn, List.getElem_map, List.getElem_ofFn,
+        List.getElem_range, toZMod_fpFromBytesL, Nat.zero_add, Nat.add_comm 1]
 
 end EthLib.Cryptography.Bls.HashToCurve

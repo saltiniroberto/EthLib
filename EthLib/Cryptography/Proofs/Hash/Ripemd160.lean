@@ -14,7 +14,6 @@ What is proved about RIPEMD-160:
 - Rotating a word left by `n` bits with `0 < n < 32` has left rotation by `32 - n` as its inverse.
 - Each step with a rotation of 1 to 31 bits permutes the five-word state, and so do both lines.
 - Padding fills whole blocks, with the least zeros that do, and keeps the message and the `0x80` byte in place.
-- Every digest is 20 bytes.
 - One block's compression, read as 32-bit vectors, is the compression of a model of the pseudo-code.
 - The hash of every message is the hash of the model, with no bound on the length of the message.
 
@@ -144,12 +143,12 @@ def blocks (message : ByteArray) (h : Vector Word 5) :
 The paper takes the last chaining variable as the hash result.
 
 The byte order is the one of MD4 (RFC 1320 §3.5), which the test values of the paper pin. -/
-def digest (h : Vector Word 5) : ByteArray :=
-  ⟨Array.ofFn fun i : Fin 20 =>
-    UInt8.ofNat ((h[i.val / 4]'(by omega)).toNat / 2 ^ (8 * (i.val % 4)) % 256)⟩
+def digest (h : Vector Word 5) : Vector UInt8 20 :=
+  Vector.ofFn fun i : Fin 20 =>
+    UInt8.ofNat ((h[i.val / 4]'(by omega)).toNat / 2 ^ (8 * (i.val % 4)) % 256)
 
 /-- RIPEMD-160 of a message: pad it, run every block from the initial value, and read the digest. -/
-def hash (message : ByteArray) : ByteArray :=
+def hash (message : ByteArray) : Vector UInt8 20 :=
   let input := padded message
   digest (blocks input initial (input.size / 64) (Nat.mul_div_le input.size 64))
 
@@ -166,7 +165,7 @@ def wholeCubeRoot (value : Nat) : Nat :=
   (List.range 3).foldl (fun best candidate => if candidate ^ 3 ≤ value then candidate else best) 0
 
 /--
-Whether a word is `int(2^30 * sqrt(prime))`.
+Whether a word is `floor(2^30 * sqrt(prime))`.
 
 It is exactly when `word^2 ≤ prime * 2^60 < (word + 1)^2`.
 -/
@@ -174,21 +173,25 @@ def isSquareRootTimes2Pow30 (prime word : Nat) : Bool :=
   word ^ 2 ≤ prime * 2 ^ 60 && prime * 2 ^ 60 < (word + 1) ^ 2
 
 /--
-Whether a word is `int(2^30 * cbrt(prime))`.
+Whether a word is `floor(2^30 * cbrt(prime))`.
 
 It is exactly when `word^3 ≤ prime * 2^90 < (word + 1)^3`.
 -/
 def isCubeRootTimes2Pow30 (prime word : Nat) : Bool :=
   word ^ 3 ≤ prime * 2 ^ 90 && prime * 2 ^ 90 < (word + 1) ^ 3
 
-/-- The constants of the left line are `int(2^30 * sqrt(p))` for p = 2, 3, 5, 7, as in `rmd160.txt`. -/
+/-- The constants of the left line are `floor(2^30 * sqrt(p))` for p = 2, 3, 5, 7.
+
+The authors' `rmd160.txt` gives the same values. -/
 theorem K_from_square_roots :
     ([2, 3, 5, 7].zip ((K.toList.drop 1).map UInt32.toNat)).all
       (fun pair => isSquareRootTimes2Pow30 pair.1 pair.2) = true ∧
     K[0] = 0 := by
   decide +kernel
 
-/-- The constants of the right line are `int(2^30 * cbrt(p))` for p = 2, 3, 5, 7, as in `rmd160.txt`. -/
+/-- The constants of the right line are `floor(2^30 * cbrt(p))` for p = 2, 3, 5, 7.
+
+The authors' `rmd160.txt` gives the same values. -/
 theorem K'_from_cube_roots :
     ([2, 3, 5, 7].zip ((K'.toList.take 4).map UInt32.toNat)).all
       (fun pair => isCubeRootTimes2Pow30 pair.1 pair.2) = true ∧
@@ -274,15 +277,14 @@ theorem s'_bounds (j : Fin 80) : 0 < s'[j].toNat ∧ s'[j].toNat < 32 := by
 /--
 The inverse of one step for a rotation of 1 to 31 bits.
 
-From `#v[E, T, B, rol_10(C), D]`, left rotation by 22 recovers `C`.
+From `(E, T, B, rol_10(C), D)`, left rotation by 22 recovers `C`.
 
 Left rotation of `T - E` by `32 - amount`, then subtraction, recovers `A`.
 -/
-private def unstep (g : Fin 5) (state : Vector UInt32 5) (word constant amount : UInt32) :
-    Vector UInt32 5 :=
-  let c := rol state[3] 22
-  let a := rol (state[1] - state[0]) (32 - amount) - constant - word - f g state[2] c state[4]
-  #v[a, state[2], c, state[4], state[0]]
+private def unstep (g : Fin 5) (v : Vars) (word constant amount : UInt32) : Vars :=
+  let c := rol v.D 22
+  let a := rol (v.B - v.A) (32 - amount) - constant - word - f g v.C c v.E
+  ⟨a, v.C, c, v.E, v.A⟩
 
 /-- One step with a rotation of 1 to 31 bits permutes the five-word state. -/
 theorem step_bijective (g : Fin 5) (word constant amount : UInt32)
@@ -295,23 +297,12 @@ theorem step_bijective (g : Fin 5) (word constant amount : UInt32)
     rol_rol x 22 (by decide) (by decide)
   refine ⟨Function.LeftInverse.injective (g := (unstep g · word constant amount)) fun v => ?_,
     Function.RightInverse.surjective (g := (unstep g · word constant amount)) fun v => ?_⟩
-  · ext k hk
-    match k, hk with
-    | 0, _ => simp [step, unstep, UInt32.add_sub_cancel, rol_rol _ _ h0 h32, hc1]
-    | 1, _ => simp [step, unstep]
-    | 2, _ => simp [step, unstep, hc1]
-    | 3, _ => simp [step, unstep]
-    | 4, _ => simp [step, unstep]
-  · ext k hk
-    match k, hk with
-    | 0, _ => simp [step, unstep]
-    | 1, _ =>
-      have hrot : ∀ u : UInt32, rol (rol u (32 - amount)) amount = u := fun u => by
-        simpa only [hcancel] using rol_rol u (32 - amount) (by omega) (by omega)
-      simp [step, unstep, UInt32.sub_add_cancel, hrot]
-    | 2, _ => simp [step, unstep]
-    | 3, _ => simp [step, unstep, hc2]
-    | 4, _ => simp [step, unstep]
+  · obtain ⟨A, B, C, D, E⟩ := v
+    simp [step, unstep, UInt32.add_sub_cancel, rol_rol _ _ h0 h32, hc1]
+  · obtain ⟨A, B, C, D, E⟩ := v
+    have hrot : ∀ u : UInt32, rol (rol u (32 - amount)) amount = u := fun u => by
+      simpa only [hcancel] using rol_rol u (32 - amount) (by omega) (by omega)
+    simp [step, unstep, UInt32.sub_add_cancel, hrot, hc2]
 
 /-- Folding a list of bijective updates permutes the state. -/
 private theorem foldl_bijective {α β : Type} (stepFn : β → α → β) :
@@ -344,9 +335,9 @@ theorem line_right_bijective (X : Vector UInt32 16) :
 
 /-! ## Agreement with the model -/
 
-/-- A five-word state read as the variables of the model. -/
-def toVars (v : Vector UInt32 5) : Spec.Vars :=
-  ⟨v[0].toBitVec, v[1].toBitVec, v[2].toBitVec, v[3].toBitVec, v[4].toBitVec⟩
+/-- The variables of a line read as the variables of the model. -/
+def toVars (v : Vars) : Spec.Vars :=
+  ⟨v.A.toBitVec, v.B.toBitVec, v.C.toBitVec, v.D.toBitVec, v.E.toBitVec⟩
 
 /-- The function of group `g` is `f(j)` of the model for every step `j` in that group. -/
 private theorem f_toBitVec_of_div (g : Fin 5) (j : Nat) (hg : j / 16 = g.val) (x y z : UInt32) :
@@ -397,7 +388,7 @@ private theorem foldl_hom {α β γ : Type} (φ : α → β) (F : α → γ → 
   | j :: js, a => by rw [List.foldl_cons, List.foldl_cons, foldl_hom φ F G hφ js, hφ]
 
 /-- Step `j` of the left line is step `j` of the left line of the model. -/
-theorem step_left_toVars (X : Vector UInt32 16) (v : Vector UInt32 5) (j : Fin 80) :
+theorem step_left_toVars (X : Vector UInt32 16) (v : Vars) (j : Fin 80) :
     toVars (step ⟨j.val / 16, by omega⟩ v X[r[j]] K[(⟨j.val / 16, by omega⟩ : Fin 5)] s[j]) =
       Spec.stepLeft (X.map UInt32.toBitVec) (toVars v) j := by
   have hf (x y z : UInt32) := (f_toBitVec j x y z).1
@@ -408,7 +399,7 @@ theorem step_left_toVars (X : Vector UInt32 16) (v : Vector UInt32 5) (j : Fin 8
   simp [step, toVars, Spec.stepLeft, hf, hs, h10]
 
 /-- Step `j` of the right line is step `j` of the right line of the model. -/
-theorem step_right_toVars (X : Vector UInt32 16) (v : Vector UInt32 5) (j : Fin 80) :
+theorem step_right_toVars (X : Vector UInt32 16) (v : Vars) (j : Fin 80) :
     toVars (step ⟨4 - j.val / 16, by omega⟩ v X[r'[j]] K'[(⟨j.val / 16, by omega⟩ : Fin 5)] s'[j]) =
       Spec.stepRight (X.map UInt32.toBitVec) (toVars v) j := by
   have hf (x y z : UInt32) := (f_toBitVec j x y z).2
@@ -421,9 +412,9 @@ theorem step_right_toVars (X : Vector UInt32 16) (v : Vector UInt32 5) (j : Fin 
 /-- The loop of the model runs the left line and the right line of the code side by side. -/
 theorem lines_toVars (X : Vector UInt32 16) (h : Vector UInt32 5) :
     Spec.lines (X.map UInt32.toBitVec) (h.map UInt32.toBitVec) =
-      (toVars (line X h K r s false), toVars (line X h K' r' s' true)) := by
-  have hstart : Spec.Vars.ofChain (h.map UInt32.toBitVec) = toVars h := by
-    simp [Spec.Vars.ofChain, toVars]
+      (toVars (line X (.ofChain h) K r s false), toVars (line X (.ofChain h) K' r' s' true)) := by
+  have hstart : Spec.Vars.ofChain (h.map UInt32.toBitVec) = toVars (.ofChain h) := by
+    simp [Spec.Vars.ofChain, toVars, Vars.ofChain]
   unfold Spec.lines line
   rw [foldl_pair, hstart]
   simp only [Bool.false_eq_true, ↓reduceIte]
@@ -454,9 +445,9 @@ theorem little32_toBitVec (block : ByteArray) (start : Nat) (within : start + 4 
       BitVec.getLsbD_of_ge _ (i - 16) (by omega : 8 ≤ i - 16)]
 
 /-- The final mix of the chaining variable with both lines, read as 32-bit vectors. -/
-private theorem combine_toBitVec (h left right : Vector UInt32 5) :
-    (#v[h[1] + left[2] + right[3], h[2] + left[3] + right[4], h[3] + left[4] + right[0],
-        h[4] + left[0] + right[1], h[0] + left[1] + right[2]] : Vector UInt32 5).map
+private theorem combine_toBitVec (h : Vector UInt32 5) (left right : Vars) :
+    (#v[h[1] + left.C + right.D, h[2] + left.D + right.E, h[3] + left.E + right.A,
+        h[4] + left.A + right.B, h[0] + left.B + right.C] : Vector UInt32 5).map
       UInt32.toBitVec =
       #v[(h.map UInt32.toBitVec)[1] + (toVars left).C + (toVars right).D,
         (h.map UInt32.toBitVec)[2] + (toVars left).D + (toVars right).E,
@@ -467,13 +458,13 @@ private theorem combine_toBitVec (h left right : Vector UInt32 5) :
 
 /-- The left line of the code, read as the variables of the model, is the left line of the model. -/
 private theorem toVars_line_left (X : Vector UInt32 16) (h : Vector UInt32 5) :
-    toVars (line X h K r s false) =
+    toVars (line X (.ofChain h) K r s false) =
       (Spec.lines (X.map UInt32.toBitVec) (h.map UInt32.toBitVec)).1 := by
   rw [lines_toVars]
 
 /-- The right line of the code, read as variables of the model, is the right line of the model. -/
 private theorem toVars_line_right (X : Vector UInt32 16) (h : Vector UInt32 5) :
-    toVars (line X h K' r' s' true) =
+    toVars (line X (.ofChain h) K' r' s' true) =
       (Spec.lines (X.map UInt32.toBitVec) (h.map UInt32.toBitVec)).2 := by
   rw [lines_toVars]
 
@@ -574,10 +565,6 @@ theorem pad_length_suffix (message : ByteArray) :
 
 /-! ## The hash -/
 
-/-- Every digest is 20 bytes long, whatever the message. -/
-@[simp] theorem hash_size (message : ByteArray) : (hash message).size = 20 := by
-  simp only [hash, digest, ByteArray.size, Array.size_ofFn]
-
 /-- Byte `i` of the length is digit `i` in base 256 of the low 64 bits of the bit length. -/
 theorem lengthBytes_digit (size : Nat) (i : Fin 8) :
     ((lengthBytes size)[i.val]'(by simp)).toNat = size * 8 % 2 ^ 64 / 2 ^ (8 * i.val) % 256 := by
@@ -629,15 +616,13 @@ theorem foldl_compress_toBitVec (bytes : ByteArray) (h : Vector UInt32 5) (count
 /-- The digest is the model's digest. -/
 theorem digest_eq_spec (state : Vector UInt32 5) :
     digest state = Spec.digest (state.map UInt32.toBitVec) := by
-  apply ByteArray.ext
-  apply Array.ext
-  · simp [digest, Spec.digest]
-  · intro i _ _
-    apply UInt8.toNat_inj.mp
-    -- Each byte is one base-256 digit of its word.
-    simp [digest, Spec.digest, UInt32.toNat_shiftRight, Nat.shiftRight_eq_div_pow,
-      UInt32.toNat_mul, UInt32.toNat_ofNat]
-    rw [Nat.mod_eq_of_lt (show 8 * (i % 4) < 32 by omega)]
+  apply Vector.ext
+  intro i _
+  apply UInt8.toNat_inj.mp
+  -- Each byte is one base-256 digit of its word.
+  simp [digest, Spec.digest, UInt32.toNat_shiftRight, Nat.shiftRight_eq_div_pow,
+    UInt32.toNat_mul, UInt32.toNat_ofNat]
+  rw [Nat.mod_eq_of_lt (show 8 * (i % 4) < 32 by omega)]
 
 /--
 RIPEMD-160 is the hash of the authors' pseudo-code with the padding of MD4, for every message.

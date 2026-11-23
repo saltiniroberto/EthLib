@@ -4,15 +4,16 @@ A preset or a configuration of the beacon chain is a list of named values.
 EthLib writes each list in Lean, and a typo in one value would change every rule that reads it.
 So the Python suite compares the Lean values with the files that consensus-specs publishes.
 
-The directory `parameters/` holds those files: the mainnet and minimal presets from Phase 0 to Fulu, and the mainnet and minimal configurations.
+The directory `parameters/` holds those files: the mainnet and minimal presets from Phase 0 to Heze, and the mainnet and minimal configurations.
 They come from `ethereum/consensus-specs` at commit `aa16bb4c156184e9548a997d53efaf2a228a6304`, the release `v1.7.0-beta.4`.
 Each file keeps its upstream bytes and its upstream path below `parameters/`, and `parameters/SHA256SUMS` records its digest.
 
 `bindings/python/tests/consensus/test_parameters.py` reads them and runs three comparisons:
 
 - Each preset in Lean holds every value of the preset files, under the same name.
-- Each configuration in Lean holds every value of its file up to Fulu.
+- Each configuration in Lean holds every value of its file, except two kinds.
   The gossip message ID defines the two message domains of the file as constants, so the configuration leaves them out.
+  It also leaves out the values of the feature forks of EIP-8198 and EIP-8321, which no fork schedules.
 - At each fork from Phase 0 on, the parameters in Lean hold each value that a fork replaces.
   Each one is the value of the latest fork that names it.
 
@@ -170,6 +171,10 @@ At Electra and Fulu it keeps the smallest case of each handler, of the optimisti
 Electra adds the handler `deposit_with_reorg`.
 At Fulu its `on_block` case is one whose block lacks the columns that the node samples.
 At Gloas and Heze it also keeps the smallest case of each fast confirmation suite.
+It also keeps two fork choice compliance cases of `block_cover_test`, from `comptests.tar.gz` of the same release, one at Altair and one at Gloas.
+A generator derives these cases from models of block trees.
+In the Altair case a block carries a vote for a block that the store does not know yet.
+In the Gloas case the members of the payload committee vote.
 `bindings/python/tests/consensus/test_fork_choice.py` runs each case on one store in Lean and compares each step with the case.
 
 The directory `gossip/` holds gossip validation cases from `minimal.tar.gz` in the same way.
@@ -225,7 +230,7 @@ Their SHA-256 digests are:
 - `mainnet.tar.gz`: `67762986572372a08d3b182535aa760433c86e174e14e0bbd756f350dd19398c`, 967,886,924 bytes.
 - `minimal.tar.gz`: `26d09aea70c62ed235a120a95082d544ab1c2e6fe36bd35ea1bd5da62f3b7b68`, 468,730,308 bytes.
 
-The directory `builder_api/` holds the examples of the Builder API, from `ethereum/builder-specs` at commit `fce64468a81a87892d7cb9b4858272bb3d010e50`.
+The directory `builder_api/` holds the examples of the Builder API, from `ethereum/builder-specs` at commit `ea92eff73ad77c33d3b59a2033ffa02dfae5ee05`.
 They are SSZ examples and their JSON forms in `examples/<fork>/`, copied byte for byte under their fork.
 From Bellatrix to Fulu, they are the files `signed_*`: every fork has a signed bid and a signed blinded block.
 Bellatrix also has a signed validator registration.
@@ -235,3 +240,84 @@ For Gloas they are every file of `examples/gloas/`: a signed request authenticat
 It checks signed roots against the roots of their message and signature, and Gloas roots with independent SSZ calculations.
 It also compares a few fields with the JSON form.
 The signatures of the examples are placeholders, so the tests of the signature checks sign their own messages.
+
+The directory `beacon_api/` holds the schemas of the Beacon API, from `ethereum/beacon-APIs` at commit `0ed12552077c9927ba2599ee632e76b2caf021d7`.
+A schema says how the JSON of the API spells a container: the keys of each object, and the pattern of each string.
+The files are copied byte for byte under their paths in that repository.
+`beacon_api/SHA256SUMS` records the digest of each file.
+They are the files of `types/` that define the containers of the `ssz_static/` cases, and the files that the schemas of those containers refer to.
+Two of those references, in `types/altair/sync_committee.yaml`, pass through `beacon-node-oapi.yaml`, so the directory holds that file too.
+Some other references of these files point to files that the directory does not hold, and the tests follow none of them.
+
+`bindings/python/tests/consensus/test_beacon_api_json.py` writes the JSON of the `ssz_static/` cases through the bindings, and checks it against the schemas.
+It checks every case of a fork that has a consensus version, so it leaves out the Heze cases.
+It also leaves out the containers that no schema defines, such as `SigningData`, and it asserts that list of names.
+It reads the JSON back, in lowercase and in uppercase hex, and compares the bytes with the case.
+The schemas give the lengths of lists and strings for the mainnet preset, so the test checks them only on mainnet cases.
+
+A schema can give an example of a string.
+The test takes the case with the most compressed bytes of each container at each preset and fork.
+In it, the test takes one string of each type and shape of path, where the indices of lists do not count.
+It puts the example in place of that string, unless the string is hex of a fixed length that the example does not have.
+It then reads the document through the bindings.
+
+The examples of `builder_api/` also come with JSON forms.
+The test compares the JSON of the bindings with them, and reads them back to the same bytes.
+
+The directory `relay_api/` holds files of the Relay API, from `flashbots/relay-specs` at commit `a4e0a50d9d46bfe881fd74cc7e0db366371f4eed`.
+The source has no tag and no release; this commit is its Fulu update.
+The files are copied byte for byte under their paths in that repository.
+`examples/<fork>/submit_block_request.json` is the JSON example of a block submission, from Bellatrix to Fulu.
+`specs/<fork>/builder.md` is the document that defines the containers of the submission at that fork.
+
+`bindings/python/tests/consensus/test_relay_api.py` reads the payload of each example through the bindings, and from Deneb its blobs bundle, from Electra its requests.
+The bid traces of the examples lack the key of the proposer, so the test checks that the bindings refuse them.
+The blobs of the Deneb and Electra examples hold 32 bytes, not the 131,072 bytes of a blob.
+The test checks that the bindings refuse those bundles too.
+It then adds the key and pads each blob with zeros, and checks the bytes and the root of the whole submission.
+It also reads the containers of the documents, and computes their roots in Python from the completed examples.
+They agree with the roots of EthLib, except for the requests.
+The Electra document bounds the consolidation requests of a payload by 1, and Fulu keeps that bound.
+The mainnet preset bounds them by 2, so the trees of the two lists have different depths.
+The test checks that the roots differ, and that they agree when the bound of the preset replaces that of the documents.
+Another test builds the bid that a relay serves from each completed example, and from a generated submission.
+It checks the header against the payload, with the roots of its lists computed in Python.
+It also checks the value, the key, and from Deneb the commitments and from Electra the requests.
+Two more tests build the list of validators that a relay serves from the minimal Fulu state of `light_client/minimal/fulu/light_client/single_merkle_proof/BeaconState/current_sync_committee_merkle_proof`.
+The first registers every validator and compares the list with the proposer lookahead of the state, read from its JSON; with no registration the list is empty.
+The second moves the state inside an epoch, replaces the lookahead, registers one validator, and checks that only the slots of that validator have entries.
+A last test checks that the list is refused at the forks before and after Fulu.
+
+The directory `keymanager_api/` holds files of the Keymanager API, from `ethereum/keymanager-APIs` at commit `3e7c64e2118f819a51de7093ea2b2f03bb2f8f6e`.
+The files are copied byte for byte under their paths in that repository.
+`keymanager-oapi.yaml` is the OpenAPI document, which names the schemas of the API.
+`types/` holds the files that define those schemas, with an example of most of them.
+`apis/builder_config.yaml` defines the builder configuration calls, with an example of a get and of a set.
+The test runs both examples through the calls, which read and write the schemas `BuilderConfig` and `BuilderEntry`.
+The source has no other test vectors.
+
+`bindings/python/tests/consensus/test_keymanager_api.py` reads the example of each schema that EthLib specifies through the bindings, and checks what the writer gives back.
+A schema with no example of its own takes the examples of its fields.
+The test also checks the letter case of hex, the pattern of an integer, and the codes of the errors.
+The same file runs the call that imports keystores, on keystores that it builds with PBKDF2 and AES-128-CTR, and on the PBKDF2 keystore of ERC-2335 in `tests/cryptography/keystore/`.
+It checks the example of issue #2136 and the cases of the use case "Add a key" in `use-cases/README.md` of the source.
+It also lists the keys of a client, and runs the use case "Delete a key" of the source, with the request `a, a, b, c` and its statuses.
+It runs the calls on remote keys with the example of issue #2139: an import of `a, b, b` onto `a`, then a delete of `b, c`.
+It moves a key from one client to another with a delete and an import, as the use case "Move a key" of the source says.
+It runs the example of issue #2140 on the fee recipient, and sets the gas limit and the graffiti of a key, with the examples of the types as the defaults of the client.
+It signs the voluntary exit of the case `basic` of the voluntary exits of `operations/minimal/`, at Capella and at Deneb, with the key of its validator, and checks the signature of the case byte for byte.
+
+The directory `remote_signing_api/` holds the sign endpoint of the Remote-signing API, from `ethereum/remote-signing-api` at commit `514525ca961a9d001e96a02bf870285a8ae401a4`.
+The file `signing/paths/sign.yaml` is copied byte for byte under its path in that repository.
+It defines the endpoint, and it holds one example request for each kind of request, and for each version of a versioned body.
+`bindings/python/tests/consensus/test_remote_signing_api.py` reads each example that matches the schemas through the bindings, and checks that writing it again gives the same document.
+Two examples do not spell their fields as the schemas do: the fork info of `AGGREGATION_SLOT`, and the whole deprecated `BLOCK` example, write camel case.
+The test checks that the bindings refuse them, and that the first one reads once its fork info takes the spelling of the schema.
+The examples name no preset, and five of them fix the size of a bitfield.
+The Altair block and the sync committee contribution have the sizes of the minimal preset, and the Electra, Fulu and Gloas aggregates those of the mainnet preset.
+The test reads each example under every preset whose sizes it has, and checks the refusal under the other one.
+The test also computes the root that the signer signs for each example of a kind before Gloas that carries a root and reads, and compares it with the example's `signingRoot`, under the minimal configuration, whose genesis fork version is that of the examples.
+For the Electra and Fulu aggregates, the test also computes that root under the mainnet preset with its own merkleization.
+The test also reads the examples of the five kinds that Gloas adds, which carry no signing root.
+It computes the roots of the payload attestation, the preferences and the authentication with its own merkleization, and records those of the bid and the envelope, which are progressive containers.
+Finally, it runs the sign endpoint on each example that reads, with a fixed secret key, and checks each signature with `py_ecc`.

@@ -2,6 +2,7 @@ module
 
 public import EthLib.Consensus.Proofs.HonestAggregation
 public import EthLib.Consensus.Proofs.Gossip.SyncCommittee
+public import EthLib.Consensus.Proofs.HonestValidator
 public import EthLib.Cryptography.Proofs.Bls.AggregatePerm
 
 /-!
@@ -14,6 +15,8 @@ A key that holds several seats contributes its signature once for each of those 
 Repeated messages for a key do not add signatures: each seat takes the first matching message.
 
 The selected secret keys must not sum to zero.
+
+A contribution and proof that its aggregator makes and signs passes both of its signature checks.
 -/
 
 @[expose] public section
@@ -104,14 +107,12 @@ private theorem contributionEntries_verify
         Signatures.sign (secret entry.1) message = .ok entry.2.signature)
     {signature : BLSSignature}
     (aggregated : Signatures.aggregate
-      ((contributionEntries keyed pubkeys).map fun entry =>
-        Base.packBytes entry.2.signature).toArray =
+      ((contributionEntries keyed pubkeys).map fun entry => entry.2.signature).toArray =
         .ok signature)
     (nonzero : (((contributionEntries keyed pubkeys).map fun entry => secret entry.1).map
       (·.val)).sum ≠ 0) :
     Signatures.fastAggregateVerify
-      (((contributionEntries keyed pubkeys).map Prod.fst).map Base.packBytes).toArray message
-      (Base.packBytes signature) = true := by
+      ((contributionEntries keyed pubkeys).map Prod.fst).toArray message signature = true := by
   have signed : List.Forall₂ (fun key sig => Signatures.sign key message = .ok sig)
       ((contributionEntries keyed pubkeys).map fun entry => secret entry.1)
       ((contributionEntries keyed pubkeys).map fun entry => entry.2.signature) := by
@@ -122,17 +123,16 @@ private theorem contributionEntries_verify
     intro empty
     simp [empty] at nonzero
   have verifies := Signatures.fastAggregateVerify_aggregate_of_forall₂ signed nonempty nonzero
-    (by simpa [List.map_map, Signatures.sigBytes, Base.packBytes, Function.comp_def]
-      using aggregated)
+    (by simpa [List.map_map, Function.comp_def] using aggregated)
   have keys : (((contributionEntries keyed pubkeys).map fun entry => secret entry.1).map
-      Signatures.pkBytes) =
-      ((contributionEntries keyed pubkeys).map Prod.fst).map Base.packBytes := by
-    simp only [List.map_map]
+      Signatures.skToPk) =
+      (contributionEntries keyed pubkeys).map Prod.fst := by
+    -- A lambda, not a composition, so the kernel never unfolds a key to compare it.
+    simp only [List.map_map, Function.comp_def]
     apply List.map_congr_left
     intro entry member
-    exact congrArg Base.packBytes
-      (honest entry (mem_keyed_of_mem_contributionEntries member)).1.symm
-  simpa only [keys, Signatures.sigBytes, Base.packBytes] using verifies
+    exact (honest entry (mem_keyed_of_mem_contributionEntries member)).1.symm
+  simpa only [keys] using verifies
 
 /-- A contribution of honest messages passes the signature check of its topic.
 
@@ -197,8 +197,8 @@ theorem isValidContributionSignature_constructSyncCommitteeContribution
       exact honest original sameMessage.1 (of_decide_eq_true sameMessage.2).1
         (of_decide_eq_true sameMessage.2).2 validator (mapError_ok_iff.mp found)
     have aggregated' : Signatures.aggregate
-        ((contributionEntries keyed pubkeys).map fun entry =>
-          Base.packBytes entry.2.signature).toArray = .ok signature := by
+        ((contributionEntries keyed pubkeys).map fun entry => entry.2.signature).toArray =
+          .ok signature := by
       rw [mapError_ok_iff] at aggregated
       simpa only [contributionEntries, pubkeys, pubkeysEq, List.map_filterMap,
         List.filterMap_map, Function.comp_def] using aggregated
@@ -218,17 +218,9 @@ theorem isValidContributionSignature_constructSyncCommitteeContribution
       entriesHonest aggregated' nonzero'
     have participants :
         (pubkeys.zip (pubkeys.map fun pubkey => keyed.any (·.1 = pubkey))).filterMap
-          (fun entry => if entry.2 then some (Base.packBytes entry.1) else none) =
-        ((contributionEntries keyed pubkeys).map Prod.fst).map Base.packBytes := by
-      have projection :
-          (fun entry : BLSPubkey × Bool =>
-            if entry.2 then some (Base.packBytes entry.1) else none) =
-          (fun (pubkey, bit) => if bit then some (Base.packBytes pubkey) else none) := by
-        funext entry
-        cases entry
-        rfl
-      rw [projection]
-      rw [← map_selected, ← contributionEntries_keys]
+          (fun entry => if entry.2 then some entry.1 else none) =
+        (contributionEntries keyed pubkeys).map Prod.fst :=
+      (contributionEntries_keys keyed pubkeys).symm
     simp only [isValidContributionSignature, domained, rooted, Except.mapError, bind,
       Except.bind, pure, Except.pure]
     apply congrArg (Except.ok (ε := ForkChoiceError))
@@ -316,5 +308,65 @@ theorem validateContributionAndProof_eq_accept_of_construct
   rw [validateContributionAndProof_eq_accept clock head found members selection bySigner
     participants]
   simp only [inside, bitsSet, and_true, true_and]
+
+/-- An honest contribution and proof is accepted on its topic exactly when the other checks pass.
+
+The aggregator makes it from the contribution and signs it.
+
+It uses the secret key behind its registered public key.
+
+It signs with the head state of the receiver.
+
+Its selection proof and its signature then pass their checks with no further hypothesis.
+
+The clock, head state, domain, signing root and committee computations must succeed. -/
+theorem validateContributionAndProof_eq_accept_of_getContributionAndProof
+    {config : Config} {state : BeaconState preset fork} {committee : SyncCommittee preset}
+    {blockRoot : Root} {subcommitteeIndex : UInt64} {messages : List SyncCommitteeMessage}
+    {signed : SignedContributionAndProof preset} {domain : Domain} {signingRoot : Root}
+    {seen : Seen} {store : Store preset fork} {altair : .altair ≤ fork}
+    {currentTimeMs : UInt64} {current : Bool} {aggregator : Validator}
+    {key : Signatures.SecretKey} (secret : BLSPubkey → Signatures.SecretKey)
+    (built : constructSyncCommitteeContribution state committee blockRoot subcommitteeIndex
+      messages = .ok signed.message.contribution)
+    (domained : getDomain config state DOMAIN_SYNC_COMMITTEE
+      (some (computeEpochAtSlot preset state.slot)) = .ok domain)
+    (rooted : computeSigningRoot blockRoot domain = .ok signingRoot)
+    (honest : ∀ message ∈ messages, message.slot = state.slot →
+      message.beaconBlockRoot = blockRoot → ∀ validator,
+      getValidator state message.validatorIndex = .ok validator →
+        validator.pubkey = Signatures.skToPk (secret validator.pubkey) ∧
+          Signatures.sign (secret validator.pubkey) (Base.packBytes signingRoot) =
+            .ok message.signature)
+    (nonzero : ((((syncSubcommitteePubkeys committee subcommitteeIndex.toNat).zip
+        signed.message.contribution.aggregationBits.bits.toList).filterMap
+        (fun (pubkey, bit) => if bit then some (secret pubkey) else none)).map (·.val)).sum ≠ 0)
+    (clock : store.isCurrentSlot config signed.message.contribution.slot currentTimeMs =
+      .ok current)
+    (head : store.headState config = .ok state)
+    (found : state.validators.data[signed.message.aggregatorIndex.toNat]? = some aggregator)
+    (owned : aggregator.pubkey = Signatures.skToPk key)
+    (members : getSyncSubcommitteePubkeys state altair
+      signed.message.contribution.subcommitteeIndex =
+        .ok (syncSubcommitteePubkeys committee subcommitteeIndex.toNat))
+    (made : getContributionAndProof config state signed.message.aggregatorIndex
+      signed.message.contribution key = .ok signed.message)
+    (signedBy : getContributionAndProofSignature config state signed.message key =
+      .ok signed.signature) :
+    validateContributionAndProof config .bls seen store altair signed currentTimeMs = .ok .accept ↔
+      isNonStrictSuperset (seen.contributionBits
+          (signed.message.contribution.slot, signed.message.contribution.beaconBlockRoot,
+            signed.message.contribution.subcommitteeIndex))
+          signed.message.contribution.aggregationBits.bits.toList = false ∧
+        (signed.message.contribution.slot, signed.message.aggregatorIndex,
+          signed.message.contribution.subcommitteeIndex) ∉ seen.syncContributionAggregatorKeys ∧
+        current = true ∧ isSyncCommitteeAggregator preset signed.message.selectionProof = true ∧
+        aggregator.pubkey ∈ syncSubcommitteePubkeys committee subcommitteeIndex.toNat := by
+  have selection := (getContributionAndProof_spec made).2.2
+  have bySigner := isValidSignatureAtSlot_getContributionAndProofSignature signedBy
+  rw [← owned] at selection bySigner
+  rw [validateContributionAndProof_eq_accept_of_construct secret built domained rooted honest
+    nonzero clock head found members selection bySigner]
+  simp only [and_true]
 
 end EthLib.Consensus

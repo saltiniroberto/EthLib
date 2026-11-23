@@ -3,6 +3,7 @@ module
 public import EthLib.Base.Proofs.Fork
 public import EthLib.Execution.Evm.Instructions.EnvironmentData
 public import EthLib.Execution.Proofs.Evm.Step
+public import EthLib.Execution.Proofs.Fees.BlobBaseFee
 
 /-!
 # Proofs: `Evm.Instructions.EnvironmentData`
@@ -21,6 +22,14 @@ Then BLOCKHASH puts the hash of the block in place of the number.
 
 BLOBHASH puts the versioned hash in place of the index.
 
+CHAINID pays the base price and pushes the chain id, from Istanbul on.
+
+BLOBBASEFEE pays the base price and pushes the blob base fee, from Dencun on.
+
+A fee of `2^256` or more aborts the execution instead.
+
+Below the threshold of a mainnet blob schedule, the fee is below `2^256`.
+
 SLOTNUM pays the base price and pushes the slot of the block, from Glamsterdam on.
 
 Each instruction exists exactly from the fork that adds its opcode.
@@ -35,6 +44,9 @@ None of them changes memory either.
 namespace EthLib.Execution.Evm
 
 open EthLib.Base (Fork Hash32 U256)
+open EthLib.Execution.Fees.BlobBaseFee
+  (blobBaseFeeOverflowExcess blobSchedule getBaseFeePerBlobGas
+    getBaseFeePerBlobGas_blobSchedule_lt_iff)
 open GasCosts
 
 variable {fork : Fork} {Meter : Type} [GasMeter Meter]
@@ -130,6 +142,21 @@ theorem isSome_environmentStep {op : Op} :
   cases op <;> simp [environmentStep, Op.since, Fork.frontier_le] <;> split <;>
     simp_all
 
+/-- CHAINID, from Istanbul, on a stack with room: pay the base price, push the chain id.
+
+Its price is the base price, 2 gas, as EIP-1344 gives. -/
+theorem environmentStep_chainid (h : .istanbul ≤ fork) {evm : Evm fork Meter}
+    (room : evm.stack.val.length < STACK_LIMIT) :
+    ∃ step, environmentStep fork .chainid = some step ∧
+      step evm = (GasMeter.charge evm.gas GasCosts.BASE).map fun gas =>
+        { evm with
+          gas
+          stack := ⟨BitVec.ofNat 256 evm.message.blockEnv.chainId.toNat :: evm.stack.val, room⟩
+          pc := evm.pc + 1 } :=
+  ⟨readFrame GasCosts.OPCODE_CHAINID fun evm =>
+      BitVec.ofNat 256 evm.message.blockEnv.chainId.toNat,
+    by simp [environmentStep, h], readFrame_of_length_lt room⟩
+
 /-- SLOTNUM, from Glamsterdam, on a stack with room: pay the base price, push the slot.
 
 Its price is the base price, 2 gas, as EIP-7843 gives. -/
@@ -146,6 +173,60 @@ theorem environmentStep_slotnum (h : .glamsterdam ≤ fork) {evm : Evm fork Mete
       BitVec.ofNat 256 (evm.message.blockEnv.slotNumber h).toNat,
     by simp [environmentStep, h], readFrame_of_length_lt room⟩
 
+/-- BLOBBASEFEE, from Dencun, on a stack with room: pay the base price, push the blob base fee.
+
+Its price is the base price, 2 gas, as EIP-7516 gives.
+
+The fee must be below `2^256`, so that a word holds it. -/
+theorem environmentStep_blobbasefee (h : .dencun ≤ fork) {evm : Evm fork Meter}
+    (room : evm.stack.val.length < STACK_LIMIT)
+    (fits : evm.message.blockEnv.blobBaseFee h < 2 ^ 256) :
+    ∃ step, environmentStep fork .blobbasefee = some step ∧
+      step evm = (GasMeter.charge evm.gas GasCosts.BASE).map fun gas =>
+        { evm with
+          gas
+          stack := ⟨BitVec.ofNat 256 (evm.message.blockEnv.blobBaseFee h) :: evm.stack.val, room⟩
+          pc := evm.pc + 1 } := by
+  refine ⟨readNumber GasCosts.OPCODE_BLOBBASEFEE fun evm => evm.message.blockEnv.blobBaseFee h,
+    by simp [environmentStep, h], ?_⟩
+  unfold readNumber
+  rw [ite_eq_left fits]
+  exact readFrame_of_length_lt room
+
+/-- BLOBBASEFEE, from Dencun, at a blob base fee of `2^256` or more: pay the base price, abort.
+
+No word holds the fee, so the execution aborts with that fee, once the price is paid. -/
+theorem environmentStep_blobbasefee_of_le (h : .dencun ≤ fork) {evm : Evm fork Meter}
+    (big : 2 ^ 256 ≤ evm.message.blockEnv.blobBaseFee h) :
+    ∃ step, environmentStep fork .blobbasefee = some step ∧
+      step evm = (GasMeter.charge evm.gas GasCosts.BASE).bind fun _ =>
+        .error (.wordOverflow (evm.message.blockEnv.blobBaseFee h)) := by
+  refine ⟨readNumber GasCosts.OPCODE_BLOBBASEFEE fun evm => evm.message.blockEnv.blobBaseFee h,
+    by simp [environmentStep, h], ?_⟩
+  unfold readNumber
+  rw [ite_eq_right (Nat.not_lt.mpr big)]
+  simp only [chargeGas, bind, Except.bind, pure, Except.pure, throw, throwThe,
+    MonadExceptOf.throw]
+  rw [show GasCosts.OPCODE_BLOBBASEFEE = GasCosts.BASE from rfl]
+  cases GasMeter.charge evm.gas GasCosts.BASE <;> rfl
+
+/-- Below the threshold of its mainnet schedule, the word that BLOBBASEFEE pushes is the fee.
+
+The block sets no blob price of its own and has the mainnet schedule of its fork.
+
+Then the fee is below `2^256`, so the word is the base fee per blob gas of EIP-4844. -/
+theorem toNat_blobBaseFee_of_lt (h : .dencun ≤ fork) {env : BlockEnvironment fork}
+    (hPrice : env.blobGasPrice = none) (hSchedule : env.blobSchedule h = blobSchedule fork h)
+    (hExcess : (env.excessBlobGas h).toNat < blobBaseFeeOverflowExcess fork h) :
+    (BitVec.ofNat 256 (env.blobBaseFee h)).toNat =
+      getBaseFeePerBlobGas (blobSchedule fork h) (env.excessBlobGas h).toNat := by
+  have hfee : env.blobBaseFee h =
+      getBaseFeePerBlobGas (blobSchedule fork h) (env.excessBlobGas h).toNat := by
+    simp [BlockEnvironment.blobBaseFee, hPrice, hSchedule]
+  -- Below the threshold the fee is below `2^256`, so reducing it modulo `2^256` keeps it.
+  rw [hfee, BitVec.toNat_ofNat]
+  exact Nat.mod_eq_of_lt ((getBaseFeePerBlobGas_blobSchedule_lt_iff h _).mpr hExcess)
+
 /-- Before Glamsterdam, SLOTNUM has no instruction. -/
 theorem environmentStep_slotnum_of_lt (h : fork < .glamsterdam) :
     environmentStep (Meter := Meter) fork .slotnum = none := by
@@ -160,15 +241,17 @@ theorem environmentStep_sameContext {op : Op}
   cases op <;> simp only [environmentStep, Option.some.injEq, reduceCtorEq] at hstep
   all_goals first
     | (subst hstep; exact readFrame_sameContext h)
+    | (subst hstep; exact readNumber_sameContext h)
     | skip
   case prevrandao =>
-    split at hstep <;> (simp only [Option.some.injEq] at hstep; subst hstep) <;>
-      exact readFrame_sameContext h
+    split at hstep <;> (simp only [Option.some.injEq] at hstep; subst hstep)
+    · exact readFrame_sameContext h
+    · exact readNumber_sameContext h
   case chainid | basefee | blobbasefee | slotnum =>
     split at hstep
     · simp only [Option.some.injEq] at hstep
       subst hstep
-      exact readFrame_sameContext h
+      first | exact readFrame_sameContext h | exact readNumber_sameContext h
     · cases hstep
   case blobhash =>
     split at hstep
@@ -198,15 +281,17 @@ theorem memory_environmentStep {op : Op}
   cases op <;> simp only [environmentStep, Option.some.injEq, reduceCtorEq] at hstep
   all_goals first
     | (subst hstep; exact memory_readFrame h)
+    | (subst hstep; exact memory_readNumber h)
     | skip
   case prevrandao =>
-    split at hstep <;> (simp only [Option.some.injEq] at hstep; subst hstep) <;>
-      exact memory_readFrame h
+    split at hstep <;> (simp only [Option.some.injEq] at hstep; subst hstep)
+    · exact memory_readFrame h
+    · exact memory_readNumber h
   case chainid | basefee | blobbasefee | slotnum =>
     split at hstep
     · simp only [Option.some.injEq] at hstep
       subst hstep
-      exact memory_readFrame h
+      first | exact memory_readFrame h | exact memory_readNumber h
     · cases hstep
   case blobhash =>
     split at hstep

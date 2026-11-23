@@ -45,6 +45,12 @@ All the states of a reachable store have one genesis time.
 From Gloas each state has the block hash of the bid of its block.
 
 Otherwise its latest block hash is the block hash of its latest bid.
+
+Each known block has its unrealized justification.
+
+It has its timeliness too, except the anchor before Gloas.
+
+From Gloas it also has a timeliness for the payload committee and the two votes of that committee.
 -/
 
 @[expose] public section
@@ -273,16 +279,6 @@ inductive Reachable (config : Config) (anchorState : BeaconState preset fork)
 variable {config : Config} {anchorState : BeaconState preset fork}
   {anchorBlock : BeaconBlock preset fork}
 
-/-- A block with the votes that it carries leads from a reachable store to a reachable store. -/
-theorem Reachable.onBlockWithVotes {checks : SignatureChecks} {sources : BlockSources preset fork}
-    {signed : SignedBeaconBlock preset fork}
-    (reachable : Reachable config anchorState anchorBlock store)
-    (added : store.onBlockWithVotes config checks sources signed = .ok after) :
-    Reachable config anchorState anchorBlock after :=
-  onBlockWithVotes_preserves (fun reached step => reached.block step)
-    (fun _ reached step => reached.attestation step)
-    (fun _ reached step => reached.attesterSlashing step) reachable added
-
 /-- Each known block of a reachable store has its own root as its key. -/
 theorem Reachable.root (reachable : Reachable config anchorState anchorBlock store)
     {root : Root} {block : BeaconBlock preset fork} (found : store.blocks[root]? = some block) :
@@ -333,12 +329,12 @@ theorem Reachable.known_of_blockState
     rw [blocks]
     exact ih found
   | attestation _ attested ih =>
-    obtain ⟨-, blocks, states⟩ := onAttestation_frame attested
+    obtain ⟨-, blocks, states, -⟩ := onAttestation_frame attested
     rw [states] at found
     rw [blocks]
     exact ih found
   | attesterSlashing _ slashed ih =>
-    obtain ⟨-, blocks, states⟩ := onAttesterSlashing_frame slashed
+    obtain ⟨-, blocks, states, -⟩ := onAttesterSlashing_frame slashed
     rw [states] at found
     rw [blocks]
     exact ih found
@@ -392,10 +388,10 @@ theorem Reachable.linked (reachable : Reachable config anchorState anchorBlock s
     obtain ⟨-, -, blocks, states⟩ := onTick_frame ticked
     exact holds.imp (·.of_maps blocks states) (blocks ▸ ·)
   | attestation _ attested holds =>
-    obtain ⟨-, blocks, states⟩ := onAttestation_frame attested
+    obtain ⟨-, blocks, states, -⟩ := onAttestation_frame attested
     exact holds.imp (·.of_maps blocks states) (blocks ▸ ·)
   | attesterSlashing _ slashed holds =>
-    obtain ⟨-, blocks, states⟩ := onAttesterSlashing_frame slashed
+    obtain ⟨-, blocks, states, -⟩ := onAttesterSlashing_frame slashed
     exact holds.imp (·.of_maps blocks states) (blocks ▸ ·)
   | payloadAttestation _ voted holds =>
     obtain ⟨-, blocks, states⟩ := (onPayloadAttestationMessage_onlyPtcVotes voted).frame
@@ -423,6 +419,18 @@ theorem Reachable.linked (reachable : Reachable config anchorState anchorBlock s
         exact .inl (linked.insert new hits parentState earlier atSlot blocks states)
     · exact .inr (contains _ known)
 
+/-- A reachable store is linked under the parent root of the anchor, when it knows no such block.
+
+That needs the anchor block at or before the slot of the anchor state. -/
+theorem Reachable.linked_of_unknown (reachable : Reachable config anchorState anchorBlock store)
+    (anchorSlot : anchorBlock.slot ≤ anchorState.slot)
+    (unknown : store.blocks[anchorBlock.parentRoot]? = none) :
+    store.Linked anchorBlock.parentRoot := by
+  rcases reachable.linked anchorSlot with linked | known
+  · exact linked
+  · rw [Std.TreeMap.contains_eq_isSome_getElem?, unknown] at known
+    cases known
+
 /-- In a reachable store, each known parent sits at an earlier slot than its child.
 
 That needs the anchor block at or before the slot of the anchor state.
@@ -430,11 +438,8 @@ That needs the anchor block at or before the slot of the anchor state.
 It also needs the parent root of the anchor to name no known block. -/
 theorem Reachable.parentsBelow (reachable : Reachable config anchorState anchorBlock store)
     (anchorSlot : anchorBlock.slot ≤ anchorState.slot)
-    (unknown : store.blocks[anchorBlock.parentRoot]? = none) : store.ParentsBelow := by
-  rcases reachable.linked anchorSlot with linked | known
-  · exact linked.parentsBelow
-  · rw [Std.TreeMap.contains_eq_isSome_getElem?, unknown] at known
-    cases known
+    (unknown : store.blocks[anchorBlock.parentRoot]? = none) : store.ParentsBelow :=
+  (reachable.linked_of_unknown anchorSlot unknown).parentsBelow
 
 /-- All the states that the store keeps have one genesis time. -/
 def OneGenesisTime (store : Store preset fork) : Prop :=
@@ -485,9 +490,9 @@ theorem Reachable.oneGenesisTime (reachable : Reachable config anchorState ancho
     intro _ _ _ _ found otherFound
     rw [only found, only otherFound]
   | tick _ ticked holds => exact holds.of_states (onTick_frame ticked).2.2.2
-  | attestation _ attested holds => exact holds.of_states (onAttestation_frame attested).2.2
+  | attestation _ attested holds => exact holds.of_states (onAttestation_frame attested).2.2.1
   | attesterSlashing _ slashed holds =>
-    exact holds.of_states (onAttesterSlashing_frame slashed).2.2
+    exact holds.of_states (onAttesterSlashing_frame slashed).2.2.1
   | payloadAttestation _ voted holds =>
     exact holds.of_states (onPayloadAttestationMessage_onlyPtcVotes voted).frame.2.2
   | envelope _ accepted holds =>
@@ -545,10 +550,10 @@ theorem Reachable.statesKeepBids (reachable : Reachable config anchorState ancho
     obtain ⟨-, -, blocks, states⟩ := onTick_frame ticked
     exact holds.of_maps blocks states
   | attestation _ attested holds =>
-    obtain ⟨-, blocks, states⟩ := onAttestation_frame attested
+    obtain ⟨-, blocks, states, -⟩ := onAttestation_frame attested
     exact holds.of_maps blocks states
   | attesterSlashing _ slashed holds =>
-    obtain ⟨-, blocks, states⟩ := onAttesterSlashing_frame slashed
+    obtain ⟨-, blocks, states, -⟩ := onAttesterSlashing_frame slashed
     exact holds.of_maps blocks states
   | payloadAttestation _ voted holds =>
     obtain ⟨-, blocks, states⟩ := (onPayloadAttestationMessage_onlyPtcVotes voted).frame
@@ -630,10 +635,10 @@ private theorem Reachable.orphansLow (reachable : Reachable config anchorState a
     obtain ⟨-, -, blocks, states⟩ := onTick_frame ticked
     exact holds.of_maps blocks states
   | attestation _ attested holds =>
-    obtain ⟨-, blocks, states⟩ := onAttestation_frame attested
+    obtain ⟨-, blocks, states, -⟩ := onAttestation_frame attested
     exact holds.of_maps blocks states
   | attesterSlashing _ slashed holds =>
-    obtain ⟨-, blocks, states⟩ := onAttesterSlashing_frame slashed
+    obtain ⟨-, blocks, states, -⟩ := onAttesterSlashing_frame slashed
     exact holds.of_maps blocks states
   | payloadAttestation _ voted holds =>
     obtain ⟨-, blocks, states⟩ := (onPayloadAttestationMessage_onlyPtcVotes voted).frame
@@ -693,6 +698,25 @@ theorem Reachable.orphans_le (reachable : Reachable config anchorState anchorBlo
     (found : store.blocks[root]? = some block) (orphan : store.blocks[block.parentRoot]? = none)
     (otherFound : store.blocks[other]? = some otherBlock) : block.slot ≤ otherBlock.slot :=
   (reachable.orphansLow anchorSlot).orphansLe root other block otherBlock found orphan otherFound
+
+/-- The descent check from a known block to a known block can be computed.
+
+Each known parent must sit below its child.
+
+Each known block whose parent is unknown must sit at or below the target block. -/
+theorem isAncestor_ok_of_orphans_le (lower : store.ParentsBelow) {node : ForkChoiceNode}
+    {block : BeaconBlock preset fork} (found : store.blocks[node.root]? = some block)
+    (orphansLe : ∀ (root : Root) (orphan : BeaconBlock preset fork),
+      store.blocks[root]? = some orphan → store.blocks[orphan.parentRoot]? = none →
+      orphan.slot ≤ block.slot)
+    {start : ForkChoiceNode} {startBlock : BeaconBlock preset fork}
+    (startFound : store.blocks[start.root]? = some startBlock) :
+    ∃ descends, store.isAncestor start node = .ok descends := by
+  obtain ⟨ancestor, walk⟩ := getAncestor_ok_of_orphans_le lower orphansLe startFound
+  have known : store.block node.root = .ok block := by simp [Store.block, found]; rfl
+  unfold isAncestor
+  simp only [known, walk, bind, Except.bind]
+  split <;> exact ⟨_, rfl⟩
 
 /-- Before Gloas and without a boost, the head of a reachable store is the head of LMD-GHOST.
 

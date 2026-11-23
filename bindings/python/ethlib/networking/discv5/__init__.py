@@ -1,5 +1,6 @@
 """Node distances, handshake cryptography and packets of discv5."""
 
+from collections.abc import Sequence
 from typing import NamedTuple
 
 # Every domain links into one extension module.
@@ -87,6 +88,42 @@ def decode_message(plaintext: bytes) -> dict:
     return _native.discv5_decode_message(plaintext)
 
 
+def answers_request(request: bytes, answer: bytes) -> bool:
+    """Whether a message plaintext has the answer type of a request plaintext and its request ID."""
+    return _native.discv5_answers_request(request, answer)
+
+
+def node_step(
+    node: tuple, randoms: tuple, state: tuple, ip: bytes, port: int, packet: bytes
+) -> tuple[tuple, list[bytes]]:
+    """A node's state after a packet from an endpoint, and the packets it sends back."""
+    return _native.discv5_node_step(node, randoms, state, ip, port, packet)
+
+
+def node_send(
+    node: tuple,
+    randoms: tuple,
+    state: tuple,
+    node_id: bytes,
+    ip: bytes,
+    port: int,
+    unknown_key: bytes,
+    plaintext: bytes,
+) -> tuple[tuple, list[bytes]]:
+    """A node's state after it sends a request to a peer, and the packet it sends."""
+    return _native.discv5_node_send(node, randoms, state, node_id, ip, port, unknown_key, plaintext)
+
+
+def talk_response(request: bytes) -> bytes:
+    """The TALKRESP plaintext that a node with no protocol sends: the request ID, no response."""
+    return _native.discv5_talk_response(request)
+
+
+def nodes_match(recipient: bytes, distances: Sequence[int], records: Sequence[bytes]) -> bool:
+    """Whether records verify and lie at the distances of a FINDNODE from its recipient."""
+    return _native.discv5_nodes_match(recipient, list(distances), list(records))
+
+
 def reencode_message(plaintext: bytes) -> bytes:
     """The plaintext of the decoded message, written again by the encoder."""
     return _native.discv5_reencode_message(plaintext)
@@ -170,6 +207,11 @@ __all__ = [
     "encrypt_message",
     "decrypt_message",
     "decode_message",
+    "answers_request",
+    "nodes_match",
+    "talk_response",
+    "node_step",
+    "node_send",
     "reencode_message",
     "make_whoareyou",
     "read_whoareyou",

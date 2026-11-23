@@ -133,14 +133,20 @@ Its code is empty until the call reads the code of `target`. -/
 def systemMessage {fork : Fork} (env : BlockEnvironment fork) (target : Address)
     (data : ByteArray) : Message fork where
   blockEnv := env
+  -- EIP-4788: the call runs as `SYSTEM_ADDRESS`.
+  --
+  -- The price per gas is the base fee, which no EIP states.
   txEnv := { origin := SYSTEM_ADDRESS
              gasPrice := if h : .london ≤ fork then env.baseFeePerGas h else 0
              blobVersionedHashes := fun _ => [] }
   caller := SYSTEM_ADDRESS
   target := some target
   currentTarget := target
+  -- EIP-4788: a gas limit of 30000000; EIP-2935, EIP-7002, EIP-7251 and EIP-8282 agree.
   gas := SYSTEM_TRANSACTION_GAS
+  -- EIP-8037: from Glamsterdam, the extra state gas goes to the state gas reservoir.
   reservoir := systemReservoir fork
+  -- EIP-4788: a value of 0.
   value := 0
   data := data
   codeAddress := some target
@@ -163,6 +169,13 @@ def systemCall {fork : Fork} (env : BlockEnvironment fork) (block : BlockState)
     (target : Address) (data : ByteArray) : Except EvmError SystemCallOutput := do
   let message := systemMessage env target data
   let state := TransactionState.ofBlock block
+  -- Up to BPO5, the call runs as the message of a transaction, from no accessed address.
+  --
+  -- From Glamsterdam too, though no EIP says whether some addresses should start accessed.
+  --
+  -- Issue #4071 records the question for the beneficiary, precompiles, origin and target.
+  --
+  -- EIP-2935: the call does not warm the history storage account or its storage slots.
   let out ← if fork ≥ .glamsterdam then
       processMessageCall (Meter := StateGasMeter) env.chainId.toNat message state Substate.empty
     else processMessageCall (Meter := Nat) env.chainId.toNat message state Substate.empty
@@ -173,14 +186,18 @@ def codeAt (block : BlockState) (target : Address) : Except EvmError ByteArray :
   let state := TransactionState.ofBlock block
   (state.getCode (state.getAccount target).codeHash).mapError .state
 
-/-- Make a system call that must succeed, to `target` with the data `data`.
-
-The block is invalid when `target` has no code, or when the call fails. -/
+/-- Make a system call that must succeed, to `target` with the data `data`. -/
 def checkedSystemCall {fork : Fork} (env : BlockEnvironment fork) (block : BlockState)
     (target : Address) (data : ByteArray) : Except BlockError SystemCallOutput := do
   let code ← (codeAt block target).mapError .aborted
+  -- EIP-7002: a block whose request contract has no code is invalid.
+  --
+  -- EIP-7251 says the same; EIP-8282 says it of either of its contracts.
   if code.size = 0 then throw (.systemContractEmpty target)
   let out ← (systemCall env block target data).mapError .aborted
+  -- EIP-7002 and EIP-7251: a call that fails or returns an error makes the block invalid.
+  --
+  -- EIP-8282: a failed system call to either of its contracts makes the block invalid.
   match out.error with
   | some error => throw (.systemCallFailed target error)
   | none => return out
@@ -199,6 +216,7 @@ def BodyState.init (block : BlockState) : BodyState := ⟨block, .init block⟩
 
 /-- Begin the position `index` of the body, from the block state so far. -/
 def BodyState.beginIndex (body : BodyState) (index : Nat) : BodyState :=
+  -- From Fusaka, no position of a checked block wraps in this conversion to 32 bits.
   { body with builder := body.builder.beginIndex (UInt32.ofNat index) body.block }
 
 /-- The body once a call that ends with the state `tx` joins it.
@@ -220,11 +238,21 @@ From Pectra, the history storage contract then stores `parentHash`, the hash of 
 Each call joins the body at the current position. -/
 def startSystemCalls {fork : Fork} (env : BlockEnvironment fork) (parentHash : Hash32)
     (body : BodyState) : Except EvmError BodyState := do
+  -- EIP-4788, from Dencun: a call to `BEACON_ROOTS_ADDRESS` as `SYSTEM_ADDRESS`.
+  --
+  -- Its input is the 32 bytes of the root of the parent beacon block.
+  --
+  -- Without code at `BEACON_ROOTS_ADDRESS`, the call fails silently: no check here.
   let body ← if h : .dencun ≤ fork then do
       let out ← systemCall env body.block BEACON_ROOTS_ADDRESS
         ⟨(env.parentBeaconBlockRoot h).toArray⟩
       (body.join out.state).mapError .state
     else pure body
+  -- EIP-2935, from Pectra: a call to `HISTORY_STORAGE_ADDRESS` as `SYSTEM_ADDRESS`.
+  --
+  -- Its input is the 32 bytes of the hash of the parent block.
+  --
+  -- As for the beacon roots, a missing contract makes the call fail silently: no check here.
   if .pectra ≤ fork then do
     let out ← systemCall env body.block HISTORY_STORAGE_ADDRESS ⟨parentHash.toArray⟩
     (body.join out.state).mapError .state
@@ -249,6 +277,11 @@ def requestContracts (fork : Fork) : List (UInt8 × Address) :=
 
 /-- The request list of type `type` with the data `data`, or none when the data is empty. -/
 def requestList (type : UInt8) (data : ByteArray) : List ByteArray :=
+  -- EIP-7685: a request list is its type byte, then its data.
+  --
+  -- An empty list is dropped here.
+  --
+  -- EIP-7685 leaves a list of only 1 byte out of the hash.
   if data.size = 0 then [] else [⟨#[type]⟩ ++ data]
 
 /-- Call a request contract after the body and the requests so far, and add its requests.
@@ -259,8 +292,14 @@ The call joins the body at the current position, and its requests follow those r
 def readRequest {fork : Fork} (env : BlockEnvironment fork)
     (state : BodyState × List ByteArray) (contract : UInt8 × Address) :
     Except BlockError (BodyState × List ByteArray) := do
+  -- EIP-7002: a call to `WITHDRAWAL_REQUEST_PREDEPLOY_ADDRESS` as `SYSTEM_ADDRESS`, with no data.
+  --
+  -- EIP-7251 and EIP-8282 call their contracts the same way.
   let out ← checkedSystemCall env state.1.block contract.2 .empty
   let body ← (state.1.join out.state).mapError .state
+  -- EIP-7002: the requests come in the exact order in which the contract dequeues them.
+  --
+  -- EIP-7251 and EIP-8282 say the same of their queues.
   return (body, state.2 ++ requestList contract.1 out.output)
 
 /-- The withdrawal and consolidation requests of a block at `fork`, after its withdrawals.
@@ -277,6 +316,9 @@ Each call joins the body at the current position. -/
 def readRequests {fork : Fork} (env : BlockEnvironment fork) (body : BodyState) :
     Except BlockError (BodyState × List ByteArray) :=
   if .pectra ≤ fork then
+    -- EIP-7002 and EIP-7251: at the end of each execution block, one call per contract.
+    --
+    -- EIP-7685: the lists come by ascending request type.
     (requestContracts fork).foldlM (readRequest env) (body, [])
   else .ok (body, [])
 

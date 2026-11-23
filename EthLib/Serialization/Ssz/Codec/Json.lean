@@ -4,7 +4,21 @@ public import Lean.Data.Json
 public import EthLib.Base.Hex
 public import EthLib.Serialization.Ssz.Codec.Deserialize
 
-/-! The JSON document a value is written as, which an SSZ schema defines alongside its bytes. -/
+/-!
+The JSON document a value is written as, which an SSZ schema defines alongside its bytes.
+
+The core rules of the mapping are stated in EthLib's own terms, one rule per comment.
+
+[EIP-7495][eip7495] writes a ProgressiveContainer as an object, as a Container is written.
+
+[EIP-7916][eip7916] writes a ProgressiveList and a ProgressiveBitlist as a List and a Bitlist.
+
+[EIP-8016][eip8016] writes the compatible union as an object with a selector and its data.
+
+[eip7495]: https://github.com/ethereum/EIPs/blob/875fcf6d084c096195fec170310514444f537133/EIPS/eip-7495.md#json-mapping
+[eip7916]: https://github.com/ethereum/EIPs/blob/875fcf6d084c096195fec170310514444f537133/EIPS/eip-7916.md#serialization
+[eip8016]: https://github.com/ethereum/EIPs/blob/875fcf6d084c096195fec170310514444f537133/EIPS/eip-8016.md#json-mapping
+-/
 
 @[expose] public section
 
@@ -13,7 +27,7 @@ namespace EthLib.Serialization.Ssz
 open Lean
 
 /--
-Where a declaration spells a one-byte unsigned integer as the byte alias.
+Whether a declaration writes a one-byte integer as the byte alias, and how it writes a byte list.
 
 SSZ gives the alias and the one-byte integer the same type, and the JSON mapping does not.
 
@@ -25,10 +39,24 @@ A spelling travels beside a declaration and holds one node for each node of it:
 - `Byte`, spelled as a byte, is `"0xff"`.
 - `Vector[Uint8, 2]`, spelled plain, is `["1", "2"]`.
 - `Vector[Byte, 2]`, with bytes as elements, is `"0x0102"`.
+- `List[Uint8, 4]`, held as a byte list and spelled as digits, is `["1", "2"]`.
+- `ByteList[8]` holding the bytes `0x6162`, spelled as text, is `"ab"`.
+
+A mark has effect only where its shape allows it, and is ignored anywhere else.
 -/
 inductive Spelling where
-  /-- The byte alias, written as hex where a plain integer is written as digits. -/
+  /-- The byte alias, written as hex where a plain integer is written as digits.
+
+  It applies to a one-byte integer, and to a sequence of them, which it writes as one string. -/
   | byte
+  /-- A byte list written as one decimal string per byte, as a list of one-byte integers is.
+
+  SSZ gives that list and a byte list the same type, and the JSON mapping does not. -/
+  | digits
+  /-- A byte list written as the text that its UTF-8 bytes spell.
+
+  Bytes that spell no text are written as digits, so that no string stands for two values. -/
+  | text
   /-- Anything else, with one spelling for each declaration the shape holds. -/
   | plain (parts : List Spelling)
   deriving Inhabited
@@ -39,37 +67,57 @@ def Spelling.opaque : Spelling := .plain []
 /-- The spelling recorded for the declaration at one position. -/
 def Spelling.part : Spelling → Nat → Spelling
   | .plain parts, position => parts.getD position .opaque
-  | .byte, _ => .opaque
+  | .byte, _ | .digits, _ | .text, _ => .opaque
 
 /-- Whether a one-byte integer here is the byte alias. -/
 def Spelling.isByte : Spelling → Bool
   | .byte => true
-  | .plain _ => false
+  | .digits | .text | .plain _ => false
+
+/-- Whether a byte list here is written as decimal digits. -/
+def Spelling.isDigits : Spelling → Bool
+  | .digits => true
+  | .byte | .text | .plain _ => false
+
+/-- Whether a byte list here is written as text. -/
+def Spelling.isText : Spelling → Bool
+  | .text => true
+  | .byte | .digits | .plain _ => false
+
+mutual
+
+/-- Whether a spelling carries the text mark, here or in a declaration it holds. -/
+def Spelling.hasText : Spelling → Bool
+  | .text => true
+  | .byte | .digits => false
+  | .plain parts => Spelling.anyText parts
+
+/-- Whether one of the spellings carries the text mark. -/
+def Spelling.anyText : List Spelling → Bool
+  | [] => false
+  | part :: rest => part.hasText || Spelling.anyText rest
+
+end
+
+/-- Whether a declaration is a one-byte integer, the only one that the byte alias can mark. -/
+def Desc.isOneByte : Desc → Bool
+  | .uint 1 => true
+  | _ => false
 
 /-- Bytes as the mapping writes them: lowercase hex behind a two-character marker. -/
 def toHex (data : Bytes) : String :=
+  -- A hex string: `0x`, then the bytes as they appear in the encoding, two digits a byte.
   Base.hexString data.toList
 
-/-- The value of one hex digit, in either letter case. -/
-def hexDigit (character : Char) : Except Err Nat :=
-  if '0' ≤ character && character ≤ '9' then .ok (character.toNat - '0'.toNat)
-  else if 'a' ≤ character && character ≤ 'f' then .ok (character.toNat - 'a'.toNat + 10)
-  else if 'A' ≤ character && character ≤ 'F' then .ok (character.toNat - 'A'.toNat + 10)
-  else .error .hexDigits
+/-- The bytes that a run of hex digits holds, two digits a byte, high digit first.
 
-/-- Two digits at a time, each pair's byte pushed after the bytes so far.
+A digit may be in either letter case.
 
-The loop runs in constant stack for any length. -/
-def hexBytesFrom : List Char → Bytes → Except Err Bytes
-  | [], out => .ok out
-  | [_], _ => .error .hexDigits
-  | high :: low :: rest, out => do
-    let byte := 16 * (← hexDigit high) + (← hexDigit low)
-    hexBytesFrom rest (out.push (UInt8.ofNat byte))
-
-/-- Two digits at a time, folded into the byte each pair holds. -/
+An odd count of digits, or a character that is not a digit, is refused. -/
 def hexBytes (digits : List Char) : Except Err Bytes :=
-  hexBytesFrom digits #[]
+  match Base.hexBytes? digits with
+  | some bytes => .ok bytes.data
+  | none => .error .hexDigits
 
 /--
 The bytes a hex string holds.
@@ -78,6 +126,7 @@ Every hex string the mapping writes carries the marker, so one without it is ref
 -/
 def ofHex (text : String) : Except Err Bytes := do
   let characters := text.toList
+  -- The `0x` marker first, then the digits.
   if characters.take 2 != ['0', 'x'] then throw .hexPrefix
   hexBytes (characters.drop 2)
 
@@ -86,6 +135,7 @@ def ofHex (text : String) : Except Err Bytes := do
 The loop runs in constant stack for any length. -/
 def byteRunFrom : List Value → Bytes → Except Err Bytes
   | [], out => .ok out
+  -- Each value is one byte, below 256.
   | .uint n :: rest, out => do
     if n ≥ 256 then throw (.uintRange 256 n)
     byteRunFrom rest (out.push (UInt8.ofNat n))
@@ -102,47 +152,92 @@ def byteElements (data : Bytes) : List Value :=
 /-- Digits in a string, which is how the mapping writes an integer. -/
 def decimal (n : Nat) : Json := .str (toString n)
 
+/-- One decimal string per byte. -/
+def byteDigitsJson (data : Bytes) : Json :=
+  .arr (data.map fun byte => decimal byte.toNat)
+
+/-- The document of a byte list: one hex string, its text, or one decimal string per byte. -/
+def byteListJson (spelling : Spelling) (data : Bytes) : Json :=
+  -- A list of uint8 held as bytes: an array of decimal strings, as for any list of integers.
+  if spelling.isDigits then byteDigitsJson data
+  -- EthLib's own spelling, where a schema writes the bytes as text.
+  --
+  -- Bytes that are not valid UTF-8 spell no string, so they fall back to decimal strings.
+  else if spelling.isText then
+    match String.fromUTF8? ⟨data⟩ with
+    | some text => .str text
+    | none => byteDigitsJson data
+  -- List[byte, N]: one hex string.
+  else .str (toHex data)
+
 /--
 The number a document holds.
 
 An integer is digits in a string, so a wide one survives a parser using doubles.
-
-Only the digits the mapping writes are read back, with no sign, padding or separator.
-
-Writing the number again and comparing is what checks that.
-
-A bare number is accepted as well.
 -/
 def readNat (document : Json) : Except Err Nat :=
   match document with
+  -- The mapping's form: decimal digits in a string.
+  --
+  -- Writing the number back and comparing refuses a sign, padding, a separator or no digit.
   | .str text =>
     let n := Nat.ofDigitChars 10 text.toList 0
     if toString n == text then .ok n else .error .typeMismatch
+  -- EthLib's own leniency: a bare non-negative JSON number of exponent zero, never written.
   | .num value =>
     if value.exponent == 0 && value.mantissa ≥ 0 then .ok value.mantissa.toNat
     else .error .typeMismatch
   | _ => .error .typeMismatch
 
+/-- The bytes so far, then the byte that each decimal string of a list holds, in order.
+
+A string that holds 256 or more is refused.
+
+The loop runs in constant stack for any length. -/
+def byteDigitsFrom : List Json → Bytes → Except Err Bytes
+  | [], out => .ok out
+  -- Each entry is the decimal string of one byte, below 256.
+  | entry :: rest, out => do
+    let n ← readNat entry
+    if n ≥ 256 then throw (.uintRange 256 n)
+    byteDigitsFrom rest (out.push (UInt8.ofNat n))
+
+/--
+The bytes of a byte list written as text: the UTF-8 bytes of a string.
+
+Bytes that spell no text are written as decimal strings.
+-/
+def textBytes (document : Json) : Except Err Bytes :=
+  match document with
+  -- A string stands for its UTF-8 bytes.
+  | .str text => .ok text.toUTF8.data
+  -- Decimal strings stand only for bytes that are not valid UTF-8, where the writer used them.
+  | .arr entries => do
+    let data ← byteDigitsFrom entries.toList #[]
+    if (String.fromUTF8? ⟨data⟩).isSome then throw .typeMismatch
+    return data
+  | _ => .error .typeMismatch
+
 /--
 The hex a collection is written as.
-
-A bitfield and a byte sequence are each written as a single hex string.
 
 An array in that place holds elements of the wrong kind for the collection.
 -/
 def collectionHex (document : Json) : Except Err String :=
   match document with
+  -- Bitvector, Bitlist and a sequence of bytes: one hex string.
   | .str text => .ok text
   | .arr _ => .error .elementKind
   | _ => .error .typeMismatch
 
 /-- The bits a bitfield document holds, read out of the encoding it is written as. -/
 def readBitfield (shape : Desc) (document : Json) : Except Err Value := do
+  -- Bitvector, Bitlist and ProgressiveBitlist: the hex string of their encoding.
   let data ← ofHex (← collectionHex document)
   -- A bitfield's hex is its own encoding, so the codec reads it back under the mapping's names.
   match deserialize shape data with
   | .ok value => return value
-  | .error .paddingBits => throw .bitfieldPadding
+  | .error (.paddingBits _) => throw .bitfieldPadding
   | .error .noDelimiter => throw .bitfieldDelimiter
   | .error .trailingZeros => throw .bitfieldTrailingZeros
   | .error (.overLimit limit actual) => throw (.documentOverLimit limit actual)
@@ -165,30 +260,50 @@ The spelling decides how a byte is written.
 -/
 def jsonOf (shape : Desc) (spelling : Spelling) (value : Value) : Except Err Json :=
   match shape, value with
+  -- boolean: a JSON bool.
   | .bool, .bool b => .ok (.bool b)
+  -- A value the type does not admit is refused with the fault its encoding draws.
+  --
+  -- uintN: a value of at most `N` bits, written as decimal digits in a string.
   | .uint width, .uint n =>
-    if n ≥ 2 ^ (8 * width) then .error (.uintRange (2 ^ (8 * width)) n)
+    if !uintFits width n then .error (.uintRange (2 ^ (8 * width)) n)
+    -- byte: the hex string of its one byte, from `0x00` to `0xff`.
+    --
     -- The alias is a one-byte integer, so no wider integer is written as hex.
     else if spelling.isByte && width == 1 then .ok (.str (toHex #[UInt8.ofNat n]))
     else .ok (decimal n)
-  -- A value the type does not admit is refused with the fault its encoding draws.
+  -- Vector[byte, N]: the hex string of its `N` bytes.
   | .byteVector length, .bytes data =>
     if data.size == length then .ok (.str (toHex data)) else .error (.scope length data.size)
+  -- List[byte, N]: at most `N` bytes, in the form the spelling chooses.
   | .byteList limit, .bytes data =>
-    if data.size ≤ limit then .ok (.str (toHex data)) else .error (.overLimit limit data.size)
+    if data.size ≤ limit then .ok (byteListJson spelling data)
+    else .error (.overLimit limit data.size)
+  -- Bitvector[N], Bitlist[N] and the ProgressiveBitlist of EIP-7916: the hex of their encoding.
   | .bitVector _, .bits _ | .bitList _, .bits _ | .progressiveBitList _, .bits _ => do
     return .str (toHex (← serialize shape value))
+  -- Vector[type, N]: an array of its `N` elements, or one hex string under the byte alias.
   | .vector element length, .seq elements =>
     if elements.length == length then jsonOfSequence element (spelling.part 0) elements
     else .error (.scope length elements.length)
+  -- List[type, N]: an array of its at most `N` elements, or one hex string under the byte alias.
   | .list element limit, .seq elements =>
     if elements.length ≤ limit then jsonOfSequence element (spelling.part 0) elements
     else .error (.overLimit limit elements.length)
+  -- EIP-7916: a ProgressiveList is written as a List, with no bound.
+  --
+  -- EthLib checks a bound only where a shape declares one.
   | .progressiveList element limit, .seq elements => do
     boundCheck limit elements.length
     jsonOfSequence element (spelling.part 0) elements
+  -- Container, and the ProgressiveContainer of EIP-7495: an object, one member per field.
+  --
+  -- Each member carries the name of its field and the document of its value.
   | .container names fields, .seq values | .progressiveContainer _ names fields, .seq values => do
     return .mkObj (names.zip (← jsonOfFields fields spelling 0 values))
+  -- EIP-8016: an object with two members, selector and data.
+  --
+  -- The selector is a string of decimal digits, and data is the document of the selected type.
   | .compatibleUnion selectors options, .union selector data => do
     let option ← lookupOption selectors options selector
     let position := (selectors.findIdx? (· == selector)).getD 0
@@ -197,10 +312,14 @@ def jsonOf (shape : Desc) (spelling : Spelling) (value : Value) : Except Err Jso
   | _, _ => .error .typeMismatch
 termination_by (sizeOf value, 2)
 
-/-- The document a sequence is written as, which the byte alias collapses into one hex string. -/
+/-- The document a sequence is written as, which the byte alias collapses into one hex string.
+
+The alias collapses only a sequence of one-byte integers. -/
 def jsonOfSequence (element : Desc) (spelling : Spelling) (elements : List Value) :
     Except Err Json := do
-  if spelling.isByte then return .str (toHex (← byteRun elements))
+  -- A Vector or a List of byte: one hex string of its bytes, as they appear in the encoding.
+  if spelling.isByte && element.isOneByte then return .str (toHex (← byteRun elements))
+  -- Any other sequence: an array of the documents of its elements, in order.
   return .arr (← jsonOfEach element spelling elements).toArray
 termination_by (sizeOf elements, 1)
 
@@ -216,10 +335,12 @@ termination_by values => (sizeOf values, 0)
 /-- Each field of a struct written on its own, under the spelling recorded at its position. -/
 def jsonOfFields : List Desc → Spelling → Nat → List Value → Except Err (List Json)
   | [], _, _, [] => .ok []
+  -- The fields in declaration order, each written under its own type.
   | field :: fields, spelling, position, value :: values => do
     let head ← jsonOf field (spelling.part position) value
     let tail ← jsonOfFields fields spelling (position + 1) values
     return head :: tail
+  -- A count of values other than the count of fields is no value of the struct.
   | _, _, _, _ => .error .typeMismatch
 termination_by _ _ _ values => (sizeOf values, 1)
 
@@ -234,46 +355,66 @@ Every refusal here names the mapping rather than the machinery that caught it.
 -/
 def valueOf (shape : Desc) (spelling : Spelling) (document : Json) : Except Err Value :=
   match shape with
+  -- boolean: only a JSON bool.
   | .bool => match document with
     | .bool b => .ok (.bool b)
     | _ => .error .typeMismatch
   | .uint width => do
+    -- byte: a hex string of exactly one byte.
     if spelling.isByte && width == 1 then
       let .str text := document | throw .typeMismatch
       let data ← ofHex text
       if data.size != 1 then throw (.hexLength 1 data.size)
       return .uint (data[0]?.getD 0).toNat
+    -- uintN: decimal digits in a string, for a value below `2^N`.
     let n ← readNat document
-    if n ≥ 2 ^ (8 * width) then throw (.uintRange (2 ^ (8 * width)) n)
+    if !uintFits width n then throw (.uintRange (2 ^ (8 * width)) n)
     return .uint n
+  -- Vector[byte, N]: a hex string of exactly `N` bytes.
   | .byteVector length => do
     let data ← ofHex (← collectionHex document)
     if data.size != length then throw (.hexLength length data.size)
     return .bytes data
+  -- List[byte, N]: at most `N` bytes, read in the form the spelling chose.
   | .byteList limit => do
-    let data ← ofHex (← collectionHex document)
+    let data ← if spelling.isDigits then
+        let .arr entries := document | throw .typeMismatch
+        byteDigitsFrom entries.toList #[]
+      else if spelling.isText then textBytes document
+      else ofHex (← collectionHex document)
     if data.size > limit then throw (.documentOverLimit limit data.size)
     return .bytes data
+  -- Bitvector[N], Bitlist[N] and the ProgressiveBitlist of EIP-7916: the hex of their encoding.
   | .bitVector _ | .bitList _ | .progressiveBitList _ => readBitfield shape document
+  -- Vector[type, N]: exactly `N` elements.
   | .vector element length => do
     let elements ← valueOfSequence element (spelling.part 0) document
     if elements.length != length then throw (.count length elements.length)
     return .seq elements
+  -- List[type, N]: at most `N` elements.
   | .list element limit => do
     let elements ← valueOfSequence element (spelling.part 0) document
     if elements.length > limit then throw (.documentOverLimit limit elements.length)
     return .seq elements
+  -- EIP-7916: a ProgressiveList reads as a List, with no bound.
+  --
+  -- EthLib checks a bound only where a shape declares one.
   | .progressiveList element limit => do
     let elements ← valueOfSequence element (spelling.part 0) document
     if let some bound := limit then
       if elements.length > bound then throw (.documentOverLimit bound elements.length)
     return .seq elements
+  -- Container, and the ProgressiveContainer of EIP-7495: an object.
   | .container names fields | .progressiveContainer _ names fields => do
     let .obj _ := document | throw .structNotAnObject
-    -- The specification permits ignoring an undeclared field; this refuses one instead.
+    -- The mapping lets a parser ignore a member that names no field.
+    --
+    -- EthLib refuses one instead, so that each value has one document.
     if let some extra := (objectNames document).find? fun name => !names.contains name then
       throw (.undeclaredField extra)
+    -- Every field of the schema is present with a value.
     return .seq (← valueOfFields fields names spelling 0 document)
+  -- EIP-8016: an object with the members selector and data.
   | .compatibleUnion selectors options => do
     let .obj _ := document | throw .structNotAnObject
     -- An empty object asks for a default, and no option of a union stands above the others.
@@ -284,14 +425,19 @@ def valueOf (shape : Desc) (spelling : Spelling) (document : Json) : Except Err 
     let some selectorField := (document.getObjVal? "selector").toOption
       | throw (.missingField "selector")
     let some payload := (document.getObjVal? "data").toOption | throw (.missingField "data")
+    -- The selector is decimal digits, and data is read under the type it selects.
     valueOfOption selectors options spelling 0 (← readNat selectorField) payload
 termination_by (sizeOf shape, 0, 0)
 
-/-- The elements a sequence document holds, which the byte alias writes as one hex string. -/
+/-- The elements a sequence document holds, which the byte alias writes as one hex string.
+
+The alias collapses only a sequence of one-byte integers. -/
 def valueOfSequence (element : Desc) (spelling : Spelling) (document : Json) :
     Except Err (List Value) := do
-  if spelling.isByte then
+  -- A Vector or a List of byte: one hex string of its bytes.
+  if spelling.isByte && element.isOneByte then
     return byteElements (← ofHex (← collectionHex document))
+  -- Any other sequence: an array of element documents, in order.
   let .arr entries := document | throw .typeMismatch
   valueOfEntries element spelling entries.toList
 termination_by (sizeOf element, 2, 0)
@@ -310,6 +456,7 @@ def valueOfFields : List Desc → List String → Spelling → Nat → Json → 
   | [], _, _, _, _ => .ok []
   | field :: fields, names, spelling, position, document => do
     let name := names.getD position ""
+    -- A field of the schema with no member in the object is refused.
     let some part := (document.getObjVal? name).toOption | throw (.missingField name)
     let head ← valueOf field (spelling.part position) part
     let tail ← valueOfFields fields names spelling (position + 1) document
@@ -324,6 +471,7 @@ The option is searched for here rather than looked up and returned.
 What is read then stays a part of the union's own declaration.
 -/
 def valueOfOption : List Nat → List Desc → Spelling → Nat → Nat → Json → Except Err Value
+  -- A selector that names no option of the union is refused.
   | [], [], _, _, selector, _ => .error (.undeclaredSelector selector)
   | chosen :: selectors, option :: options, spelling, position, selector, payload =>
     if chosen == selector then do

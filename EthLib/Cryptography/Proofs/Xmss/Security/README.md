@@ -11,13 +11,14 @@ The theorem bounds the adversary's success by the number of those queries:
 ```
 
 Here `q` counts every hash call of the game in the worst run, not only the adversary's.
-Key generation alone makes about `2^23.7` calls, and a signing request can make more than `2^33`, one per randomizer trial.
-So the bound is never below about `2^-103.3`, and it grows by more than `2^-94` per signing request.
-An adversary that requests all `2^32` signatures of the key has `q > 2^65`, so over the key's lifetime the bound is above `2^-62`.
+Key generation alone makes about `2^23.7` calls, and a signing request can make more than `2^32`, one per randomizer trial.
+A request that builds a bottom tree searches twice, so it can make more than `2^33`.
+So the bound is never below about `2^-103.3`, and it grows by at least `2^-95` per signing request.
+An adversary that requests all `2^32` signatures of the key has `q > 2^64`, so over the key's lifetime the bound is above `2^-63`.
 
-The real game runs EthLib's own algorithms, with the hash a query to the random oracle, and its signer keeps the scheme seed `S` and the parameter `P`.
+The real game runs EthLib's own algorithms, with the hash a query to the random oracle, and its signer keeps its key across requests.
 The theorem about it is `XmssSecurity.Bridge.realGame_security` (`XmssSecurity/Proof/Bridge/Security.lean`).
-`Proofs/Xmss/Unforgeability.lean` then carries it to EthLib's game, whose signer re-derives `S` and `P` instead of keeping them, as `Unforgeability.unforgeable`.
+`Proofs/Xmss/Unforgeability.lean` proves that EthLib's game is that real game, and states the bound as `Unforgeability.unforgeable`.
 The statement uses only EthLib's definitions of the scheme.
 
 ## The route
@@ -30,7 +31,7 @@ The directories follow that route:
 | --- | --- |
 | `Bridge/` | EthLib's real game, step by step, to the model's game |
 | `Proof/` | the model's game, two units of `2^-128` per hash call |
-| `Scan/` | the digest term of the second lane |
+| `Proof/Scan/` | the digest term of the second lane |
 | `Scheme.lean` | the model: leanXMSS with precomputed keys |
 
 The model is a device of the proof, not a second statement.
@@ -38,14 +39,14 @@ It holds every chain value and node in a table, so its signer makes only the cal
 Its hashes and its verifier are EthLib's, run with the oracle on the bytes of the model's values, so each hash and the verification have exactly one definition.
 The hashes are EthLib's `messageDigest`, `chainStep`, `otsLeafHash` and `nodeHash`, and the verifier is EthLib's `verifyWith`.
 
-`Unforgeability/Translate.lean` names the oracle input each hash makes (`Concrete.encodingHash_eq` and the others), and the proof reasons about those inputs.
+`XmssSecurity/Translate.lean` names the oracle input each hash makes (`Concrete.encodingHash_eq` and the others), and the proof reasons about those inputs.
 The same file proves that EthLib's chain walks and path climbs make the model's calls, call for call.
 The `Bridge/` files then apply it to EthLib's algorithms directly, one step per file:
 
 - `SchemeSeed` replaces the seed hash `S = H("leanXMSS" | S_0)` by a uniform `S`, at the cost of one guess of `S_0` per call.
 - `Derivation` and `Program` answer every input that contains `S` from a table drawn up front.
 - `Real` shows that EthLib's key generation from `S` makes `K = 13,434,881` calls and erases to the model's key.
-- `Signer` shows that EthLib's signer from `S` and `P` erases to the model's table signer.
+- `Signer` shows that EthLib's signer, with a key the prepared cache knows, erases to the model's table signer.
 - `Game`, `Reduction`, `Seed` and `Model` carry the rest of the game, then reach the model's game.
 - `Security` states the bound.
 
@@ -71,13 +72,15 @@ The changes that follow from this are:
 - The model's hashes and verifier are EthLib's.
   The eight hashes of `Scheme.lean`, from `encodingHash` to `topNodeHash`, are EthLib's `messageDigest`, `chainStep`, `otsLeafHash` and `nodeHash` of either layer.
   `Concrete.verify`, `Concrete.verifyAfterLeaf` and `Concrete.verifyTop` are EthLib's `verifyWith`, `fold` and top-layer `layerRoot`.
-  Both read the model's values through the byte conversions (`Unforgeability/Convert.lean`).
-  leanerVM's bodies of these definitions are theorems here (`Concrete.encodingHash_eq`, `Concrete.verify_eq` and the others, in `Unforgeability/Translate.lean`), and the proof rewrites with them where leanerVM unfolds the definitions, often through the `tweakable_hashes` tactic.
+  Both read the model's values through the byte conversions (`XmssSecurity/Convert.lean`).
+  leanerVM's bodies of these definitions are theorems here (`Concrete.encodingHash_eq`, `Concrete.verify_eq` and the others, in `XmssSecurity/Translate.lean`), and the proof rewrites with them where leanerVM unfolds the definitions, often through the `tweakable_hashes` tactic.
   The model's types and hash inputs move to `XmssSecurity/Types.lean`, so the conversions can come before the model.
-- `Bridge/Real.lean`, `Bridge/Signer.lean` and `Bridge/Game.lean` are rewritten to reason about EthLib's `publicKeyOf`, `signDerived` and `verifyWith`.
+- `Bridge/Real.lean`, `Bridge/Signer.lean` and `Bridge/Game.lean` are rewritten to reason about EthLib's `keyGenWith`, `signWith` and `verifyWith`.
+  EthLib's signer keeps its key, so the game after key generation is a simulation with a state.
+  A key the prepared cache knows keeps that property after each request (`KeyResolves`), and `Deterministic/KeyedErasure.lean` carries each request's erasure to the whole run.
 - `Bridge/Derivation.lean` names its inputs by the model's byte layout.
 - `Bridge/SchemeSeed.lean`, `Reduction.lean`, `Seed.lean`, `Model.lean` and `Security.lean` take EthLib's adversary and state the real game (`realGame`) directly.
-- The codeword count of `LeanXmss/Code.lean`, which `Scan/Card.lean` needs, is not copied.
+- The codeword count of `LeanXmss/Code.lean`, which `Proof/Scan/Card.lean` needs, is not copied.
   `XmssSecurity/Code.lean` reads it from the size of the code that `Proofs/Xmss/CodeSize.lean` proves.
 - The Lean documentation follows EthLib's rules for doc comments: one sentence per line, at most 100 characters, and ASCII math.
 
@@ -87,7 +90,7 @@ Declarations the theorem does not use are removed too, about 1,600 lines, among 
 
 The remaining changes adapt the proof to the versions of Lean, VCVio and EthLib used here:
 
-- leanerVM builds with Lean v4.34.1 and VCVio `afa6593f`, while EthLib builds with Lean v4.35.0 and VCVio `bbf05eee`, on the same Mathlib as EthLib.
+- leanerVM builds with Lean v4.34.1 and VCVio `afa6593f`, while EthLib builds with Lean v4.36.0 and VCVio `v4.36.0`, on the same Mathlib as EthLib.
 - On Lean v4.35.0, unfolding `RevealProbeOracleSimulation.tableHits` at a concrete index type makes Lean evaluate its decision procedure over every index, past 30 GB of memory.
   So `XmssSecurity/Proof/RevealProbeOracleSimulation.lean` gains `tableHits_eq_true_iff` and `tableHits_eq_false_iff`, proved at a generic index type, and `CappedGlobalChainHighLocalCoupling.lean`, `CappedGlobalChainHighCoverage.lean` and `CappedGlobalChainHighReplay.lean` rewrite with them instead of unfolding.
 - `lake exe check-decls` rejects `opaque` declarations, which the kernel cannot unfold.

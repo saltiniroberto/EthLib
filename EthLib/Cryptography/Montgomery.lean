@@ -43,6 +43,7 @@ namespace Montgomery
 
 /-- The low 32 bits and the carry of `t + a * b + c`. -/
 @[inline] def mac (t a b c : UInt64) : UInt64 × UInt64 :=
+  -- `(C,S)` of CIOS: `S` the low word and `C` the carry.
   let s := t + a * b + c
   (s &&& 0xFFFFFFFF, s >>> 32)
 
@@ -101,15 +102,9 @@ def loop {σ : Type} : Nat → (Nat → σ → σ) → Nat → σ → σ
   | 0, _, _, s => s
   | n + 1, f, k, s => loop n f (k + 1) (f k s)
 
-/-- No words write `0`. -/
-theorem num_zero (f : Nat → UInt64) (k : Nat) : num 0 f k = 0 := rfl
-
 /-- The lowest word, then the others above it. -/
 theorem num_succ (n : Nat) (f : Nat → UInt64) (k : Nat) :
     num (n + 1) f k = (f k).toNat + 2 ^ 32 * num n f (k + 1) := rfl
-
-/-- No words fit. -/
-theorem fits_zero (f : Nat → UInt64) (k : Nat) : Fits 0 f k := trivial
 
 /-- `n + 1` words fit when the lowest one and the others fit. -/
 theorem fits_succ {n : Nat} {f : Nat → UInt64} {k : Nat} :
@@ -197,32 +192,6 @@ theorem num_snoc (n : Nat) (f : Nat → UInt64) (k : Nat) :
     rw [num_succ, ih, num_succ, radix_succ, Nat.add_right_comm k 1 n, Nat.mul_add,
       Nat.mul_assoc, show f (k + (n + 1)) = f (k + n + 1) from rfl]
     omega
-
-/-- The top word of fitting words is `0` when their integer is below `2 ^ (32 n)`. -/
-theorem fits_snoc {n : Nat} {f : Nat → UInt64} {k : Nat} :
-    Fits (n + 1) f k ↔ Fits n f k ∧ (f (k + n)).toNat < 2 ^ 32 := by
-  induction n generalizing k with
-  | zero => simp [Fits]
-  | succ n ih =>
-    rw [fits_succ, ih, fits_succ, Nat.add_right_comm k 1 n]
-    exact ⟨fun ⟨a, b, c⟩ => ⟨⟨a, b⟩, c⟩, fun ⟨⟨a, b⟩, c⟩ => ⟨a, b, c⟩⟩
-
-/-- Fitting words with the same integer are the same words. -/
-theorem eq_of_num_eq {n : Nat} {f g : Nat → UInt64} {k : Nat} (hf : Fits n f k)
-    (hg : Fits n g k) (h : num n f k = num n g k) : ∀ i < n, f (k + i) = g (k + i) := by
-  induction n generalizing k with
-  | zero => intro i hi; omega
-  | succ n ih =>
-    rw [num_succ, num_succ] at h
-    have := hf.1
-    have := hg.1
-    have h0 : (f k).toNat = (g k).toNat := by omega
-    have h1 : num n f (k + 1) = num n g (k + 1) := by omega
-    intro i hi
-    rcases i with _ | i
-    · exact UInt64.toNat_inj.mp h0
-    · have e := ih hf.2 hg.2 h1 i (by omega)
-      rwa [Nat.add_right_comm k 1 i, Nat.add_assoc] at e
 
 /-- An invariant that each step keeps holds after the steps. -/
 theorem loop_induct {σ : Type} (P : Nat → σ → Prop) (f : Nat → σ → σ) (n k : Nat) (s : σ)
@@ -321,6 +290,9 @@ instance : Words 0 where
   zero := ()
   load _ _ := ()
   mac _ _ _ c _ := ((), c)
+  -- CIOS: `(C,S) := t[s] + C`, `t[s-1] := S`, `t[s] := t[s+1] + C`.
+  --
+  -- Here the word above the others holds `t[s]` and `t[s+1]`.
   sh _ _ _ c _ top := let x := top + c; ((x &&& 0xFFFFFFFF, ()), x >>> 32)
   red _ _ _ top := ((), top >>> 32)
   subb _ _ br _ := ((), br)
@@ -355,22 +327,33 @@ variable {n : Nat} [inst : Words n]
 /-- `t + a b + c` on `n + 1` words: the low word, then the words above it. -/
 @[inline] def macS (t : UInt64 × inst.W) (a : Nat → UInt64) (b c : UInt64) (k : Nat) :
     (UInt64 × inst.W) × UInt64 :=
+  -- CIOS, the multiplication loop over `j` from `0` to `s - 1`: `(C,S) := t[j] + a[j]*b[i] + C`.
+  --
+  -- Then `t[j] := S`.
   let x := mac t.1 (a k) b c
+  -- The next words take the carry `C`.
   let r := Words.mac t.2 a b x.2 (k + 1)
   ((x.1, r.1), r.2)
 
 /-- `t + m p + c` with `top` above it, on `n + 1` words: the low word, then the others. -/
 @[inline] def shS (t : UInt64 × inst.W) (p : Nat → UInt64) (m c : UInt64) (k : Nat)
     (top : UInt64) : (UInt64 × (UInt64 × inst.W)) × UInt64 :=
+  -- The reduction loop: `(C,S) := t[j] + m*n[j] + C`, `t[j-1] := S`.
   let x := mac t.1 m (p k) c
+  -- The next words take the carry `C`.
   let r := Words.sh t.2 p m x.2 (k + 1) top
   ((x.1, r.1), r.2)
 
 /-- `(t + m p + R top) / 2 ^ 32` on `n + 1` words, when the low word of the sum is `0`. -/
 @[inline] def redS (t : UInt64 × inst.W) (p : Nat → UInt64) (m top : UInt64) :
     (UInt64 × inst.W) × UInt64 :=
+  -- CIOS, with the shift integrated: `(C,S) := t[0] + m*n[0]`.
+  --
   -- The low word of the sum is `0`, so only its carry goes on.
   let x := mac t.1 m (p 0) 0
+  -- The loop over `j` from `1` to `s - 1`: `(C,S) := t[j] + m*n[j] + C`, `t[j-1] := S`.
+  --
+  -- Then the top words.
   Words.sh t.2 p m x.2 1 top
 
 /-- `t - p - br` on `n + 1` words: the low word, then the others and the borrow. -/
@@ -523,10 +506,6 @@ theorem subbS_spec (t : UInt64 × inst.W) (p : Nat → UInt64) (br : UInt64) (k 
 
 end Succ
 
-/-- The words of a fixed count are the words of a pair of a low word and the rest. -/
-theorem word_succ {n : Nat} [Words n] (t : Words.W (n + 1)) :
-    Words.word t = cons (t : UInt64 × Words.W n).1 (Words.word (t : UInt64 × Words.W n).2) := rfl
-
 /-- The words of fitting words are below `2 ^ 32`. -/
 theorem lt_of_fits {n : Nat} {f : Nat → UInt64} {k : Nat} (h : Fits n f k) :
     ∀ i < n, (f (k + i)).toNat < 2 ^ 32 := by
@@ -592,8 +571,15 @@ private theorem low_zero {m x y z : Nat} (hm : m = x * y % 2 ^ 32)
 `m` is the multiple of `p` that makes the low word of the sum zero. -/
 @[inline] def step (p : Nat → UInt64) (pinv : UInt64) (a b : Nat → UInt64) (i : Nat)
     (st : Words.W n × UInt64) : Words.W n × UInt64 :=
+  -- CIOS, the multiplication loop over `j` from `0` to `s - 1`, with `C := 0` first.
+  --
+  -- The paper's modulus `n` is `p` here.
   let r := Words.mac st.1 a (b i) 0 0
+  -- `m := t[0]*n'[0] mod W`, with `W = 2^32` and `n'[0] = -p^(-1) mod W`.
   let m := (Words.word r.1 0 * pinv) &&& 0xFFFFFFFF
+  -- `(C,S) := t[s] + C`, `t[s] := S`, `t[s+1] := C` is one 64-bit sum: the top word plus the carry.
+  --
+  -- The reduction loop follows, with the shift by one word integrated, as the paper improves it.
   Words.red r.1 p m (st.2 + r.2)
 
 /-- The integer of words and the word above them. -/
@@ -666,6 +652,7 @@ theorem step_spec {p : Nat → UInt64} {pinv : UInt64} (hp : Fits n p 0)
 /-- `x - p` when `x ≥ p`, else `x`, for `x < 2 p` given as words and the word above them. -/
 @[inline] def reduce (p : Nat → UInt64) (t : Words.W n) (top : UInt64) {β : Type}
     (out : Words.W n → β) : β :=
+  -- Step 3 of the paper: the result is `u - n` when `u >= n`, and `u` otherwise.
   let d := Words.subb t p 0 0
   -- The borrow exceeds the top word exactly when `x < p`.
   if top < d.2 then out t else out d.1
@@ -714,7 +701,9 @@ theorem reduce_spec {p : Nat → UInt64} (hp : Fits n p 0) {t : Words.W n} {top 
 /-- The CIOS product `a b 2 ^ (-32 n)` mod `p`, reduced, given to `out`. -/
 @[inline] def mulWords (p : Nat → UInt64) (pinv : UInt64) (a b : Nat → UInt64) {β : Type}
     (out : Words.W n → β) : β :=
+  -- CIOS: one step for each `i` from `0` to `s - 1`, with the array `t` set to `0` first.
   let st := Words.fold (n := n) (step p pinv a b) 0 (Words.zero, 0)
+  -- The result is the first `s + 1` words of `t`, below `2 p`, then one subtraction.
   reduce p st.1 st.2 out
 
 /-- The product hands its result to its continuation. -/
@@ -764,22 +753,6 @@ theorem mulWords_spec {p : Nat → UInt64} {pinv : UInt64} (hp : Fits n p 0)
 @[inline] def ltWords (t : Words.W n) (p : Nat → UInt64) : Bool :=
   (Words.subb t p 0 0).2 != 0
 
-/-- The comparison of words is the comparison of their integers. -/
-theorem ltWords_iff {t : Words.W n} {p : Nat → UInt64} (ht : Fits n (Words.word t) 0)
-    (hp : Fits n p 0) : ltWords t p = true ↔ num n (Words.word t) 0 < num n p 0 := by
-  have z : (0 : UInt64).toNat ≤ 1 := by decide
-  obtain ⟨fd, bd, ed⟩ := Words.subb_spec t p 0 0 ht hp z
-  have := num_lt fd
-  have := num_lt ht
-  have := num_lt hp
-  simp only [ltWords, bne_iff_ne, ne_eq, UInt64.toNat_zero, Nat.add_zero] at ed ⊢
-  rw [← UInt64.toNat_inj, UInt64.toNat_zero]
-  generalize Words.subb t p 0 0 = d at *
-  generalize 2 ^ (32 * n) = R at *
-  have hb : d.2.toNat = 0 ∨ d.2.toNat = 1 := by omega
-  rcases hb with hb | hb <;> rw [hb] at ed ⊢ <;> simp only [Nat.mul_zero, Nat.mul_one] at ed <;>
-    omega
-
 /-! ## Stored limbs -/
 
 /-- `n` limbs of 32 bits, as an element stores them.
@@ -814,9 +787,6 @@ def val (a : T n) : Nat := num n (get a) 0
 /-- Stored limbs fit. -/
 theorem fits (a : T n) (k : Nat) : Fits n (get a) k := fits_of_lt fun _ _ => get_lt a _
 
-/-- The integer of the limbs is below `2 ^ (32 n)`. -/
-theorem val_lt (a : T n) : val a < 2 ^ (32 * n) := num_lt (fits a 0)
-
 /-- The limbs of fitting words write their integer. -/
 theorem val_pack {t : Words.W n} (h : Fits n (Words.word t) 0) :
     val (pack (n := n) t) = num n (Words.word t) 0 := by
@@ -824,43 +794,12 @@ theorem val_pack {t : Words.W n} (h : Fits n (Words.word t) 0) :
   refine num_congr fun i hi => UInt64.toNat_inj.mp ?_
   rw [get_pack _ _ (by omega), Nat.mod_eq_of_lt (hl i hi)]
 
-/-- Limbs with the same integer are equal. -/
-theorem val_injective : Function.Injective (val : T n → Nat) := by
-  intro a b h
-  apply ext
-  intro k hk
-  simpa using eq_of_num_eq (fits a 0) (fits b 0) h k hk
-
 /-- The digits of `x` in base `2 ^ 32`. -/
 @[inline] def digit (x : Nat) (i : Nat) : UInt64 := (x / 2 ^ (32 * i) % 2 ^ 32).toUInt64
-
-/-- A digit is the integer of 32 bits at its place. -/
-theorem digit_toNat (x i : Nat) : (digit x i).toNat = x / 2 ^ (32 * i) % 2 ^ 32 := by
-  have := Nat.mod_lt (x / 2 ^ (32 * i)) (Nat.two_pow_pos 32)
-  rw [digit, Nat.toUInt64_eq, UInt64.toNat_ofNat', Nat.mod_eq_of_lt (by omega)]
-
-/-- The digits of `x` from place `k` write `x / 2 ^ (32 k)` mod `2 ^ (32 m)`. -/
-theorem num_digit (x : Nat) (m k : Nat) : num m (digit x) k = x / 2 ^ (32 * k) % 2 ^ (32 * m) := by
-  induction m generalizing k with
-  | zero => simp [num, Nat.mod_one]
-  | succ m ih =>
-    rw [num_succ, ih, radix_succ m, Nat.mod_mul, radix_succ k, Nat.mul_comm (2 ^ 32) (2 ^ (32 * k)),
-      ← Nat.div_div_eq_div_mul, digit_toNat]
-
-/-- The digits fit. -/
-theorem fits_digit (x : Nat) (m k : Nat) : Fits m (digit x) k :=
-  fits_of_lt fun _ _ => by
-    rw [digit_toNat]
-    exact Nat.mod_lt _ (by decide)
 
 /-- The limbs of `x mod 2 ^ (32 n)`. -/
 @[inline] def ofNat (x : Nat) : T n :=
   pack (Words.load (n := n) (digit x) 0)
-
-/-- The limbs of `x` write `x mod 2 ^ (32 n)`. -/
-theorem val_ofNat (x : Nat) : val (ofNat (n := n) x) = x % 2 ^ (32 * n) := by
-  rw [ofNat, val_pack ((load_spec _ _).1.mpr (fits_digit x n 0)), (load_spec _ _).2, num_digit]
-  simp
 
 end Limbs
 

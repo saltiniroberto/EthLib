@@ -7,7 +7,6 @@ public import EthLib.Consensus.HonestAggregation
 public import EthLib.Consensus.Proofs.Accessors
 public import EthLib.Consensus.Proofs.Time
 public import EthLib.Cryptography.Proofs.Bls.SignaturesCorrect
-import EthLib.Base.Proofs.Forall2
 
 /-!
 # Proofs: the votes of an honest attester and their aggregates
@@ -39,6 +38,8 @@ The attesters of an aggregate are then the attesters of its attestations with th
 From Electra, they are the attesters of the single attestations with the same data and committee.
 
 Its committee bits name that one committee.
+
+Constructing either aggregate fails exactly when its committee, a message or the signatures fail.
 
 The contribution of a sync subcommittee sets the bit of each seat whose key signed a message.
 -/
@@ -164,7 +165,7 @@ theorem attestationDataIndex_of_glamsterdam_of_ne {slot headSlot : Slot}
       match payloadStatus with
       | .empty => .ok 0
       | .full => .ok 1
-      | .pending => .error .pendingPayloadStatus := by
+      | .pending => .error (.pendingPayloadStatus slot headSlot) := by
   cases payloadStatus <;> simp [attestationDataIndex, gloas, earlier]
 
 /-- From Electra, the index in attestation data passes the check of the index of a vote. -/
@@ -267,7 +268,7 @@ theorem mapM_sign_eq_of_forall₂ {attestations : List (Attestation preset fork)
       Signatures.sign key message = .ok attestation.signature) attestations keys) :
     keys.mapM (fun key => Signatures.sign key message) =
       .ok (attestations.map (·.signature)) :=
-  mapM_ok_of_forall₂ (List.forall₂_map_right_iff.mpr signed.flip)
+  List.mapM_eq_ok_iff_forall₂.mpr (List.forall₂_map_right_iff.mpr signed.flip)
 
 /-- Honest signatures of attestations on one message aggregate to a signature that verifies.
 
@@ -281,15 +282,15 @@ theorem fastAggregateVerify_getAggregateSignature
       Signatures.sign key message = .ok attestation.signature) attestations keys)
     (nonempty : keys ≠ []) (sum : (keys.map (·.val)).sum ≠ 0) :
     ∃ signature, getAggregateSignature attestations = .ok signature ∧
-      Signatures.fastAggregateVerify (keys.map Signatures.pkBytes).toArray message
-        (Signatures.sigBytes signature) = true := by
+      Signatures.fastAggregateVerify (keys.map Signatures.skToPk).toArray message
+        signature = true := by
   obtain ⟨signatures, signs, signature, aggregated, verifies⟩ :=
     Signatures.fastAggregateVerify_aggregate keys nonempty sum message
   -- Signing is a function, so the signatures of the keys are those of the attestations.
   rw [mapM_sign_eq_of_forall₂ signed, Except.ok.injEq] at signs
   subst signs
   refine ⟨signature, ?_, verifies⟩
-  simpa [getAggregateSignature, List.map_map, Function.comp_def, Base.packBytes] using aggregated
+  simpa [getAggregateSignature, List.map_map, Function.comp_def] using aggregated
 
 /-! ## Attesters -/
 
@@ -525,6 +526,49 @@ theorem mem_getAttestingIndices_constructAggregate {state : BeaconState preset f
       Option.getD_some, List.any_eq_true, List.mem_filter, decide_eq_true_eq]
     exact ⟨attestation, ⟨member, same⟩, by simpa using setHere⟩
 
+/-- Before Electra, constructing the aggregate fails exactly when one of three faults occurs.
+
+The committee of the data has no value.
+
+An attestation with the data has bits of another size than that committee.
+
+Aggregating the signatures of the attestations with the data fails.
+
+When no attestation has the data, the third fault occurs, since an empty list has no aggregate. -/
+theorem exists_constructAggregate_eq_error_iff {state : BeaconState preset fork}
+    {before : fork < .pectra} {data : AttestationData}
+    {attestations : List (Attestation preset fork)} :
+    (∃ fault, constructAggregate state before data attestations = .error fault) ↔
+      (∃ error, getBeaconCommittee state data.slot data.index = .error error) ∨
+        ∃ committee, getBeaconCommittee state data.slot data.index = .ok committee ∧
+          ((∃ attestation ∈ attestations.filter (·.data = data),
+              attestation.aggregationBits.bits.size ≠ committee.size) ∨
+            ∃ error, getAggregateSignature (attestations.filter (·.data = data)) =
+              .error error) := by
+  unfold constructAggregate
+  generalize attestations.filter (·.data = data) = same
+  cases committeeOk : getBeaconCommittee state data.slot data.index with
+  | error error =>
+    refine iff_of_true ?_ (.inl ⟨error, rfl⟩)
+    cases same <;> exact ⟨_, rfl⟩
+  | ok committee =>
+    simp only [reduceCtorEq, exists_false, Except.ok.injEq, exists_eq_left', false_or]
+    cases same with
+    | nil => exact iff_of_true ⟨_, rfl⟩ (.inr ⟨_, rfl⟩)
+    | cons first rest =>
+      dsimp only [Except.mapError, bind, Except.bind]
+      split
+      · rename_i other found
+        exact iff_of_true ⟨_, rfl⟩ (.inl ⟨other, List.mem_of_find?_eq_some found,
+          by simpa using List.find?_some found⟩)
+      · rename_i found
+        have sized : ¬ ∃ attestation ∈ first :: rest,
+            attestation.aggregationBits.bits.size ≠ committee.size :=
+          fun ⟨attestation, member, other⟩ => by
+            simpa [other] using List.find?_eq_none.mp found attestation member
+        simp only [sized, false_or]
+        cases getAggregateSignature (first :: rest) <;> simp [pure, Except.pure]
+
 /-! ## The aggregate of single attestations -/
 
 /-- Bits that are all unset mark no index, wherever their indices start. -/
@@ -623,7 +667,7 @@ theorem constructAggregateOfSingleAttestations_spec {state : BeaconState preset 
           index.val.toUInt64 == committeeIndex⟩) ∧
       Signatures.aggregate ((singles.filter (fun single =>
           single.data = data ∧ single.committeeIndex = committeeIndex)).map
-            fun single => Base.packBytes single.signature).toArray =
+            (·.signature)).toArray =
         .ok aggregate.signature := by
   unfold constructAggregateOfSingleAttestations at built
   split at built
@@ -701,6 +745,77 @@ theorem mem_getAttestingIndices_constructAggregateOfSingleAttestations
       simp only [bits, Array.getD_eq_getD_getElem?, Array.getElem?_ofFn, Nat.zero_add, inside,
         ↓reduceDIte, Option.getD_some, List.any_eq_true, List.mem_filter, decide_eq_true_eq]
       exact ⟨single, ⟨member, sameSingle, sameIndex⟩, found.symm⟩
+
+/-- Constructing the aggregate of single attestations fails exactly when one of five faults occurs.
+
+The committee index is not below the most committees a slot can have.
+
+The committee has no value.
+
+A single attestation of the committee with the data has an attester outside the committee.
+
+Before Gloas, the committee has more members than the limit of an attestation.
+
+Aggregating the signatures of those single attestations fails.
+
+When no such single attestation exists, the fifth fault occurs: an empty list has no aggregate. -/
+theorem exists_constructAggregateOfSingleAttestations_eq_error_iff
+    {state : BeaconState preset fork} {data : AttestationData} {committeeIndex : CommitteeIndex}
+    {singles : List SingleAttestation} :
+    (∃ fault, constructAggregateOfSingleAttestations state data committeeIndex singles =
+      .error fault) ↔
+      preset.MAX_COMMITTEES_PER_SLOT ≤ committeeIndex ∨
+        (∃ error, getBeaconCommittee state data.slot committeeIndex = .error error) ∨
+        ∃ committee, getBeaconCommittee state data.slot committeeIndex = .ok committee ∧
+          ((∃ single ∈ singles.filter (fun single =>
+              single.data = data ∧ single.committeeIndex = committeeIndex),
+              single.attesterIndex ∉ committee) ∨
+            (fork < .glamsterdam ∧ maxAttesters preset fork < committee.size) ∨
+            ∃ error, Signatures.aggregate ((singles.filter (fun single =>
+              single.data = data ∧ single.committeeIndex = committeeIndex)).map
+                (·.signature)).toArray = .error error) := by
+  unfold constructAggregateOfSingleAttestations
+  by_cases inside : committeeIndex < preset.MAX_COMMITTEES_PER_SLOT
+  swap
+  · rw [dite_eq_right inside]
+    exact iff_of_true ⟨_, rfl⟩ (.inl (UInt64.not_lt.mp inside))
+  rw [dite_eq_left inside]
+  simp only [UInt64.not_le.mpr inside, false_or]
+  generalize singles.filter (fun single =>
+    single.data = data ∧ single.committeeIndex = committeeIndex) = same
+  cases committeeOk : getBeaconCommittee state data.slot committeeIndex with
+  | error error =>
+    refine iff_of_true ?_ (.inl ⟨error, rfl⟩)
+    split <;> exact ⟨_, rfl⟩
+  | ok committee =>
+    simp only [reduceCtorEq, exists_false, Except.ok.injEq, exists_eq_left', false_or]
+    split
+    · rename_i empty
+      have nil : same = [] := List.isEmpty_iff.mp empty
+      subst nil
+      exact iff_of_true ⟨_, rfl⟩ (.inr (.inr ⟨_, rfl⟩))
+    · dsimp only [Except.mapError, bind, Except.bind]
+      split
+      · rename_i other found
+        exact iff_of_true ⟨_, rfl⟩ (.inl ⟨other, List.mem_of_find?_eq_some found,
+          by simpa using List.find?_some found⟩)
+      · rename_i found
+        have seated : ¬ ∃ single ∈ same, single.attesterIndex ∉ committee :=
+          fun ⟨single, member, outside⟩ => by
+            simpa [outside] using List.find?_eq_none.mp found single member
+        simp only [seated, false_or]
+        split
+        · rename_i bound
+          have fits : ¬ (fork < .glamsterdam ∧ maxAttesters preset fork < committee.size) :=
+            fun ⟨earlier, above⟩ => Nat.not_le_of_lt above (by simpa using bound earlier)
+          simp only [fits, false_or]
+          cases Signatures.aggregate (same.map (·.signature)).toArray <;> simp [pure, Except.pure]
+        · rename_i unbounded
+          have earlier : fork < .glamsterdam := Classical.byContradiction fun later =>
+            unbounded fun earlier => absurd earlier later
+          have above : maxAttesters preset fork < committee.size :=
+            Nat.lt_of_not_le fun within => unbounded fun _ => by simpa using within
+          exact iff_of_true ⟨_, rfl⟩ (.inl ⟨earlier, above⟩)
 
 /-! ## Sync committee contributions -/
 

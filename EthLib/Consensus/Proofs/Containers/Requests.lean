@@ -1,10 +1,10 @@
 module
 
-public import EthLib.Base.Proofs.Forall2
 public import EthLib.Consensus.Containers.Requests
 public import EthLib.Consensus.Proofs.Containers.Builder
 public import EthLib.Consensus.Proofs.Containers.Execution
 public import EthLib.Consensus.Proofs.Containers.Misc
+import Batteries.Data.List.Lemmas
 public import Mathlib.Data.List.Forall2
 
 /-!
@@ -18,7 +18,7 @@ The request types are distinct bytes, so a request list names its type without d
 
 The list that the execution layer receives keeps the nonempty lists, in increasing order of type.
 
-Each of its entries has at least one byte, so its first byte exists.
+Each of its entries has more than one byte: its type, then the bytes of a nonempty list.
 
 At Gloas, with no builder request, it is the list of Electra for the same requests.
 -/
@@ -93,7 +93,7 @@ theorem getExecutionRequestsList_spec {preset : Preset} {fork : Fork}
     List.Forall₂
       (fun list bytes => ∃ data, list.bytes = .ok data ∧ bytes = ⟨list.type.toArray⟩ ++ data)
       (requests.typedLists.filter (·.count != 0)) out := by
-  refine (forall₂_of_mapM_ok made).imp fun list bytes step => ?_
+  refine (List.mapM_eq_ok_iff_forall₂.mp made).imp fun list bytes step => ?_
   cases data : list.bytes with
   | error e => simp [data, bind, Except.bind] at step
   | ok data' =>
@@ -107,24 +107,54 @@ theorem getExecutionRequestsList_length {preset : Preset} {fork : Fork}
     out.length = (requests.typedLists.filter (·.count != 0)).length :=
   (getExecutionRequestsList_spec made).length_eq.symm
 
+/-- Each list of requests that has a request has SSZ bytes of at least one byte. -/
+theorem ExecutionRequests.size_pos_of_mem_typedLists {preset : Preset} {fork : Fork}
+    {requests : ExecutionRequests preset fork} {list : ExecutionRequests.TypedList}
+    (mem : list ∈ requests.typedLists) (count : list.count ≠ 0) {data : ByteArray}
+    (bytes : list.bytes = .ok data) : 0 < data.size := by
+  unfold ExecutionRequests.typedLists at mem
+  have forkList := @Serialization.Ssz.forkList_size_eq_zero_iff
+  have progressive := @Serialization.Ssz.progressiveList_size_eq_zero_iff
+  split at mem <;> simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at mem
+  -- Each list is a list of SSZ, whose bytes are empty exactly when it has no request.
+  all_goals rcases mem with (rfl | rfl | rfl) | rfl | rfl
+  all_goals
+    simp only at count bytes
+    first
+      | exact Nat.pos_of_ne_zero fun zero => count ((forkList bytes).mpr zero)
+      | exact Nat.pos_of_ne_zero fun zero => count ((progressive bytes).mpr zero)
+
+/-- Each entry of the request lists has its type byte and at least one byte of data. -/
+theorem getExecutionRequestsList_size_gt_one {preset : Preset} {fork : Fork}
+    {requests : ExecutionRequests preset fork} {out : List ByteArray}
+    (made : getExecutionRequestsList requests = .ok out) : ∀ b ∈ out, 1 < b.size := by
+  have spec := getExecutionRequestsList_spec made
+  have mem : ∀ list ∈ requests.typedLists.filter (·.count != 0),
+      list ∈ requests.typedLists ∧ list.count ≠ 0 := by
+    intro list h
+    simpa using List.mem_filter.mp h
+  clear made
+  generalize requests.typedLists.filter (·.count != 0) = lists at spec mem
+  induction spec with
+  | nil => simp
+  | @cons list _ _ _ head _ rest =>
+    obtain ⟨data, bytes, rfl⟩ := head
+    intro b hb
+    rcases List.mem_cons.mp hb with rfl | hb
+    · -- The entry is the type byte, then the bytes of a list that has a request.
+      obtain ⟨m, c⟩ := mem list (by simp)
+      have pos := ExecutionRequests.size_pos_of_mem_typedLists m c bytes
+      have one : (⟨list.type.toArray⟩ : ByteArray).size = 1 := by simp [ByteArray.size]
+      simp only [ByteArray.size_append]
+      omega
+    · exact rest (fun l hl => mem l (by simp [hl])) b hb
+
 /-- In the list that the execution layer receives, every entry has at least one byte. -/
 theorem getExecutionRequestsList_size_pos {preset : Preset} {fork : Fork}
     {requests : ExecutionRequests preset fork} {out : List ByteArray}
     (made : getExecutionRequestsList requests = .ok out) :
-    ∀ b ∈ out, 0 < b.size := by
-  have spec := getExecutionRequestsList_spec made
-  clear made
-  generalize requests.typedLists.filter (·.count != 0) = lists at spec
-  induction spec with
-  | nil => simp
-  | @cons list _ _ _ head _ rest =>
-    obtain ⟨data, -, rfl⟩ := head
-    intro b hb
-    rcases List.mem_cons.mp hb with rfl | hb
-    · simp only [ByteArray.size_append]
-      have : (⟨list.type.toArray⟩ : ByteArray).size = 1 := by simp [ByteArray.size]
-      omega
-    · exact rest b hb
+    ∀ b ∈ out, 0 < b.size :=
+  fun b mem => Nat.lt_trans Nat.zero_lt_one (getExecutionRequestsList_size_gt_one made b mem)
 
 /-- In the list that the execution layer receives, the type bytes strictly increase. -/
 theorem getExecutionRequestsList_increasing {preset : Preset} {fork : Fork}

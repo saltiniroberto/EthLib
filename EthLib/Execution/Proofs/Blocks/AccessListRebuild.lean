@@ -208,7 +208,7 @@ theorem applyBody_tracks {config : ChainConfig} {env : BlockEnvironment fork}
     startSystemCalls_tracks hkeep hstart (AccessListBuilder.Tracks.init start) hBody
   -- The transactions run at the positions 1 to n.
   obtain ⟨hP₂, hT₂, hI₂⟩ := applyTransactions_tracks hkeep block.transactions 0
-    ⟨body, .zero, 0, [], []⟩ txs hP₁ hT₁ (by rw [hI₁]; exact Nat.le_refl _) (by omega) hTxs
+    ⟨body, .zero, 0, [], [], []⟩ txs hP₁ hT₁ (by rw [hI₁]; exact Nat.le_refl _) (by omega) hTxs
   -- The withdrawals and the requests run at position n + 1.
   have hn : block.transactions.length + 1 < 2 ^ 32 := by omega
   have hlt : txs.body.builder.index < UInt32.ofNat (block.transactions.length + 1) := by
@@ -247,6 +247,10 @@ The last change of each field in that list, or its value before the block, is it
 An account missing from a state reads as the empty account, so an empty account counts as none.
 
 The nonce is in 64 bits, as the list holds it, which loses nothing below 2^64.
+
+A state whose nonces are at most 2^64 - 1 keeps that bound through the block.
+
+So on such a state the 64-bit nonces equal the nonces after the block, as a corollary shows.
 
 The calls of the body keep a property of block states that the state before the block has.
 

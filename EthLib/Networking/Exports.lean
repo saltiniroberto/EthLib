@@ -3,11 +3,16 @@ module
 public import EthLib.Networking.Exports.Devp2p
 public import EthLib.Networking.Exports.Discv4
 public import EthLib.Networking.Exports.Discv5
+public import EthLib.Networking.Exports.DnsDisc
 public import EthLib.Networking.Exports.ForkId
 public import EthLib.Networking.Exports.Enr
 public import EthLib.Networking.Exports.Noise
 public import EthLib.Networking.Exports.Gossip
 public import EthLib.Networking.Exports.Libp2p
+public import EthLib.Networking.Exports.TlsCertificate
+public import EthLib.Networking.Exports.TlsHandshake
+public import EthLib.Networking.Exports.Quic
+public import EthLib.Networking.Exports.QuicProtection
 public import EthLib.Networking.Exports.ReqResp
 public import EthLib.Networking.Exports.Rlpx
 public import EthLib.Networking.Exports.Snappy

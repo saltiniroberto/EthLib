@@ -6,7 +6,7 @@ from ethlib.networking.libp2p import identity
 from raising import raises
 
 # The keys are the secp256k1 rows of "Test vectors" in peer-ids/peer-ids.md of libp2p/specs.
-# The pinned commit is c750236de43cd8b246a824b377dfdb26bae686db.
+# The pinned commit is 4facaf9876da1eb7d6e066982010c81495ebb965.
 # The private key row is the protobuf 08 02 12 20 of key type 2, then the 32-byte secret.
 SECRET = bytes.fromhex("53DADF1D5A164D6B4ACDB15E24AA4C5B1D3461BDBD42ABEDB0A4404D56CED8FB")
 PUBLIC_KEY = bytes.fromhex(
@@ -93,19 +93,20 @@ def test_peer_id_refuses_a_key_that_is_not_canonical(key: bytes) -> None:
     assert info.value.code == 1
 
 
+# Each identifier and its first two bytes, in decimal, which the error carries.
 @pytest.mark.parametrize(
-    "identifier",
+    ("identifier", "header"),
     [
         # A SHA-256 multihash, which names a key of more than 42 bytes.
-        bytes.fromhex("1220") + bytes(32),
+        (bytes.fromhex("1220") + bytes(32), "[18, 32]"),
         # An identity multihash with the wrong length.
-        bytes.fromhex("0024") + PUBLIC_KEY,
-        b"",
-        b"\x00",
+        (bytes.fromhex("0024") + PUBLIC_KEY, "[0, 36]"),
+        (b"", "[]"),
+        (b"\x00", "[0]"),
     ],
 )
-def test_decode_peer_id_refuses_another_multihash(identifier: bytes) -> None:
-    with raises(identity.Libp2pIdentityError, IDENTITY + "peerId") as info:
+def test_decode_peer_id_refuses_another_multihash(identifier: bytes, header: str) -> None:
+    with raises(identity.Libp2pIdentityError, IDENTITY + "peerId " + header) as info:
         identity.decode_peer_id(identifier)
     assert info.value.code == 2
 

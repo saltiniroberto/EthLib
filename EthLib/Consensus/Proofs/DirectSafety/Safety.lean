@@ -1,0 +1,806 @@
+module
+
+public import EthLib.Consensus.Proofs.DirectSafety.Drift
+
+/-!
+# Direct accountable safety of two executions
+
+Two executions of the state transition start at one genesis and share a prefix up to a state `x`.
+
+Each then runs a tail of its own, and the two end in conflicting finalized checkpoints.
+
+Then the accountable keys hold at least a third of the unslashed active stake at `x`.
+
+Two thirds of the larger drift of the two tails are subtracted from that third.
+
+Otherwise the hashes of the two runs show a collision or a zero root.
+
+A key is accountable when the runs accepted two of its votes that a slashing would punish.
+
+It is also accountable when a block of either tail applied a slashing that names it.
+
+That slashing may be a proposer slashing.
+
+The votes are the attestations that the blocks of the runs applied, read by public key.
+
+The weights are the effective balances at the states of the runs.
+
+A slashing in the shared prefix does not make a key accountable by itself.
+
+A key slashed by `x` is outside the reference set and outside the accountable keys.
+
+A prefix slashing can name a key without slashing it, so that key can stay in the reference set.
+
+Such a key is accountable only through double votes or through evidence in a tail.
+
+A key slashed by `x` stays out of the later drift only while its slashed flag stays set.
+
+The proofs do not need that fact, because the drift is observed, not bounded.
+
+The drift charges twice the stake that leaves or loses balance after `x`.
+
+It charges once the stake that joins or gains balance.
+
+It also charges twice the stake active only at the previous epoch.
+
+It is zero when the active validators and their effective balances stay the same.
+
+They must stay so from the epoch before `x` to one epoch past the later finalized epoch.
+
+It is the largest drift that the tails observe, not a bound in closed form.
+
+[Casper FFG] §2.1, Theorem 1, proves accountable safety for one set of validators.
+
+[Gasper] §8.6, Theorem 8.3, proves it for changing sets.
+
+These proofs do not go through those models.
+
+For each accountable key, a second theorem gives the checks that the runs executed.
+
+It assumes nothing about the signature checks.
+
+A third form reads one justification step on the last state of each run, as fork choice runs it.
+
+That step counts at the last state, which lies within the horizon of the drift.
+
+[Casper FFG]: https://arxiv.org/abs/1710.09437
+[Gasper]: https://arxiv.org/abs/2003.03052v3
+-/
+
+@[expose] public section
+
+namespace EthLib.Consensus.DirectSafety
+
+open Base Cryptography.Bls
+
+variable {preset : Preset} {config : Config} {checks : SignatureChecks}
+
+/-- The unslashed keys active at `x` that are accountable on the two tails. -/
+noncomputable def accountableKeys {g x a b : ForkedBeaconState preset}
+    (shared : Run config checks g x) (left : Run config checks x a)
+    (right : Run config checks x b) : Finset BLSPubkey := by
+  classical
+  exact (unslashedKeys x.state).filter (Accountable shared left right)
+
+/-- The direct-safety bound on two tails, or hash evidence on the two runs.
+
+The bound says the unslashed stake at `x` is at most three times the accountable stake.
+
+Twice the larger drift of the two tails is added, each up to one epoch past `epoch`.
+
+The hash evidence is a SHA-256 collision or a zero root among the objects of the runs. -/
+def AccountableOrHashEvidence {g x a b : ForkedBeaconState preset}
+    (shared : Run config checks g x) (left : Run config checks x a)
+    (right : Run config checks x b) (epoch : Nat) : Prop :=
+  Models.stake (effectiveWeight x.state) (unslashedKeys x.state) ≤
+      3 * Models.stake (effectiveWeight x.state) (accountableKeys shared left right) +
+      2 * max (derivedDrift epoch left) (derivedDrift epoch right) ∨
+    HashEvidence ((shared.append left).hashObjects ++ (shared.append right).hashObjects)
+
+open Classical in
+/-- Loss, gain and boundary drift measured against an unslashed reference subset. -/
+noncomputable def stateDriftOn (reference : Finset BLSPubkey)
+    (x y : ForkedBeaconState preset) : Nat :=
+  2 * (∑ k ∈ reference.filter (¬ SlashedAt y.state ·),
+    (effectiveWeight x.state k -
+      Models.supported (recentKeys y.state) (effectiveWeight y.state) k)) +
+    (∑ k ∈ recentKeys y.state, (effectiveWeight y.state k -
+      Models.supported reference (effectiveWeight x.state) k)) + 2 * boundaryStake y
+
+open Classical in
+/-- Two quorums with slashable common voters bound a subset of the unslashed stake at `x`.
+
+The bound is three times the accountable stake.
+
+The drift at the state of each quorum is added.
+
+Each quorum is a quorum call of its run, or the test of the step of its view.
+
+Both are in the tails: they target epoch `low` or later, and `x` is no later than its first slot.
+
+A key slashed at a quorum and unslashed at `x` has slashing evidence in the tail of the quorum. -/
+private theorem view_pair_reference_bound {g x a b : ForkedBeaconState preset}
+    (shared : Run config checks g x) (left : Run config checks x a) (right : Run config checks x b)
+    (parameters : Parameters preset) (genesis : Genesis config checks g)
+    {low high : Nat} (starts : x.state.slot.toNat ≤ low * preset.SLOTS_PER_EPOCH.toNat)
+    (enoughA : EnoughStake (shared.append left) high)
+    (enoughB : EnoughStake (shared.append right) high)
+    {va : TerminalView a} {vb : TerminalView b} (terminalA : va.enough high)
+    (terminalB : vb.enough high)
+    (one : ViewQuorum (shared.append left) va) (two : ViewQuorum (shared.append right) vb)
+    (lowerOne : low ≤ one.target.epoch.toNat) (lowerTwo : low ≤ two.target.epoch.toNat)
+    (withinOne : one.target.epoch.toNat ≤ high) (withinTwo : two.target.epoch.toNat ≤ high)
+    (overlap : ∀ key ∈ one.voters ∩ two.voters,
+      Slashable (shared.append left) (shared.append right) key)
+    (reference : Finset BLSPubkey) (referenceSubset : reference ⊆ unslashedKeys x.state) :
+    Models.stake (effectiveWeight x.state) reference ≤
+      3 * Models.stake (effectiveWeight x.state)
+          (reference.filter (Accountable shared left right)) +
+      stateDriftOn reference x one.state + stateDriftOn reference x two.state := by
+  classical
+  let bad := reference.filter (Accountable shared left right)
+  have facts {z : ForkedBeaconState preset} {tail : Run config checks x z}
+      {view : TerminalView z}
+      (enough : EnoughStake (shared.append tail) high) (terminal : view.enough high)
+      (included : ∀ k, tail.SlashingEvidence k → Accountable shared left right k)
+      (call : ViewQuorum (shared.append tail) view) (lower : low ≤ call.target.epoch.toNat)
+      (within : call.target.epoch.toNat ≤ high) :
+      call.voters ⊆ recentKeys call.state.state ∧
+      2 * Models.stake (effectiveWeight call.state.state) (unslashedKeys call.state.state) ≤
+        3 * Models.stake (effectiveWeight call.state.state) call.voters ∧
+      (∑ k ∈ reference \ bad,
+        (effectiveWeight x.state k - Models.supported (recentKeys call.state.state)
+          (effectiveWeight call.state.state) k)) ≤
+      ∑ k ∈ reference.filter (¬ SlashedAt call.state.state ·),
+        (effectiveWeight x.state k - Models.supported (recentKeys call.state.state)
+          (effectiveWeight call.state.state) k) := by
+    -- Removing slashed keys from the denominator keeps a quorum.
+    refine ⟨view_voters_recent _ parameters genesis call,
+      (Nat.mul_le_mul_left 2 (Models.stake_mono (Finset.filter_subset _ _))).trans
+        (view_quorum_count _ genesis enough terminal call within), ?_⟩
+    -- A slashed validator at the state of the quorum was slashed at `x`, or the tail has evidence.
+    have slashed : ∀ v ∈ call.state.state.validators.data.toList, v.slashed = true →
+        SlashedAt x.state v.pubkey ∨ tail.SlashingEvidence v.pubkey := by
+      cases call with
+      | inr c => exact tail.slashed_evidence
+      | inl c =>
+        intro v found flag
+        -- The call is in the tail, so the run up to it starts at `x`.
+        obtain ⟨pre, post, split⟩ := tail.contains_split (.slot c.advanced)
+          (call_after_reference shared tail parameters low starts c lower)
+        obtain ⟨_, _, _, _, validators, _⟩ := c.toEpochCall.selected_prefix
+        refine (pre.slashed_evidence v
+          (by simpa only [ViewQuorum.state, validators] using found) flag).imp_right ?_
+        rintro ⟨u, w, step, inside, evidence⟩
+        refine ⟨u, w, step, ?_, evidence⟩
+        rw [split]
+        exact (Run.contains_append _ post step).mpr (.inl (.earlier inside _))
+    apply Finset.sum_le_sum_of_subset_of_nonneg
+    · intro k hk
+      obtain ⟨fresh, absent⟩ := Finset.mem_sdiff.mp hk
+      refine Finset.mem_filter.mpr ⟨fresh, ?_⟩
+      rintro ⟨v, found, key, flag⟩
+      rcases slashed v found flag with early | evidence
+      · exact (Finset.mem_filter.mp (referenceSubset fresh)).2 (key ▸ early)
+      · exact absent (Finset.mem_filter.mpr ⟨fresh, key ▸ included _ evidence⟩)
+    · intros; exact Nat.zero_le _
+  obtain ⟨recentOne, quorumOne, lossOne⟩ :=
+    facts enoughA terminalA (fun _ h => .inr (.inl h)) one lowerOne withinOne
+  obtain ⟨recentTwo, quorumTwo, lossTwo⟩ :=
+    facts enoughB terminalB (fun _ h => .inr (.inr h)) two lowerTwo withinTwo
+  -- Include overlap outside the reference set; it contributes no reference weight.
+  let accountable := bad ∪ (one.voters ∩ two.voters)
+  have outsideLoss (s : ForkedBeaconState preset)
+      (bound : (∑ k ∈ reference \ bad,
+        (effectiveWeight x.state k - Models.supported (recentKeys s.state)
+          (effectiveWeight s.state) k)) ≤
+        ∑ k ∈ reference.filter (¬ SlashedAt s.state ·),
+          (effectiveWeight x.state k - Models.supported (recentKeys s.state)
+            (effectiveWeight s.state) k)) :
+      (∑ k ∈ reference \ accountable,
+        (effectiveWeight x.state k - Models.supported (recentKeys s.state)
+          (effectiveWeight s.state) k)) ≤
+        ∑ k ∈ reference.filter (¬ SlashedAt s.state ·),
+          (effectiveWeight x.state k - Models.supported (recentKeys s.state)
+            (effectiveWeight s.state) k) := by
+    apply le_trans (Finset.sum_le_sum_of_subset_of_nonneg ?_ (by intros; omega)) bound
+    exact Finset.sdiff_subset_sdiff (Finset.Subset.refl _) Finset.subset_union_left
+  have same : reference ∩ accountable = bad := by
+    ext k
+    simp only [accountable, bad, Finset.mem_inter, Finset.mem_union, Finset.mem_filter]
+    constructor
+    · rintro ⟨fresh, h | h⟩
+      · exact h
+      · exact ⟨fresh, .inl (overlap k (Finset.mem_inter.mpr h))⟩
+    · intro h; exact ⟨h.1, .inl h⟩
+  -- Recent keys are unslashed, so the unslashed active keys are recent.
+  have inside (y : ForkedBeaconState preset) : unslashedKeys y.state ⊆ recentKeys y.state := by
+    intro k member
+    obtain ⟨active, fresh⟩ := Finset.mem_filter.mp member
+    exact Finset.mem_filter.mpr ⟨Finset.mem_union_left _ active, fresh⟩
+  -- A recent key outside the unslashed active keys is outside the active keys.
+  have outside (y : ForkedBeaconState preset) :
+      Models.stake (effectiveWeight y.state) (recentKeys y.state \ unslashedKeys y.state) ≤
+        boundaryStake y := by
+    apply Models.stake_mono
+    intro k member
+    obtain ⟨recent, notUnslashed⟩ := Finset.mem_sdiff.mp member
+    exact Finset.mem_sdiff.mpr ⟨recent, fun active =>
+      notUnslashed (Finset.mem_filter.mpr ⟨active, (Finset.mem_filter.mp recent).2⟩)⟩
+  have bound := Models.stake_le_accountable_add_change reference
+    (unslashedKeys one.state.state) (unslashedKeys two.state.state)
+    (recentKeys one.state.state) (recentKeys two.state.state) one.voters two.voters
+    accountable (effectiveWeight x.state) (effectiveWeight one.state.state)
+    (effectiveWeight two.state.state)
+    (∑ k ∈ reference.filter (¬ SlashedAt one.state.state ·),
+      (effectiveWeight x.state k - Models.supported (recentKeys one.state.state)
+        (effectiveWeight one.state.state) k))
+    (∑ k ∈ reference.filter (¬ SlashedAt two.state.state ·),
+      (effectiveWeight x.state k - Models.supported (recentKeys two.state.state)
+        (effectiveWeight two.state.state) k))
+    (∑ k ∈ recentKeys one.state.state, (effectiveWeight one.state.state k -
+      Models.supported reference (effectiveWeight x.state) k))
+    (∑ k ∈ recentKeys two.state.state, (effectiveWeight two.state.state k -
+      Models.supported reference (effectiveWeight x.state) k))
+    (boundaryStake one.state) (boundaryStake two.state)
+    (inside one.state) (inside two.state) recentOne recentTwo quorumOne quorumTwo
+    Finset.subset_union_right (outsideLoss one.state lossOne) (outsideLoss two.state lossTwo)
+    (Nat.le_refl _) (Nat.le_refl _) (outside one.state) (outside two.state)
+  rw [same] at bound
+  dsimp only [bad] at bound
+  unfold stateDriftOn
+  omega
+
+/-- The original reference set is one instance of the shared quorum transfer. -/
+private theorem view_pair_bound {g x a b : ForkedBeaconState preset}
+    (shared : Run config checks g x) (left : Run config checks x a) (right : Run config checks x b)
+    (parameters : Parameters preset) (genesis : Genesis config checks g)
+    {low high : Nat} (starts : x.state.slot.toNat ≤ low * preset.SLOTS_PER_EPOCH.toNat)
+    (enoughA : EnoughStake (shared.append left) high)
+    (enoughB : EnoughStake (shared.append right) high)
+    {va : TerminalView a} {vb : TerminalView b} (terminalA : va.enough high)
+    (terminalB : vb.enough high)
+    (one : ViewQuorum (shared.append left) va) (two : ViewQuorum (shared.append right) vb)
+    (lowerOne : low ≤ one.target.epoch.toNat) (lowerTwo : low ≤ two.target.epoch.toNat)
+    (withinOne : one.target.epoch.toNat ≤ high) (withinTwo : two.target.epoch.toNat ≤ high)
+    (overlap : ∀ key ∈ one.voters ∩ two.voters,
+      Slashable (shared.append left) (shared.append right) key) :
+    Models.stake (effectiveWeight x.state) (unslashedKeys x.state) ≤
+      3 * Models.stake (effectiveWeight x.state) (accountableKeys shared left right) +
+      stateDrift x one.state + stateDrift x two.state := by
+  exact view_pair_reference_bound shared left right parameters genesis starts enoughA enoughB
+    terminalA terminalB one two lowerOne lowerTwo withinOne withinTwo overlap
+    (unslashedKeys x.state) (Finset.Subset.refl _)
+
+/-- A conflict between two checkpoints puts `x` no later than the first slot of the earlier epoch.
+
+The first checkpoint has the earlier epoch. -/
+theorem conflict_starts {g x a b : ForkedBeaconState preset}
+    (shared : Run config checks g x) (left : Run config checks x a) (right : Run config checks x b)
+    (f j : Checkpoint) (ordered : f.epoch ≤ j.epoch)
+    (conflict : Conflict (shared.append left) (shared.append right) f j) :
+    x.state.slot.toNat ≤ f.epoch.toNat * preset.SLOTS_PER_EPOCH.toNat := by
+  apply shared.slot_le_of_checkpointPath_ne left right
+  simpa only [Conflict, UInt64.min_def, ite_eq_left ordered] using conflict
+
+open Classical in
+/-- The conflict's selected calls transfer a reference chosen from their target epochs. -/
+theorem accountable_safety_at_calls_reference {g x a b : ForkedBeaconState preset}
+    (shared : Run config checks g x) (left : Run config checks x a) (right : Run config checks x b)
+    (parameters : Parameters preset) (genesis : Genesis config checks g)
+    (j : Checkpoint)
+    (enoughA : EnoughStake (shared.append left) j.epoch.toNat)
+    (enoughB : EnoughStake (shared.append right) j.epoch.toNat)
+    (field : j = b.state.previousJustifiedCheckpoint ∨ j = b.state.currentJustifiedCheckpoint ∨
+      j = b.state.finalizedCheckpoint)
+    (ordered : a.state.finalizedCheckpoint.epoch ≤ j.epoch)
+    (conflict : Conflict (shared.append left) (shared.append right) a.state.finalizedCheckpoint j)
+    (reference : Nat → Nat → Finset BLSPubkey)
+    (inside : ∀ e f, reference e f ⊆ unslashedKeys x.state) :
+    (∃ one two : EitherCall (shared.append left) (shared.append right),
+      a.state.finalizedCheckpoint.epoch.toNat ≤ one.targetEpoch ∧ one.targetEpoch ≤ j.epoch.toNat ∧
+      a.state.finalizedCheckpoint.epoch.toNat ≤ two.targetEpoch ∧ two.targetEpoch ≤ j.epoch.toNat ∧
+      let r := reference one.targetEpoch two.targetEpoch
+      Models.stake (effectiveWeight x.state) r ≤
+        3 * Models.stake (effectiveWeight x.state) (r.filter (Accountable shared left right)) +
+          stateDriftOn r x one.state + stateDriftOn r x two.state) ∨
+      HashEvidence ((shared.append left).hashObjects ++ (shared.append right).hashObjects) := by
+  rcases view_conflicting_fields_quorums (shared.append left) (shared.append right)
+      parameters genesis .realized .realized j field ordered conflict with
+    ⟨one, two, lowerOne, upperOne, lowerTwo, upperTwo, overlap⟩ | hashes
+  · have bound := view_pair_reference_bound shared left right parameters genesis
+      (conflict_starts shared left right _ j ordered conflict) enoughA enoughB
+      (va := .realized) (vb := .realized) trivial trivial one two lowerOne lowerTwo
+      upperOne upperTwo overlap (reference one.target.epoch.toNat two.target.epoch.toNat)
+          (inside _ _)
+    obtain ⟨one, rfl⟩ := one.eq_inl_of_realized
+    obtain ⟨two, rfl⟩ := two.eq_inl_of_realized
+    exact .inl ⟨.inl one, .inr two, lowerOne, upperOne, lowerTwo, upperTwo, bound⟩
+  · exact .inr hashes
+
+/-- A finalized field of the left run conflicts with a field of the right run at its epoch or later.
+
+The field of the right run is justified or finalized.
+
+Then two quorum calls of the runs have target epochs between the two epochs.
+
+The unslashed active stake at `x` is at most three times the accountable stake at `x`.
+
+The drift at the state of each call is added.
+
+Otherwise SHA-256 collides in the root of a header of the runs, or a header or state has root zero.
+
+The runs start at one genesis built from deposits, and the preset meets the parameters.
+
+Each run's active stake exceeds 1.5 increments at epoch calls after epoch 1 through `j.epoch + 1`.
+-/
+theorem accountable_safety_at_calls {g x a b : ForkedBeaconState preset}
+    (shared : Run config checks g x) (left : Run config checks x a) (right : Run config checks x b)
+    (parameters : Parameters preset) (genesis : Genesis config checks g)
+    (j : Checkpoint)
+    (enoughA : EnoughStake (shared.append left) j.epoch.toNat)
+    (enoughB : EnoughStake (shared.append right) j.epoch.toNat)
+    (field : j = b.state.previousJustifiedCheckpoint ∨ j = b.state.currentJustifiedCheckpoint ∨
+      j = b.state.finalizedCheckpoint)
+    (ordered : a.state.finalizedCheckpoint.epoch ≤ j.epoch)
+    (conflict : Conflict (shared.append left) (shared.append right) a.state.finalizedCheckpoint j) :
+    (∃ one two : EitherCall (shared.append left) (shared.append right),
+      a.state.finalizedCheckpoint.epoch.toNat ≤ one.targetEpoch ∧ one.targetEpoch ≤ j.epoch.toNat ∧
+      a.state.finalizedCheckpoint.epoch.toNat ≤ two.targetEpoch ∧ two.targetEpoch ≤ j.epoch.toNat ∧
+      Models.stake (effectiveWeight x.state) (unslashedKeys x.state) ≤
+        3 * Models.stake (effectiveWeight x.state) (accountableKeys shared left right) +
+        stateDrift x one.state + stateDrift x two.state) ∨
+      HashEvidence ((shared.append left).hashObjects ++ (shared.append right).hashObjects) := by
+  exact accountable_safety_at_calls_reference shared left right parameters genesis j enoughA enoughB
+    field ordered conflict (fun _ _ => unslashedKeys x.state) (fun _ _ => Finset.Subset.refl _)
+
+/-- The drift of a tail observes its last state when that state is within the horizon. -/
+private theorem stateDrift_le_derivedDrift {x z : ForkedBeaconState preset} {high : Nat}
+    (run : Run config checks x z) (bounded : (getCurrentEpoch z.state).toNat ≤ high + 1) :
+    stateDrift x z ≤ derivedDrift high run := by
+  cases run with
+  | nil => exact Nat.le_refl _
+  | snoc pre step =>
+    simp only [derivedDrift, ite_eq_left bounded]; exact Nat.le_max_right _ _
+
+/-- Caching the slot keeps the slot and validators.
+
+So a quorum call's cached state keeps the epoch, slashed flags, recent keys and drift. -/
+theorem QuorumCall.cached_frame {g y : ForkedBeaconState preset}
+    {run : Run config checks g y} (call : QuorumCall run) (x : ForkedBeaconState preset) :
+    getCurrentEpoch call.cached = getCurrentEpoch call.before.state ∧
+    SlashedAt call.cached = SlashedAt call.before.state ∧
+    recentKeys call.cached = recentKeys call.before.state ∧
+    stateDrift x ⟨call.before.fork, call.cached⟩ = stateDrift x call.before := by
+  obtain ⟨_, _, _, frame, validators, _⟩ := call.toEpochCall.selected_prefix
+  have sameEpoch : getCurrentEpoch call.cached = getCurrentEpoch call.before.state := by
+    simp only [getCurrentEpoch, frame.slot]
+  have weight : effectiveWeight call.cached = effectiveWeight call.before.state := by
+    funext k
+    simp only [effectiveWeight, validators]
+  have slashed : SlashedAt call.cached = SlashedAt call.before.state := by
+    funext k
+    simp only [SlashedAt, validators]
+  have keys : keysAt call.cached = keysAt call.before.state := by
+    funext indices
+    unfold keysAt
+    rw [validators]
+  have indices : getActiveValidatorIndices call.cached =
+      getActiveValidatorIndices call.before.state := by
+    funext epoch
+    unfold getActiveValidatorIndices
+    rw [validators]
+  have active : activeKeys call.cached = activeKeys call.before.state := by
+    unfold activeKeys
+    rw [keys, indices, sameEpoch]
+  have recent : recentKeys call.cached = recentKeys call.before.state := by
+    unfold recentKeys getPreviousEpoch
+    rw [slashed, active, keys, indices, sameEpoch]
+  refine ⟨sameEpoch, slashed, recent, ?_⟩
+  simp only [stateDrift, referenceLoss, referenceGain, boundaryStake]
+  rw [weight, slashed, recent, active]
+
+private theorem selected_call_drift_le {g x y : ForkedBeaconState preset}
+    (shared : Run config checks g x) (tail : Run config checks x y)
+    (parameters : Parameters preset) (low high : Nat)
+    (starts : x.state.slot.toNat ≤ low * preset.SLOTS_PER_EPOCH.toNat)
+    (call : QuorumCall (shared.append tail))
+    (lower : low ≤ call.target.epoch.toNat) (upper : call.target.epoch.toNat ≤ high) :
+    stateDrift x ⟨call.before.fork, call.cached⟩ ≤ derivedDrift high tail := by
+  have member := call_after_reference shared tail parameters low starts call lower
+  obtain ⟨pre, post, split⟩ := tail.contains_split (.slot call.advanced) member
+  let before := call.before
+  have cached := call.cached_frame x
+  have epoch : (getCurrentEpoch before.state).toNat ≤ high + 1 := by
+    have target := call.currentEpoch_le
+    rw [cached.1] at target
+    dsimp only [before]
+    omega
+  have mono {u v : ForkedBeaconState preset} (pre : Run config checks x u)
+      (post : Run config checks u v) :
+      derivedDrift high pre ≤ derivedDrift high (pre.append post) := by
+    induction post with
+    | nil => exact Nat.le_refl _
+    | snoc post step ih =>
+      simp only [Run.append, derivedDrift]
+      split
+      · exact ih.trans (Nat.le_max_left _ _)
+      · exact ih
+  have next : derivedDrift high pre ≤ derivedDrift high (pre.snoc (.slot call.advanced)) := by
+    simp only [derivedDrift]
+    split
+    · exact Nat.le_max_left _ _
+    · exact Nat.le_refl _
+  rw [cached.2.2.2]
+  have result := (stateDrift_le_derivedDrift pre epoch).trans (next.trans (mono _ post))
+  simpa only [← split] using result
+
+/-- The drift at the state of a call of either run is at most the larger drift of the tails.
+
+The call targets an epoch from `low` to `high`, and `x` is no later than the first slot of `low`. -/
+private theorem either_call_drift_le {g x a b : ForkedBeaconState preset}
+    (shared : Run config checks g x) (left : Run config checks x a) (right : Run config checks x b)
+    (parameters : Parameters preset) (low high : Nat)
+    (starts : x.state.slot.toNat ≤ low * preset.SLOTS_PER_EPOCH.toNat)
+    (c : EitherCall (shared.append left) (shared.append right))
+    (lower : low ≤ c.targetEpoch) (upper : c.targetEpoch ≤ high) :
+    stateDrift x c.state ≤ max (derivedDrift high left) (derivedDrift high right) := by
+  cases c with
+  | inl c => exact (selected_call_drift_le shared left parameters low high starts c lower
+      upper).trans (Nat.le_max_left _ _)
+  | inr c => exact (selected_call_drift_le shared right parameters low high starts c lower
+      upper).trans (Nat.le_max_right _ _)
+
+/-- The finalized fields of the two runs conflict.
+
+The left finalized epoch is at most the right one.
+
+The conflict puts `x` no later than the first slot of the earlier finalized epoch.
+
+Then the unslashed active stake at `x` is at most three times the accountable stake at `x`.
+
+Twice the larger drift of the two tails is added.
+
+The drift of a tail is the largest over its states up to one epoch past the right finalized epoch.
+
+Otherwise SHA-256 collides in the root of a header of the runs, or a header or state has root zero.
+
+The runs start at one genesis built from deposits, and the preset meets the parameters.
+
+The floor covers epoch calls after epoch 1 through one epoch past the right finalized epoch.
+
+Each run has active stake above 1.5 increments at each covered call. -/
+theorem accountable_safety {g x a b : ForkedBeaconState preset}
+    (shared : Run config checks g x) (left : Run config checks x a) (right : Run config checks x b)
+    (parameters : Parameters preset) (genesis : Genesis config checks g)
+    (enoughA : EnoughStake (shared.append left) b.state.finalizedCheckpoint.epoch.toNat)
+    (enoughB : EnoughStake (shared.append right) b.state.finalizedCheckpoint.epoch.toNat)
+    (ordered : a.state.finalizedCheckpoint.epoch ≤ b.state.finalizedCheckpoint.epoch)
+    (conflict : Conflict (shared.append left) (shared.append right)
+      a.state.finalizedCheckpoint b.state.finalizedCheckpoint) :
+    AccountableOrHashEvidence shared left right b.state.finalizedCheckpoint.epoch.toNat := by
+  rcases accountable_safety_at_calls shared left right parameters genesis
+    b.state.finalizedCheckpoint enoughA enoughB (.inr (.inr rfl)) ordered conflict with
+    witnesses | hashes
+  · obtain ⟨one, two, lowerOne, upperOne, lowerTwo, upperTwo, bound⟩ := witnesses
+    have start := conflict_starts shared left right _ _ ordered conflict
+    have first := either_call_drift_le shared left right parameters _ _ start one lowerOne upperOne
+    have second := either_call_drift_le shared left right parameters _ _ start two lowerTwo upperTwo
+    exact .inl (by omega)
+  · exact .inr hashes
+
+/-- Two conflicting finalized checkpoints put the epoch of `x` at or before the earlier one.
+
+The first checkpoint has the earlier epoch. -/
+theorem epoch_le_of_conflict {g x a b : ForkedBeaconState preset}
+    (shared : Run config checks g x) (left : Run config checks x a) (right : Run config checks x b)
+    (ordered : a.state.finalizedCheckpoint.epoch ≤ b.state.finalizedCheckpoint.epoch)
+    (conflict : Conflict (shared.append left) (shared.append right)
+      a.state.finalizedCheckpoint b.state.finalizedCheckpoint) :
+    (getCurrentEpoch x.state).toNat ≤ a.state.finalizedCheckpoint.epoch.toNat := by
+  have start := conflict_starts shared left right _ _ ordered conflict
+  rw [getCurrentEpoch_toNat]
+  -- The slot of `x` is at most the first slot of the earlier epoch.
+  rcases Nat.eq_zero_or_pos preset.SLOTS_PER_EPOCH.toNat with zero | positive
+  · simp [zero]
+  · exact Nat.div_le_of_le_mul (by rw [Nat.mul_comm]; exact start)
+
+/-- Direct accountable safety in its one-third form, for a stable set of unslashed active keys.
+
+The hypotheses are those of direct accountable safety.
+
+Moreover, each state of either tail up to one epoch past the later finalized epoch keeps the keys.
+
+Each such state has as unslashed active keys those of `x` not slashed since, with their balances.
+
+Its recent keys are all active, and the same holds at `x`.
+
+Then the accountable keys hold at least a third of the unslashed active stake at `x`.
+
+Otherwise SHA-256 collides in the root of a header of the runs, or a header or state has root zero.
+-/
+theorem accountable_safety_third {g x a b : ForkedBeaconState preset}
+    (shared : Run config checks g x) (left : Run config checks x a) (right : Run config checks x b)
+    (parameters : Parameters preset) (genesis : Genesis config checks g)
+    (enoughA : EnoughStake (shared.append left) b.state.finalizedCheckpoint.epoch.toNat)
+    (enoughB : EnoughStake (shared.append right) b.state.finalizedCheckpoint.epoch.toNat)
+    (ordered : a.state.finalizedCheckpoint.epoch ≤ b.state.finalizedCheckpoint.epoch)
+    (conflict : Conflict (shared.append left) (shared.append right)
+      a.state.finalizedCheckpoint b.state.finalizedCheckpoint)
+    (stableA : ∀ {u : ForkedBeaconState preset} (pre : Run config checks x u)
+      (post : Run config checks u a), pre.append post = left →
+        (getCurrentEpoch u.state).toNat ≤ b.state.finalizedCheckpoint.epoch.toNat + 1 →
+          StableKeys x u)
+    (stableB : ∀ {u : ForkedBeaconState preset} (pre : Run config checks x u)
+      (post : Run config checks u b), pre.append post = right →
+        (getCurrentEpoch u.state).toNat ≤ b.state.finalizedCheckpoint.epoch.toNat + 1 →
+          StableKeys x u) :
+    Models.stake (effectiveWeight x.state) (unslashedKeys x.state) ≤
+        3 * Models.stake (effectiveWeight x.state) (accountableKeys shared left right) ∨
+      HashEvidence ((shared.append left).hashObjects ++ (shared.append right).hashObjects) := by
+  -- The epoch of `x` is at or before the earlier finalized epoch, so within the window.
+  have startEpoch : (getCurrentEpoch x.state).toNat ≤
+      b.state.finalizedCheckpoint.epoch.toNat + 1 := by
+    have earlier := epoch_le_of_conflict shared left right ordered conflict
+    have later := UInt64.le_iff_toNat_le.mp ordered
+    omega
+  have zeroA := derivedDrift_eq_zero_of_stableKeys _ left startEpoch stableA
+  have zeroB := derivedDrift_eq_zero_of_stableKeys _ right startEpoch stableB
+  rcases accountable_safety shared left right parameters genesis enoughA enoughB ordered
+    conflict with bound | hashes
+  · rw [zeroA, zeroB] at bound
+    exact .inl (by simpa using bound)
+  · exact .inr hashes
+
+/-- The drift at the state of a quorum of the view is at most the drift of the tail.
+
+The quorum targets an epoch from `low` to `high`, and `x` is no later than the first slot of `low`.
+
+The test of the step counts at the last state, at most one epoch past `high`. -/
+private theorem view_drift {g x a : ForkedBeaconState preset}
+    (shared : Run config checks g x) (tail : Run config checks x a)
+    (parameters : Parameters preset) (low high : Nat)
+    (starts : x.state.slot.toNat ≤ low * preset.SLOTS_PER_EPOCH.toNat)
+    {view : TerminalView a} (call : ViewQuorum (shared.append tail) view)
+    (lower : low ≤ call.target.epoch.toNat) (upper : call.target.epoch.toNat ≤ high) :
+    stateDrift x call.state ≤ derivedDrift high tail := by
+  cases call with
+  | inl c => exact selected_call_drift_le shared tail parameters low high starts c lower upper
+  | inr c =>
+    exact stateDrift_le_derivedDrift tail
+      (c.currentEpoch_le.trans (Nat.add_le_add_right upper 1))
+
+/-- A finalized field of the left view conflicts with a justified field of the right view.
+
+A view is the last state of a run, or one justification step on that state.
+
+The justified field is at the finalized epoch or later.
+
+Then the unslashed active stake at `x` is at most three times the accountable stake at `x`.
+
+Twice the larger drift of the two tails is added.
+
+The drift of a tail is the largest over its states up to one epoch past the justified epoch.
+
+It covers the test of a step, which counts at the last state within that horizon.
+
+Otherwise SHA-256 collides in the root of a header of the runs, or a header or state has root zero.
+
+The runs start at one genesis built from deposits, and the preset meets the parameters.
+
+After epoch 1, active stake exceeds 1.5 increments through one epoch past `j.epoch`.
+
+This holds at the epoch calls of each run, and at the step of each view. -/
+theorem accountable_safety_justified_terminal {g x a b : ForkedBeaconState preset}
+    (shared : Run config checks g x) (left : Run config checks x a)
+    (right : Run config checks x b) (va : TerminalView a) (vb : TerminalView b)
+    (parameters : Parameters preset) (genesis : Genesis config checks g)
+    (j : Checkpoint)
+    (enoughA : EnoughStake (shared.append left) j.epoch.toNat)
+    (enoughB : EnoughStake (shared.append right) j.epoch.toNat)
+    (terminalA : va.enough j.epoch.toNat) (terminalB : vb.enough j.epoch.toNat)
+    (field : j = vb.state.previousJustifiedCheckpoint ∨ j = vb.state.currentJustifiedCheckpoint)
+    (ordered : va.state.finalizedCheckpoint.epoch ≤ j.epoch)
+    (conflict : Conflict (shared.append left) (shared.append right)
+      va.state.finalizedCheckpoint j) :
+    AccountableOrHashEvidence shared left right j.epoch.toNat := by
+  rcases view_conflicting_fields_quorums (shared.append left) (shared.append right)
+      parameters genesis va vb j (field.imp_right Or.inl) ordered conflict with
+    ⟨one, two, lowerOne, upperOne, lowerTwo, upperTwo, overlap⟩ | hashes
+  · have starts := conflict_starts shared left right _ _ ordered conflict
+    have bound := view_pair_bound shared left right parameters genesis starts enoughA enoughB
+      terminalA terminalB one two lowerOne lowerTwo upperOne upperTwo overlap
+    have first := view_drift shared left parameters _ _ starts one lowerOne upperOne
+    have second := view_drift shared right parameters _ _ starts two lowerTwo upperTwo
+    exact .inl (by omega)
+  · exact .inr hashes
+
+/-- A finalized field of the left run conflicts with a justified field of the right run.
+
+The justified field is at the finalized epoch or later.
+
+With that order, the conflict puts `x` no later than the first slot of the finalized epoch.
+
+Then the unslashed active stake at `x` is at most three times the accountable stake at `x`.
+
+Twice the larger drift of the two tails is added.
+
+The drift of a tail is the largest over its states up to one epoch past the justified epoch.
+
+Otherwise SHA-256 collides in the root of a header of the runs, or a header or state has root zero.
+
+The runs start at one genesis built from deposits, and the preset meets the parameters.
+
+Each run's active stake exceeds 1.5 increments at epoch calls after epoch 1 through `j.epoch + 1`.
+-/
+theorem accountable_safety_justified {g x a b : ForkedBeaconState preset}
+    (shared : Run config checks g x) (left : Run config checks x a) (right : Run config checks x b)
+    (parameters : Parameters preset) (genesis : Genesis config checks g)
+    (j : Checkpoint)
+    (enoughA : EnoughStake (shared.append left) j.epoch.toNat)
+    (enoughB : EnoughStake (shared.append right) j.epoch.toNat)
+    (field : j = b.state.previousJustifiedCheckpoint ∨ j = b.state.currentJustifiedCheckpoint)
+    (ordered : a.state.finalizedCheckpoint.epoch ≤ j.epoch)
+    (conflict : Conflict (shared.append left) (shared.append right) a.state.finalizedCheckpoint j) :
+    AccountableOrHashEvidence shared left right j.epoch.toNat :=
+  accountable_safety_justified_terminal shared left right .realized .realized parameters genesis
+    j enoughA enoughB trivial trivial field ordered conflict
+
+/-- Two justified fields of the views at one epoch are equal, or they bound the accountable stake.
+
+Three times the accountable stake plus twice the drift then covers the unslashed stake at `x`.
+
+Otherwise SHA-256 collides in a header root of the runs, or a header or state has root zero. -/
+theorem accountable_justified_unique_terminal {g x a b : ForkedBeaconState preset}
+    (shared : Run config checks g x) (left : Run config checks x a)
+    (right : Run config checks x b) (va : TerminalView a) (vb : TerminalView b)
+    (parameters : Parameters preset) (genesis : Genesis config checks g)
+    (j k : Checkpoint)
+    (enoughA : EnoughStake (shared.append left) j.epoch.toNat)
+    (enoughB : EnoughStake (shared.append right) j.epoch.toNat)
+    (terminalA : va.enough j.epoch.toNat) (terminalB : vb.enough j.epoch.toNat)
+    (fieldA : j = va.state.previousJustifiedCheckpoint ∨ j = va.state.currentJustifiedCheckpoint)
+    (fieldB : k = vb.state.previousJustifiedCheckpoint ∨ k = vb.state.currentJustifiedCheckpoint)
+    (epoch : j.epoch = k.epoch)
+    (starts : x.state.slot.toNat ≤ j.epoch.toNat * preset.SLOTS_PER_EPOCH.toNat) :
+    j = k ∨ AccountableOrHashEvidence shared left right j.epoch.toNat := by
+  classical
+  by_cases same : j = k
+  · exact .inl same
+  -- A quorum cannot target genesis, because its current epoch is at least two.
+  have positive {z : ForkedBeaconState preset} {run : Run config checks g z}
+      {view : TerminalView z} (quorum : ViewQuorum run view) :
+      0 < quorum.target.epoch.toNat := by
+    have one := toNat_genesisEpoch_add_one
+    cases quorum with
+    | inl call | inr call =>
+      have later := UInt64.lt_iff_toNat_lt.mp call.later
+      rw [one] at later
+      change 0 < call.target.epoch.toNat
+      rw [call.targetEpoch]
+      cases call.current <;> simp only [Bool.false_eq_true, ↓reduceIte,
+        getPreviousEpoch_toNat] <;> omega
+  rcases view_justified_fields (shared.append left) genesis va j fieldA with
+    initialA | ⟨one, targetA⟩ <;>
+  rcases view_justified_fields (shared.append right) genesis vb k fieldB with
+    initialB | ⟨two, targetB⟩
+  · exact .inl (initialA.trans initialB.symm)
+  · have zero : j.epoch.toNat = 0 := by rw [initialA]; rfl
+    have pos := positive two
+    rw [targetB, ← epoch] at pos
+    omega
+  · have zero : k.epoch.toNat = 0 := by rw [initialB]; rfl
+    have pos := positive one
+    rw [targetA, epoch] at pos
+    omega
+  have overlap := view_same_epoch _ _ parameters genesis one two
+    (by rw [targetA, targetB]; exact epoch) (by rw [targetA, targetB]; exact same)
+  have withinA : one.target.epoch.toNat = j.epoch.toNat := by rw [targetA]
+  have withinB : two.target.epoch.toNat = j.epoch.toNat := by rw [targetB, epoch]
+  have bound := view_pair_bound shared left right parameters genesis starts enoughA enoughB
+    terminalA terminalB one two withinA.ge withinB.ge withinA.le withinB.le overlap
+  have first := view_drift shared left parameters _ _ starts one withinA.ge withinA.le
+  have second := view_drift shared right parameters _ _ starts two withinB.ge withinB.le
+  exact .inr (.inl (by omega))
+
+/-- Two justified fields of the runs at one epoch are equal, or they bound the accountable stake.
+
+`x` is no later than the first slot of that epoch.
+
+The unslashed active stake at `x` is then at most three times the accountable stake at `x`.
+
+Twice the larger drift of the two tails is added.
+
+The drift of a tail is the largest over its states up to one epoch past that epoch.
+
+Otherwise SHA-256 collides in the root of a header of the runs, or a header or state has root zero.
+
+The runs start at one genesis built from deposits, and the preset meets the parameters.
+
+Each run's active stake exceeds 1.5 increments at epoch calls after epoch 1 through `j.epoch + 1`.
+-/
+theorem accountable_justified_unique {g x a b : ForkedBeaconState preset}
+    (shared : Run config checks g x) (left : Run config checks x a)
+    (right : Run config checks x b) (parameters : Parameters preset)
+    (genesis : Genesis config checks g)
+    (j k : Checkpoint)
+    (enoughA : EnoughStake (shared.append left) j.epoch.toNat)
+    (enoughB : EnoughStake (shared.append right) j.epoch.toNat)
+    (fieldA : j = a.state.previousJustifiedCheckpoint ∨ j = a.state.currentJustifiedCheckpoint)
+    (fieldB : k = b.state.previousJustifiedCheckpoint ∨ k = b.state.currentJustifiedCheckpoint)
+    (epoch : j.epoch = k.epoch)
+    (starts : x.state.slot.toNat ≤ j.epoch.toNat * preset.SLOTS_PER_EPOCH.toNat) :
+    j = k ∨ AccountableOrHashEvidence shared left right j.epoch.toNat :=
+  accountable_justified_unique_terminal shared left right .realized .realized parameters genesis
+    j k enoughA enoughB trivial trivial fieldA fieldB epoch starts
+
+/-- Data that one of the two runs checked in an aggregate that names `key`. -/
+def VerifiedEither {g a b : ForkedBeaconState preset} (left : Run config checks g a)
+    (right : Run config checks g b) (key : BLSPubkey) (data : AttestationData) : Prop :=
+  (∃ c : AttestationCheck left key, c.indexed.data = data) ∨
+    ∃ c : AttestationCheck right key, c.indexed.data = data
+
+/-- Two conflicting messages that name `key`, each with a check that one of the runs executed. -/
+def VerifiedConflict {g a b : ForkedBeaconState preset} (left : Run config checks g a)
+    (right : Run config checks g b) (key : BLSPubkey) : Prop :=
+  (∃ d₁ d₂, VerifiedEither left right key d₁ ∧ VerifiedEither left right key d₂ ∧
+      isSlashableAttestationData d₁ d₂ = true) ∨
+    (∃ c : HeaderCheck left key, ProposerConflict c.slashing) ∨
+    ∃ c : HeaderCheck right key, ProposerConflict c.slashing
+
+/-- A slashing that a block of one run applied gives two checks of its own.
+
+They are two checks of attestations that conflict, or two checks of conflicting headers. -/
+theorem checked_of_slashingEvidence {g a : ForkedBeaconState preset}
+    {run : Run config checks g a} {key : BLSPubkey} (evidence : run.SlashingEvidence key) :
+    (∃ one two : AttestationCheck run key,
+      isSlashableAttestationData one.indexed.data two.indexed.data = true) ∨
+    ∃ c : HeaderCheck run key, ProposerConflict c.slashing := by
+  obtain ⟨x, y, step, member, evidence⟩ := evidence
+  cases step with
+  | slot _ => exact evidence.elim
+  | block engine signed due applied =>
+    rcases evidence with ⟨slashing, included, v, found, rfl⟩ |
+      ⟨slashing, included, i, named, v, found, rfl⟩
+    · obtain ⟨c, same, conflict⟩ := Run.headerCheck_of_proposerSlashing member included found
+      exact .inr ⟨c, same ▸ conflict⟩
+    · obtain ⟨one, two, first, second, conflict⟩ :=
+        Run.attestationChecks_of_attesterSlashing member included named found
+      exact .inl ⟨one, two, by rw [first, second]; exact conflict⟩
+
+/-- Every accountable key has two conflicting messages, each checked by one of the runs.
+
+Each check is that of an indexed attestation or of a header, and it accepted.
+
+It holds for any signature checks, so it says which checks accepted, not who signed.
+
+It needs more than `MIN_SEED_LOOKAHEAD + 2` epochs of mixes. -/
+theorem verifiedConflict_of_accountable {g x a b : ForkedBeaconState preset}
+    (shared : Run config checks g x) (left : Run config checks x a)
+    (right : Run config checks x b)
+    (lookahead : preset.MIN_SEED_LOOKAHEAD.toNat + 2 <
+      preset.EPOCHS_PER_HISTORICAL_VECTOR.toNat) (key : BLSPubkey)
+    (accountable : Accountable shared left right key) :
+    VerifiedConflict (shared.append left) (shared.append right) key := by
+  -- Evidence in a tail is evidence in the run that the tail ends.
+  have lift {z : ForkedBeaconState preset} (tail : Run config checks x z)
+      (evidence : tail.SlashingEvidence key) : (shared.append tail).SlashingEvidence key := by
+    obtain ⟨u, w, step, member, evidence⟩ := evidence
+    exact ⟨u, w, step, (shared.contains_append tail step).mpr (.inr member), evidence⟩
+  rcases accountable with ⟨d₁, d₂, first, second, conflict⟩ | evidence | evidence
+  · have verified {data : AttestationData}
+        (accepted : AcceptedEither (shared.append left) (shared.append right) key data) :
+        VerifiedEither (shared.append left) (shared.append right) key data :=
+      accepted.imp (Run.attestationCheck_of_accepted lookahead)
+        (Run.attestationCheck_of_accepted lookahead)
+    exact .inl ⟨d₁, d₂, verified first, verified second, conflict⟩
+  · rcases checked_of_slashingEvidence (lift left evidence) with
+      ⟨one, two, conflict⟩ | ⟨c, conflict⟩
+    · exact .inl ⟨_, _, .inl ⟨one, rfl⟩, .inl ⟨two, rfl⟩, conflict⟩
+    · exact .inr (.inl ⟨c, conflict⟩)
+  · rcases checked_of_slashingEvidence (lift right evidence) with
+      ⟨one, two, conflict⟩ | ⟨c, conflict⟩
+    · exact .inl ⟨_, _, .inr ⟨one, rfl⟩, .inr ⟨two, rfl⟩, conflict⟩
+    · exact .inr (.inr ⟨c, conflict⟩)
+
+end EthLib.Consensus.DirectSafety

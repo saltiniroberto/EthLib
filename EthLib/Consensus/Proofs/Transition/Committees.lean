@@ -77,6 +77,20 @@ theorem getCurrentEpoch_le_activityFixedEpoch (state : BeaconState preset fork) 
   have := (getCurrentEpoch state).toNat_lt
   omega
 
+/-- Activity is fixed at least three epochs ahead.
+
+The near exit window reaches three epochs past the source. -/
+abbrev Preset.SeedLookaheadAtLeastThree (preset : Preset) : Prop :=
+  3 ≤ preset.MAX_SEED_LOOKAHEAD.toNat
+
+/-- The mainnet preset's seed lookahead covers at least three epochs. -/
+theorem Preset.seedLookaheadAtLeastThree_mainnet : Preset.mainnet.SeedLookaheadAtLeastThree := by
+  decide
+
+/-- The minimal preset's seed lookahead covers at least three epochs. -/
+theorem Preset.seedLookaheadAtLeastThree_minimal : Preset.minimal.SeedLookaheadAtLeastThree := by
+  decide
+
 /-- A current epoch at least as late gives a fixed epoch at least as late. -/
 theorem activityFixedEpoch_mono {post : Base.Fork} {other : BeaconState preset post}
     (le : getCurrentEpoch state ≤ getCurrentEpoch other) :
@@ -336,7 +350,7 @@ theorem CommitteesKept.of_activeKept {post : Base.Fork} {other : BeaconState pre
 /-- Two states agree on the attesters of an attestation, given the same active indices and seed.
 
 Both are those of the epoch of its slot. -/
-private theorem getAttestingIndices_eq_of_seed {other : BeaconState preset fork}
+theorem getAttestingIndices_eq_of_seed {other : BeaconState preset fork}
     {attestation : Attestation preset fork}
     (active : getActiveValidatorIndices other (computeEpochAtSlot preset attestation.data.slot) =
       getActiveValidatorIndices state (computeEpochAtSlot preset attestation.data.slot))
@@ -746,7 +760,7 @@ theorem activeStep_addValidatorToRegistry {pubkey : Cryptography.Bls.BLSPubkey}
     (computed : addValidatorToRegistry state pubkey withdrawalCredentials amount = .ok after) :
     ActiveStep state after := by
   have pushed := addValidatorToRegistry_validators_eq_push computed
-  refine ⟨(frame_addValidatorToRegistry computed).slot, fun epoch _ position => ?_⟩
+  refine ⟨addValidatorToRegistry_slot computed, fun epoch _ position => ?_⟩
   unfold isActiveAt
   rw [pushed, Array.getElem?_push]
   split
@@ -831,8 +845,12 @@ theorem processBlock_pendingSplit (before : fork < .altair) {block : BeaconBlock
     Nat.not_le_of_lt (Nat.lt_trans before (by decide : Fork.altair < Fork.pectra))
   have notGloas : ¬Fork.glamsterdam ≤ fork :=
     Nat.not_le_of_lt (Nat.lt_trans before (by decide : Fork.altair < Fork.glamsterdam))
+  have notBellatrix : ¬Fork.bellatrix ≤ fork :=
+    Nat.not_le_of_lt (Nat.lt_trans before (by decide : Fork.altair < Fork.bellatrix))
+  have early : fork < .hegota := Nat.lt_trans before (by decide)
   unfold processBlock at computed
-  simp only [notAltair, ↓reduceDIte, bind_ok_iff] at computed
+  simp only [notAltair, ↓reduceDIte, stateBeforeOperations, notGloas, notBellatrix, early,
+    pure_bind, bind_assoc, bind_ok_iff] at computed
   obtain ⟨headed, headerOk, revealed, randaoOk, voted, eth1Ok, operationsOk⟩ := computed
   unfold processOperations at operationsOk
   simp only [notGloas, notElectra, ↓reduceDIte, bind_ok_iff, ensure_ok_iff,
@@ -1064,11 +1082,9 @@ private theorem keeps_processSlashingsReset (computed : processSlashingsReset st
   obtain ⟨_, _, _, _, rfl⟩ := processSlashingsReset_eq computed
   exact Keeps.of_eq rfl rfl rfl rfl rfl
 
-private theorem keeps_processHistoricalRootsUpdate
-    (computed : processHistoricalRootsUpdate state = .ok after) : Keeps state after := by
+private theorem keeps_processHistoricalRootsUpdate {before : fork < .shapella}
+    (computed : processHistoricalRootsUpdate state before = .ok after) : Keeps state after := by
   unfold processHistoricalRootsUpdate at computed
-  split at computed
-  · cases computed
   simp only [bind_ok_iff, liftAccessor_ok] at computed
   obtain ⟨_, _, computed⟩ := computed
   split at computed
@@ -1085,49 +1101,6 @@ private theorem keeps_processJustificationAndFinalization
   · obtain ⟨_, _, _, rest⟩ := weighJustificationAndFinalization_checkpoints weighed
     exact Keeps.of_eq (by rw [← rest]) (by rw [← rest]) (by rw [← rest]) (by rw [← rest])
       (by rw [← rest])
-
-/-! ## Steps that keep the RANDAO mixes and the slot, at every fork -/
-
-/-- Justification and finalization keep the RANDAO mixes and the slot. -/
-theorem randaoMixes_slot_processJustificationAndFinalization
-    (computed : processJustificationAndFinalization state = .ok after) :
-    after.randaoMixes = state.randaoMixes ∧ after.slot = state.slot :=
-  have keeps := keeps_processJustificationAndFinalization computed
-  ⟨keeps.1.1, keeps.2.2⟩
-
-/-- The rewards and penalties of an epoch keep the RANDAO mixes and the slot. -/
-theorem randaoMixes_slot_processRewardsAndPenalties
-    (computed : processRewardsAndPenalties config state = .ok after) :
-    after.randaoMixes = state.randaoMixes ∧ after.slot = state.slot :=
-  have keeps := keeps_processRewardsAndPenalties computed
-  ⟨keeps.1.1, keeps.2.2⟩
-
-/-- The slashing penalties of an epoch keep the RANDAO mixes and the slot. -/
-theorem randaoMixes_slot_processSlashings (computed : processSlashings state = .ok after) :
-    after.randaoMixes = state.randaoMixes ∧ after.slot = state.slot :=
-  have keeps := keeps_processSlashings computed
-  ⟨keeps.1.1, keeps.2.2⟩
-
-/-- The reset of the deposit votes keeps the RANDAO mixes and the slot. -/
-theorem randaoMixes_slot_processEth1DataReset {hegota : fork < .hegota}
-    (computed : processEth1DataReset hegota state = .ok after) :
-    after.randaoMixes = state.randaoMixes ∧ after.slot = state.slot :=
-  have keeps := keeps_processEth1DataReset computed
-  ⟨keeps.1.1, keeps.2.2⟩
-
-/-- The updates of the effective balances keep the RANDAO mixes and the slot. -/
-theorem randaoMixes_slot_processEffectiveBalanceUpdates
-    (computed : processEffectiveBalanceUpdates state = .ok after) :
-    after.randaoMixes = state.randaoMixes ∧ after.slot = state.slot :=
-  have keeps := keeps_processEffectiveBalanceUpdates computed
-  ⟨keeps.1.1, keeps.2.2⟩
-
-/-- The update of the historical roots keeps the RANDAO mixes and the slot. -/
-theorem randaoMixes_slot_processHistoricalRootsUpdate
-    (computed : processHistoricalRootsUpdate state = .ok after) :
-    after.randaoMixes = state.randaoMixes ∧ after.slot = state.slot :=
-  have keeps := keeps_processHistoricalRootsUpdate computed
-  ⟨keeps.1.1, keeps.2.2⟩
 
 /-! ## Steps that keep the slot and activity, at every fork -/
 
@@ -1189,8 +1162,8 @@ theorem activeStep_processSlashingsReset (computed : processSlashingsReset state
   (keeps_processSlashingsReset computed).activeStep
 
 /-- The historical roots update keeps the slot and activity. -/
-theorem activeStep_processHistoricalRootsUpdate
-    (computed : processHistoricalRootsUpdate state = .ok after) : ActiveStep state after :=
+theorem activeStep_processHistoricalRootsUpdate {before : fork < .shapella}
+    (computed : processHistoricalRootsUpdate state before = .ok after) : ActiveStep state after :=
   (keeps_processHistoricalRootsUpdate computed).activeStep
 
 /-- Before Altair, what the epoch step keeps, writes and rotates. -/
@@ -1201,19 +1174,30 @@ private theorem processEpoch_kept (before : fork < .altair)
         MixesKeptBut next state after) ∧
       after.previousEpochAttestations before = state.currentEpochAttestations before ∧
       (after.currentEpochAttestations before).data = #[] := by
-  have notAltair : ¬Fork.altair ≤ fork := Nat.not_le_of_lt before
-  unfold processEpoch at computed
-  simp only [notAltair, ↓reduceDIte, bind_ok_iff] at computed
-  obtain ⟨_, justifiedOk, _, rewardedOk, _, registeredOk, _, slashedOk, _, resetOk, _,
-    balancedOk, cleared, clearedOk, _, mixedOk, rooted, rootedOk, rotated⟩ := computed
-  have head : Keeps state cleared :=
-    (keeps_processJustificationAndFinalization justifiedOk).trans <|
-    (keeps_processRewardsAndPenalties rewardedOk).trans <|
-    (keeps_processRegistryUpdates (Nat.lt_trans before (by decide)) registeredOk).trans <|
-    (keeps_processSlashings slashedOk).trans <|
-    (keeps_processEth1DataReset resetOk).trans <|
-    (keeps_processEffectiveBalanceUpdates balancedOk).trans <|
-    keeps_processSlashingsReset clearedOk
+  obtain ⟨cleared, mixed, rooted, rotatedState, synced, looked, initial, mixedOk, rootedOk,
+    rotated, syncedOk, lookedOk, windowed⟩ := processEpoch_randaoCut computed
+  -- Every fork guard from Altair on is false, and the eth1 reset runs.
+  have later {g : Fork} (h : Fork.altair ≤ g) : ¬g ≤ fork :=
+    fun h' => Nat.not_le_of_lt before (Nat.le_trans h h')
+  have preHeze : fork < .hegota := Nat.lt_trans before (by decide)
+  simp (disch := decide) only [EpochStage.Edge, later, ↓reduceDIte]
+    at rootedOk rotated syncedOk lookedOk windowed
+  subst syncedOk lookedOk windowed
+  have head : Keeps state cleared := by
+    apply initial.transport Keeps Keeps.refl (fun a b => a.trans b)
+    intro k member a b ok
+    have edge := EpochStage.action_cases.mp ok
+    cases k <;> simp (disch := decide) only [EpochStage.Edge, later, preHeze, ↓reduceDIte] at edge
+    all_goals first
+      | exact keeps_processJustificationAndFinalization edge
+      | exact keeps_processRewardsAndPenalties edge
+      | exact keeps_processRegistryUpdates (Nat.lt_trans before (by decide)) edge
+      | exact keeps_processSlashings edge
+      | exact keeps_processEth1DataReset edge
+      | exact keeps_processEffectiveBalanceUpdates edge
+      | exact keeps_processSlashingsReset edge
+      | exact edge ▸ Keeps.refl _
+      | simp [EpochStage.prefixStages] at member
   have epoch : getCurrentEpoch cleared = getCurrentEpoch state := by
     simp only [getCurrentEpoch, head.2.2]
   obtain ⟨next, mix, randaoMixes, nextEq, -, written, rfl⟩ := processRandaoMixesReset_eq mixedOk
@@ -1230,7 +1214,7 @@ private theorem processEpoch_kept (before : fork < .altair)
   · intro other apart
     have plain := writeCircularRooted_elements cleared.randaoMixes next mix
     rw [written] at plain
-    have mixesEq : after.randaoMixes = rooted.randaoMixes := by rw [← rest]
+    have mixesEq : rotatedState.randaoMixes = rooted.randaoMixes := by rw [← rest]
     rw [mixesEq, tail.1.1]
     exact (readCircular_writeCircular_of_ne plain.symm (Ne.symm apart)).trans
       (by rw [head.1.1])

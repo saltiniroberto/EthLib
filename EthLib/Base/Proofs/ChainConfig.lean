@@ -25,11 +25,63 @@ The order check of EIP-6122 passes exactly when no fork by block follows a fork 
 A chain whose forks are in the order of the timeline passes it.
 
 Mainnet and Hoodi set none.
+
+Three numbers build a blob schedule exactly when they meet its bounds, and it holds them.
+
+The numbers of a schedule build it back.
 -/
 
 @[expose] public section
 
 namespace EthLib.Base
+
+namespace BlobSchedule
+
+/-- Three numbers build a schedule exactly when they meet its four bounds. -/
+theorem ofNat?_isSome_iff (target max fraction : Nat) :
+    (ofNat? target max fraction).isSome ↔
+      target ≤ max ∧ 0 < max ∧ GAS_PER_BLOB * max < 2 ^ 64 ∧ 0 < fraction := by
+  unfold ofNat?
+  split <;> simp_all
+
+/-- The numbers of a built schedule, each below `2^64` by the bound on the maximum's blob gas. -/
+private theorem ofNat?_numbers {target max fraction : Nat} {s : BlobSchedule}
+    (h : ofNat? target max fraction = some s) :
+    s.target.toNat = target ∧ s.max.toNat = max ∧ s.baseFeeUpdateFraction = fraction := by
+  unfold ofNat? at h
+  split at h
+  · next bounds =>
+    -- The bound on the blob gas of the maximum keeps both numbers below `2^64`.
+    have hmax : max < 2 ^ 64 :=
+      Nat.lt_of_le_of_lt (Nat.le_mul_of_pos_left max (by decide)) bounds.2.2.1
+    cases h
+    exact ⟨UInt64.toNat_ofNat_of_lt' (Nat.lt_of_le_of_lt bounds.1 hmax),
+      UInt64.toNat_ofNat_of_lt' hmax, rfl⟩
+  · cases h
+
+/-- A schedule built from three numbers has the first as its target. -/
+theorem target_toNat_of_ofNat? {target max fraction : Nat} {s : BlobSchedule}
+    (h : ofNat? target max fraction = some s) : s.target.toNat = target :=
+  (ofNat?_numbers h).1
+
+/-- A schedule built from three numbers has the second as its maximum. -/
+theorem max_toNat_of_ofNat? {target max fraction : Nat} {s : BlobSchedule}
+    (h : ofNat? target max fraction = some s) : s.max.toNat = max :=
+  (ofNat?_numbers h).2.1
+
+/-- A schedule built from three numbers has the third as its update fraction. -/
+theorem baseFeeUpdateFraction_of_ofNat? {target max fraction : Nat} {s : BlobSchedule}
+    (h : ofNat? target max fraction = some s) : s.baseFeeUpdateFraction = fraction :=
+  (ofNat?_numbers h).2.2
+
+/-- The numbers of a schedule build that schedule back. -/
+theorem ofNat?_toNat (s : BlobSchedule) :
+    ofNat? s.target.toNat s.max.toNat s.baseFeeUpdateFraction = some s := by
+  have target := UInt64.le_iff_toNat_le.mp s.target_le_max
+  have max : 0 < s.max.toNat := UInt64.lt_iff_toNat_lt.mp s.max_pos
+  simp [ofNat?, target, max, s.maxBlobGas_lt, s.baseFeeUpdateFraction_pos]
+
+end BlobSchedule
 
 namespace Activation
 
@@ -46,7 +98,7 @@ variable {config : ChainConfig} {n t : Nat} {f : Fork}
 
 /-- The active fork of a configuration with one more fork in front. -/
 private theorem activeFork_cons (id : UInt64) (d : Address) (g : Fork) (a : Activation)
-    (l : List (Fork × Activation)) (bs : List (Activation × BlobSchedule)) :
+    (l : List (Fork × Activation)) (bs : List (Option Fork × Activation × BlobSchedule)) :
     activeFork ⟨id, d, (g, a) :: l, bs⟩ n t =
       if a.reached n t then
         match activeFork ⟨id, d, l, bs⟩ n t with
@@ -171,7 +223,7 @@ theorem activeFork_ne_of_shadowed {g : Fork} (hlt : f < g)
 /-- A chain sets no blob schedule at a block exactly when the block reaches none of them. -/
 theorem blobScheduleAt_eq_none_iff :
     config.blobScheduleAt n t = none ↔
-      ∀ a s, (a, s) ∈ config.blobSchedules → a.reached n t = false := by
+      ∀ g a s, (g, a, s) ∈ config.blobSchedules → a.reached n t = false := by
   simp [blobScheduleAt, List.find?_eq_none]
 
 /-- The blob schedule that a chain sets at a block is one of its schedules.
@@ -179,18 +231,18 @@ theorem blobScheduleAt_eq_none_iff :
 The block has reached the activation of that schedule. -/
 theorem mem_of_blobScheduleAt_eq_some {s : BlobSchedule}
     (h : config.blobScheduleAt n t = some s) :
-    ∃ a, (a, s) ∈ config.blobSchedules ∧ a.reached n t = true := by
+    ∃ g a, (g, a, s) ∈ config.blobSchedules ∧ a.reached n t = true := by
   simp only [blobScheduleAt, Option.map_eq_some_iff] at h
-  obtain ⟨⟨a, s'⟩, hf, rfl⟩ := h
+  obtain ⟨⟨g, a, s'⟩, hf, rfl⟩ := h
   have hr := List.find?_some hf
-  exact ⟨a, List.mem_reverse.mp (List.mem_of_find?_eq_some hf), hr⟩
+  exact ⟨g, a, List.mem_reverse.mp (List.mem_of_find?_eq_some hf), hr⟩
 
 /-- A schedule at the end of the list that the block has reached holds, whatever comes before.
 -/
-theorem blobScheduleAt_append_of_reached {a : Activation} {s : BlobSchedule}
+theorem blobScheduleAt_append_of_reached {g : Option Fork} {a : Activation} {s : BlobSchedule}
     (id : UInt64) (d : Address) (fs : List (Fork × Activation))
-    (l : List (Activation × BlobSchedule)) (hr : a.reached n t = true) :
-    blobScheduleAt ⟨id, d, fs, l ++ [(a, s)]⟩ n t = some s := by
+    (l : List (Option Fork × Activation × BlobSchedule)) (hr : a.reached n t = true) :
+    blobScheduleAt ⟨id, d, fs, l ++ [(g, a, s)]⟩ n t = some s := by
   simp [blobScheduleAt, hr]
 
 /-- The forks are ordered exactly when no fork by block is later than a fork by timestamp. -/

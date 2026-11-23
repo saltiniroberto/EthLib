@@ -3,7 +3,7 @@ module
 public import EthLib.Execution.Evm.Interpreter
 public import EthLib.Execution.Evm.Machine.JumpDest
 public import EthLib.Execution.Evm.Precompiles.Table
-public import EthLib.Execution.Evm.Call.TransferLog
+public import EthLib.Execution.Evm.TransferLog
 
 /-!
 # `Evm.Call.MessageCall`
@@ -126,9 +126,12 @@ A precompile that succeeds charges its price and gives its output.
 
 A precompile that fails halts the frame exceptionally. -/
 def runPrecompile (fork : Fork) (address : Nat) (evm : Evm fork Meter) : Option (Evm fork Meter) :=
+  -- The precompile at the code address runs on the call data.
+  --
+  -- The price is charged after the run; either failure halts the frame exceptionally.
   match Precompiles.run fork address evm.message.data (GasMeter.gasLeft evm.gas) with
   | none => none
-  | some (.error _) => some (exceptionalHalt evm .precompile)
+  | some (.error _) => some (exceptionalHalt evm (.precompile address))
   | some (.ok output) =>
     match GasMeter.charge evm.gas ((Precompiles.price fork address evm.message.data).getD 0) with
     | .error e => some (exceptionalHalt evm e)
@@ -152,9 +155,11 @@ theorem gasHeld_runPrecompile_le [LawfulGasMeter Meter] {address : Nat}
       cases h
       exact Nat.le_trans (Nat.le_add_right _ _) (LawfulGasMeter.gasHeld_charge hc)
 
-/-- The address of the precompile that a message calls at fork `fork`, or none. -/
+/-- The address of the precompile that a message calls at fork `fork`, or none.
+
+The transaction can map the code address to another precompile, as in a simulation. -/
 def precompileAddress (fork : Fork) (message : Message fork) : Option Nat :=
-  match message.codeAddress with
+  match message.codeAddress.bind message.txEnv.precompiles with
   | some address =>
     let number := address.toU256.toNat
     if Precompiles.isPrecompile fork number then some number else none
@@ -166,6 +171,9 @@ A revert also rolls back the state gas of the frame.
 
 An exceptional halt has already rolled it back. -/
 def rollbackOnError (snapshot : TransactionState) (evm : Evm fork Meter) : Evm fork Meter :=
+  -- A frame that fails puts back the state from before the message.
+  --
+  -- From Glamsterdam, a revert refills the state gas of the frame, by EIP-8037.
   if evm.error.isSome then
     { evm with
       state := evm.state.restoreTxState snapshot
@@ -183,7 +191,9 @@ So the wipe changes no word.
 From Spurious Dragon, its nonce grows from 0 to 1. -/
 def prepareCreation (fork : Fork) (state : TransactionState) (address : Address) :
     Except EvmError TransactionState :=
+  -- The storage of the new account is wiped, and the account is recorded as created.
   let state := (state.destroyStorage address).markAccountCreated address
+  -- From Spurious Dragon, by EIP-161, its nonce grows by one.
   if fork ≥ .spuriousDragon then (state.incrementNonce fork address).mapError .state
   else .ok state
 
@@ -194,8 +204,11 @@ Up to BPO5, it pays 200 gas a byte.
 From Glamsterdam, it pays 6 gas a word to hash the code, then 1530 state gas a byte. -/
 def chargeCodeDeposit (fork : Fork) (meter : Meter) (size : Nat) : Except EvmError Meter :=
   if fork ≥ .glamsterdam then do
+    -- First the hash cost, 6 gas per 32-byte word of code, by EIP-8037.
     let meter ← GasMeter.charge meter (OPCODE_KECCAK256_PER_WORD * wordCount size)
+    -- Then `CPSB` state gas per byte, by EIP-8037.
     GasMeter.chargeState meter (size * CPSB)
+  -- `c = G_codedeposit * ||o||`, and `g** < c` is in `F`.
   else GasMeter.charge meter (size * CODE_DEPOSIT_PER_BYTE)
 
 /-- The deposit of the code leaves no more gas than the meter held. -/
@@ -220,23 +233,43 @@ When it cannot, it fails with no gas left, and from Byzantium with no output.
 From Glamsterdam, code longer than the limit fails before it pays. -/
 def depositCode (fork : Fork) (snapshot : TransactionState) (evm : Evm fork Meter) :
     Except EvmError (Evm fork Meter) :=
+  -- An init code that failed puts back the state from before the creation.
   if evm.error.isSome then .ok { evm with state := evm.state.restoreTxState snapshot }
   else
+    -- The code is the output of the init code.
     let code := evm.output
+    -- A failed deposit puts back the state from before the creation, and leaves no gas.
+    --
+    -- From Byzantium the output becomes empty; before, it stays.
     let fail (error : EvmError) : Evm fork Meter :=
       { evm with
         state := evm.state.restoreTxState snapshot
         gas := GasMeter.exhaust evm.gas
         output := if fork ≥ .byzantium then .empty else evm.output
         error := some error }
+    -- From London, `F` holds when `o[0] = 0xef`, by EIP-3541.
     if fork ≥ .london ∧ code[0]? = some 0xef then .ok (fail .invalidContractPrefix)
+    -- From Glamsterdam, code of more than `MAX_CODE_SIZE` bytes fails as out of gas.
+    --
+    -- It comes before the charges.
     else if fork ≥ .glamsterdam ∧ (maxCodeSize fork).any (· < code.size) then .ok (fail .outOfGas)
     else
       match chargeCodeDeposit fork evm.gas code.size with
+      -- From Homestead, the failed charge is an exceptional halt, by EIP-2.
+      --
+      -- Before, a creation that cannot pay leaves an empty contract, by item 3 of EIP-2.
       | .error e => .ok (if fork ≥ .homestead then fail e else { evm with output := .empty })
       | .ok gas =>
+        -- From Spurious Dragon, by EIP-170, code of more than `MAX_CODE_SIZE` bytes fails.
+        --
+        -- It fails with an out of gas error.
+        --
+        -- Up to BPO5 the check comes after the charge.
+        --
+        -- From Glamsterdam, the check above already rejected such code.
         if (maxCodeSize fork).any (· < code.size) then .ok (fail .outOfGas)
         else do
+          -- The code becomes the code of the new account.
           let state ← (evm.state.setCode fork evm.message.currentTarget code).mapError .state
           return { evm with gas, state }
 
@@ -276,11 +309,117 @@ theorem gasHeld_depositCode_le [LawfulGasMeter Meter] {snapshot : TransactionSta
 /-- The state that a message starts its frame from: before Paris, its target is touched. -/
 def startState (fork : Fork) (message : Message fork) (state : TransactionState) :
     TransactionState :=
+  -- Before Paris, the target is touched, for the deletion of EIP-161.
   if fork < .paris then state.touchAccount message.currentTarget else state
 
 mutual
 
+/-- Run a message at fork `fork` in the monad `M`, from the state and the substate it starts from.
+
+The observer sees each step of its frame and of the frames of its messages.
+
+Its frame starts with a new meter, or with `meter`, which holds at most the gas of the message.
+
+The frame that ends the message has at most the gas of the message.
+
+If the observer never fails, the run fails only with an error that aborts the whole execution. -/
+@[specialize]
+def processMessageWith [LawfulGasMeter Meter] {M : Type → Type} [Monad M]
+    [MonadExceptOf EvmError M] (fork : Fork) (observe : StepObserver M fork Meter)
+    (message : Message fork) (state : TransactionState) (substate : Substate)
+    (meter : Meter := GasMeter.start message.gas message.reservoir)
+    (held : GasMeter.gasHeld meter ≤ message.gas := by
+      exact Nat.le_of_eq (LawfulGasMeter.gasHeld_start _ _)) :
+    M { evm : Evm fork Meter // GasMeter.gasHeld evm.gas ≤ message.gas } :=
+  let rollback (ended : { evm : Evm fork Meter // GasMeter.gasHeld evm.gas ≤ message.gas }) :
+      { evm : Evm fork Meter // GasMeter.gasHeld evm.gas ≤ message.gas } :=
+    ⟨rollbackOnError state ended.val, by
+      unfold rollbackOnError
+      split
+      · dsimp only
+        split
+        · exact Nat.le_trans (LawfulGasMeter.gasHeld_rollback _) ended.property
+        · exact ended.property
+      · exact ended.property⟩
+  rollback <$> do
+    let state := startState fork message state
+    -- A message that transfers a nonzero value moves it from the caller to the target.
+    --
+    -- The depth check sits in the caller, which runs no message past it.
+    let transfers := message.shouldTransferValue ∧ message.value ≠ 0
+    let state ←
+      if transfers then
+        liftExcept
+          ((state.moveEther fork message.caller message.currentTarget message.value).mapError
+            EvmError.state)
+      else pure state
+    -- From Glamsterdam, the move emits a transfer log from the caller to the target, by EIP-7708.
+    --
+    -- EIP-7708 logs only a move to a different account, which the push checks.
+    --
+    -- A simulation also logs the move before Glamsterdam, from `0xee…ee`.
+    let substate :=
+      if transfers then
+        { substate with
+          logs := pushTransferLog fork substate.logs message.caller message.currentTarget
+            message.value
+          simulatedLogs := pushSimulatedTransferLog fork substate.simulatedLogs message.caller
+            message.currentTarget message.value }
+      else substate
+    let evm : Evm fork Meter := startFrame message state substate meter
+    -- A code address that is a precompile runs that precompile.
+    --
+    -- The transaction can map the code address to another precompile, as in a simulation.
+    match precompileAddress fork message with
+    | some address =>
+      -- A message that disables precompiles runs nothing.
+      if message.disablePrecompiles then
+        pure ⟨{ evm with running := false }, held⟩
+      else
+        match h : runPrecompile fork address evm with
+        | some after => pure ⟨after, Nat.le_trans (gasHeld_runPrecompile_le h) held⟩
+        | none => pure ⟨{ evm with running := false }, held⟩
+    -- Otherwise the frame steps through its code until it halts or its program counter leaves it.
+    | none =>
+      runFrameWith observe (step fork) (step_decreases fork) message.gas
+        (fun caller child _ =>
+          match child.target with
+          | some _ =>
+            processMessageWith fork observe child caller.state caller.substate.child
+          | none =>
+            processCreateMessageWith fork observe child caller.state caller.substate.child)
+        evm held
+termination_by (message.gas, 0)
+
+/-- Run the creation `message` at fork `fork` in the monad `M`, from its state and substate.
+
+The observer sees each step of its frame and of the frames of its messages.
+
+Its frame starts with a new meter, or with `meter`, which holds at most the gas of the message.
+
+The frame that ends the creation has at most the gas of the message. -/
+@[specialize]
+def processCreateMessageWith [LawfulGasMeter Meter] {M : Type → Type} [Monad M]
+    [MonadExceptOf EvmError M] (fork : Fork) (observe : StepObserver M fork Meter)
+    (message : Message fork) (state : TransactionState) (substate : Substate)
+    (meter : Meter := GasMeter.start message.gas message.reservoir)
+    (held : GasMeter.gasHeld meter ≤ message.gas := by
+      exact Nat.le_of_eq (LawfulGasMeter.gasHeld_start _ _)) :
+    M { evm : Evm fork Meter // GasMeter.gasHeld evm.gas ≤ message.gas } := do
+  -- The storage of the target is wiped and its nonce grows; the state before stays the snapshot.
+  let prepared ← liftExcept (prepareCreation fork state message.currentTarget)
+  -- The init code runs as a message.
+  let ⟨evm, used⟩ ← processMessageWith fork observe message prepared substate meter held
+  match h : depositCode fork state evm with
+  | .error e => throw e
+  | .ok after => pure ⟨after, Nat.le_trans (gasHeld_depositCode_le h) used⟩
+termination_by (message.gas, 1)
+
+end
+
 /-- Run a message at fork `fork`, from the state and the substate it starts from.
+
+It is the run with no observer, in the monad of errors.
 
 Its frame starts with a new meter, or with `meter`, which holds at most the gas of the message.
 
@@ -293,50 +432,11 @@ def processMessage [LawfulGasMeter Meter] (fork : Fork) (message : Message fork)
     (held : GasMeter.gasHeld meter ≤ message.gas := by
       exact Nat.le_of_eq (LawfulGasMeter.gasHeld_start _ _)) :
     Except EvmError { evm : Evm fork Meter // GasMeter.gasHeld evm.gas ≤ message.gas } :=
-  let rollback (ended : { evm : Evm fork Meter // GasMeter.gasHeld evm.gas ≤ message.gas }) :
-      { evm : Evm fork Meter // GasMeter.gasHeld evm.gas ≤ message.gas } :=
-    ⟨rollbackOnError state ended.val, by
-      unfold rollbackOnError
-      split
-      · dsimp only
-        split
-        · exact Nat.le_trans (LawfulGasMeter.gasHeld_rollback _) ended.property
-        · exact ended.property
-      · exact ended.property⟩
-  Except.map rollback do
-    let state := startState fork message state
-    let transfers := message.shouldTransferValue ∧ message.value ≠ 0
-    let state ←
-      if transfers then
-        (state.moveEther fork message.caller message.currentTarget message.value).mapError .state
-      else pure state
-    let substate :=
-      if transfers then
-        { substate with
-          logs := pushTransferLog fork substate.logs message.caller message.currentTarget
-            message.value }
-      else substate
-    let evm : Evm fork Meter := startFrame message state substate meter
-    match precompileAddress fork message with
-    | some address =>
-      if message.disablePrecompiles then
-        pure ⟨{ evm with running := false }, held⟩
-      else
-        match h : runPrecompile fork address evm with
-        | some after => pure ⟨after, Nat.le_trans (gasHeld_runPrecompile_le h) held⟩
-        | none => pure ⟨{ evm with running := false }, held⟩
-    | none =>
-      match h : runFrame (step fork) (step_decreases fork) message.gas
-          (fun caller child _ =>
-            match child.target with
-            | some _ => processMessage fork child caller.state caller.substate.child
-            | none => processCreateMessage fork child caller.state caller.substate.child)
-          evm held with
-      | .error e => throw e
-      | .ok after => pure ⟨after, Nat.le_trans (gasHeld_runFrame_le h) held⟩
-termination_by (message.gas, 0)
+  processMessageWith fork (fun _ _ => pure ()) message state substate meter held
 
 /-- Run the creation `message` at fork `fork`, from the state and the substate it starts from.
+
+It is the run with no observer, in the monad of errors.
 
 Its frame starts with a new meter, or with `meter`, which holds at most the gas of the message.
 
@@ -346,14 +446,7 @@ def processCreateMessage [LawfulGasMeter Meter] (fork : Fork) (message : Message
     (meter : Meter := GasMeter.start message.gas message.reservoir)
     (held : GasMeter.gasHeld meter ≤ message.gas := by
       exact Nat.le_of_eq (LawfulGasMeter.gasHeld_start _ _)) :
-    Except EvmError { evm : Evm fork Meter // GasMeter.gasHeld evm.gas ≤ message.gas } := do
-  let prepared ← prepareCreation fork state message.currentTarget
-  let ⟨evm, used⟩ ← processMessage fork message prepared substate meter held
-  match h : depositCode fork state evm with
-  | .error e => throw e
-  | .ok after => pure ⟨after, Nat.le_trans (gasHeld_depositCode_le h) used⟩
-termination_by (message.gas, 1)
-
-end
+    Except EvmError { evm : Evm fork Meter // GasMeter.gasHeld evm.gas ≤ message.gas } :=
+  processCreateMessageWith fork (fun _ _ => pure ()) message state substate meter held
 
 end EthLib.Execution.Evm

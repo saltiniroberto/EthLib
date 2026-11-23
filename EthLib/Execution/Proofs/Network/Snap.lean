@@ -3,6 +3,8 @@ module
 public import EthLib.Execution.Network.Snap
 public import EthLib.Execution.Proofs.Network.Protocol
 public import EthLib.Execution.Proofs.Network.Status
+public import EthLib.Execution.Proofs.Trie.HexPrefix
+public import EthLib.Serialization.Proofs.Rlp.Encodings
 
 /-!
 # Proofs: the snap capability
@@ -13,13 +15,29 @@ The count of message IDs for snap and eth is nonzero exactly on the capabilities
 
 An account reads back from its slim form.
 
-The encoded slim form of an account converts to its full encoding.
+The slim form of an account converts to its full encoding, and a byte string is never a body.
 
 Each message reads back from its ID and its RLP item on the versions that use its ID.
 
+The decoder reads no other ID or item, so it takes no field more or less than the writer writes.
+
+Each access list that the decoder reads keeps the bytes of its own encoding.
+
 snap/2 rejects the trie node messages of snap/1, and snap/1 the access list messages of snap/2.
 
+A version rejects every ID from its count of IDs on as unknown, but not the ID just below it.
+
 The codes and the access lists of a checked answer are the requested ones.
+
+A full trie node path reads as its 64 nibbles.
+
+A compact path of fewer than 32 bytes reads as the nibbles it encodes.
+
+The lists of paths read as one group each, in order.
+
+A group of paths asks for one node per path after the first, and for one node if it has one path.
+
+Every prefix of an accepted TrieNodes answer is accepted.
 -/
 
 @[expose] public section
@@ -29,7 +47,8 @@ namespace EthLib.Execution.Network
 open EthLib.Base
 open EthLib.Serialization.Rlp
 
-instance : LawfulCodec RangeEntry where
+/-- An entry reads back from its item, for an account body and for slot data alike. -/
+instance {α : Type} [Codec α] [LawfulCodec α] : LawfulCodec (RangeEntry α) where
   ofItem_toItem e := by
     show RangeEntry.ofItem (RangeEntry.toItem e) = _
     simp only [RangeEntry.ofItem, RangeEntry.toItem, Item.fields, Item.toItems, List.length_cons,
@@ -54,18 +73,20 @@ theorem toItem_hash_ne_empty (h : Hash32) : (Codec.toItem h : Item) ≠ .bytes .
 theorem ofSlimAccount_slimAccount (account : State.Account) (root : Hash32) :
     ofSlimAccount (slimAccount account root) = .ok (account, root) := by
   obtain ⟨nonce, balance, code⟩ := account
-  by_cases hr : root = EMPTY_TRIE_ROOT <;> by_cases hc : code = State.EMPTY_CODE_HASH <;>
+  by_cases hr : root = Trie.emptyTrieRoot Cryptography.Hash.Keccak.keccak256 <;>
+    by_cases hc : code = State.EMPTY_CODE_HASH <;>
     simp [ofSlimAccount, slimAccount, hr, hc, toItem_hash_ne_empty, Item.fields, Item.toItems,
       Item.field_toItem, bind, Except.bind, pure, Except.pure]
 
-/-- The encoded slim form converts to the full encoding of its account. -/
-theorem fullAccount_encode_slimAccount {account : State.Account} {root : Hash32}
-    {body full : ByteArray} (hbody : encode (slimAccount account root) = .ok body)
+/-- The slim form converts to the full encoding of its account. -/
+theorem fullAccount_slimAccount {account : State.Account} {root : Hash32} {full : ByteArray}
     (hfull : State.encodeAccount account root = .ok full) :
-    fullAccount body = some full := by
-  simp [fullAccount, decode_encode _ _ hbody, ofSlimAccount_slimAccount, hbody, hfull,
-    bne, BEq.beq, ByteArray.beq, Except.toOption]
-  exact Array.isEqv_self _
+    fullAccount (slimAccount account root) = some full := by
+  simp [fullAccount, ofSlimAccount_slimAccount, hfull, Except.toOption]
+
+/-- A byte string is never the body of an account, whatever bytes it holds. -/
+theorem fullAccount_bytes (bytes : ByteArray) : fullAccount (.bytes bytes) = none := by
+  simp [fullAccount, ofSlimAccount, Item.fields, Item.toItems, bind, Except.bind]
 
 namespace SnapVersion
 
@@ -143,24 +164,130 @@ theorem capabilityLength_ne_zero_iff {c : Networking.Devp2p.Capability} :
 
 namespace SnapMessage
 
-/-- A message whose ID the version uses reads back from its ID and its item. -/
-theorem ofItem_toItem {version : SnapVersion} {m : SnapMessage} (hm : usesId version m.id) :
-    ofItem version m.id m.toItem = .ok m := by
-  cases m <;>
+/-- Each access list of a message keeps the bytes of its own encoding. -/
+def Kept (m : SnapMessage) : Prop :=
+  ∀ e ∈ m.kept, Serialization.Rlp.encode e.item = .ok e.bytes
+
+/-- A message whose ID the version uses reads back from its ID and its item.
+
+Its access lists must keep their own encodings, and `data` must encode its item. -/
+theorem ofItem_toItem {version : SnapVersion} {m : SnapMessage} {data : ByteArray}
+    (hm : usesId version m.id) (hk : m.Kept) (hd : Serialization.Rlp.encode m.toItem = .ok data) :
+    ofItem version m.id m.toItem data = .ok m := by
+  cases m
+  case blockAccessLists i ls =>
+    -- The encodings cut from the payload are those that the access lists keep.
+    obtain ⟨payload, hp, hpe⟩ := payloadEncodings_of_encode hd
+    obtain ⟨encodings, hl, hz⟩ :=
+      bind_ok_iff.mp ((zip_listEncodings_eq_ok_iff hp).mpr ⟨rfl, hk⟩)
+    simp_all [ofItem, SnapMessage.id, toItem, Item.toItems, Item.field_toItem, bind,
+      Except.bind, pure, Except.pure, Except.mapError]
+  all_goals
     simp_all [ofItem, SnapMessage.id, toItem, Item.toItems, Item.field_toItem, bind,
       Except.bind, pure, Except.pure, Except.mapError]
 
+/-- A message reads exactly from its own ID and its item, on a version that uses its ID.
+
+So the decoder takes no item other than the one the writer writes, and no ID of another version.
+
+When `data` encodes the item, each access list keeps its own encoding. -/
+theorem ofItem_eq_ok_iff {version : SnapVersion} {id : Nat} {item : Item} {data : ByteArray}
+    {m : SnapMessage} (hd : Serialization.Rlp.encode item = .ok data) :
+    ofItem version id item data = .ok m ↔
+      id = m.id ∧ usesId version m.id ∧ item = m.toItem ∧ m.Kept := by
+  constructor
+  · intro h
+    unfold ofItem at h
+    by_cases hu : usesId version id = true
+    · simp only [hu, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at h
+      rw [mapError_ok_iff, bind_ok_iff] at h
+      obtain ⟨items, hitems, h⟩ := h
+      obtain rfl := Item.toItems_eq_ok.mp hitems
+      split at h
+      case h_10 i ls =>
+        -- Each access list is paired with its own encoding, cut from the payload.
+        obtain ⟨_, rfl, h₁⟩ := Item.field_bind_eq_ok.mp h
+        obtain ⟨lists, hls, h₂⟩ := bind_ok_iff.mp h₁
+        obtain rfl := Item.toItems_eq_ok.mp (mapError_ok_iff.mp hls)
+        obtain ⟨encodings, hl, h₃⟩ := bind_ok_iff.mp h₂
+        obtain ⟨kept, hz, h₄⟩ := bind_ok_iff.mp h₃
+        cases h₄
+        obtain ⟨payload, hp, hpe⟩ := payloadEncodings_of_encode hd
+        obtain ⟨rfl, hk⟩ :=
+          (zip_listEncodings_eq_ok_iff (kept := kept) hp).mp
+            (by simp [← hpe, hl, bind, Except.bind, hz])
+        exact ⟨rfl, hu, rfl, hk⟩
+      all_goals
+        repeat
+          rw [Item.field_bind_eq_ok] at h
+          obtain ⟨_, rfl, h⟩ := h
+        cases h
+        all_goals exact ⟨rfl, hu, rfl, by simp [Kept, kept]⟩
+    · simp [hu, throw, throwThe, MonadExceptOf.throw, bind, Except.bind] at h
+  · rintro ⟨rfl, hm, rfl, hk⟩
+    exact ofItem_toItem hm hk hd
+
+/-- A message that the decoder reads from `data` encodes back to exactly `data`.
+
+The RLP decoder takes only canonical input, and the message keeps its whole item. -/
+theorem encode_of_decode {version : SnapVersion} {id : Nat} {data : ByteArray} {m : SnapMessage}
+    (h : decode version id data = .ok m) : m.encode = .ok data := by
+  unfold decode at h
+  cases hd : Serialization.Rlp.decode data with
+  | error e => simp [hd, Except.mapError, bind, Except.bind] at h
+  | ok item =>
+    simp only [hd, Except.mapError, bind, Except.bind] at h
+    obtain ⟨-, -, rfl, -⟩ := (ofItem_eq_ok_iff (encode_decode data _ hd)).mp h
+    simp [encode, encode_decode data _ hd, Except.mapError]
+
+/-- Each access list that the decoder reads from `data` keeps the bytes of its encoding.
+
+So its hash reads those bytes, and no caller has to encode it again. -/
+theorem kept_of_decode {version : SnapVersion} {id : Nat} {data : ByteArray} {m : SnapMessage}
+    (h : decode version id data = .ok m) : m.Kept := by
+  unfold decode at h
+  cases hd : Serialization.Rlp.decode data with
+  | error e => simp [hd, Except.mapError, bind, Except.bind] at h
+  | ok item =>
+    simp only [hd, Except.mapError, bind, Except.bind] at h
+    -- The data is the encoding of the item, so the reader pairs each list with its encoding.
+    exact ((ofItem_eq_ok_iff (encode_decode data _ hd)).mp h).2.2.2
+
 /-- snap/2 rejects GetTrieNodes and TrieNodes, which it removes. -/
-theorem ofItem_snap2_trieNodes (item : Item) :
-    ofItem .snap2 0x06 item = .error (.unknownId 0x06) ∧
-      ofItem .snap2 0x07 item = .error (.unknownId 0x07) := by
+theorem ofItem_snap2_trieNodes (item : Item) (data : ByteArray) :
+    ofItem .snap2 0x06 item data = .error (.unknownId 0x06) ∧
+      ofItem .snap2 0x07 item data = .error (.unknownId 0x07) := by
   simp [ofItem, usesId, throw, throwThe, MonadExceptOf.throw, bind, Except.bind]
 
 /-- snap/1 rejects GetBlockAccessLists and BlockAccessLists, which snap/2 adds. -/
-theorem ofItem_snap1_accessLists (item : Item) :
-    ofItem .snap1 0x08 item = .error (.unknownId 0x08) ∧
-      ofItem .snap1 0x09 item = .error (.unknownId 0x09) := by
+theorem ofItem_snap1_accessLists (item : Item) (data : ByteArray) :
+    ofItem .snap1 0x08 item data = .error (.unknownId 0x08) ∧
+      ofItem .snap1 0x09 item data = .error (.unknownId 0x09) := by
   simp [ofItem, usesId, throw, throwThe, MonadExceptOf.throw, bind, Except.bind]
+
+/-- A version rejects every ID from `n` on as unknown exactly when its count of IDs is at most `n`.
+
+So the count of IDs of a version is the first ID from which every ID is unknown to it. -/
+theorem messageCount_le_iff_unknownId {version : SnapVersion} {n : Nat} :
+    version.messageCount ≤ n ↔
+      ∀ id, n ≤ id → ∀ item data, ofItem version id item data = .error (.unknownId id) := by
+  constructor
+  · intro h id hid item data
+    have hu : usesId version id = false := by
+      cases version <;> simp [usesId, SnapVersion.messageCount] at h ⊢ <;> omega
+    simp [ofItem, hu, throw, throwThe, MonadExceptOf.throw, bind, Except.bind]
+  · intro h
+    refine Nat.not_lt.mp fun hlt => ?_
+    have last (m : SnapMessage) (hm : usesId version m.id) (hk : m.Kept)
+        (hm' : ∃ data, Serialization.Rlp.encode m.toItem = .ok data)
+        (hid : m.id = version.messageCount - 1) : False := by
+      obtain ⟨data, hd⟩ : ∃ data, Serialization.Rlp.encode m.toItem = .ok data := hm'
+      have := h m.id (by omega) m.toItem data
+      rw [ofItem_toItem hm hk hd] at this
+      cases this
+    cases version
+    · exact last (.trieNodes 0 []) (by decide) (by simp [Kept, kept]) ⟨_, rfl⟩ rfl
+    · exact last (.blockAccessLists 0 []) (by decide) (by simp [Kept, kept]) ⟨_, rfl⟩ rfl
 
 /-- A response that answers a request repeats its request ID. -/
 theorem requestId_of_answers {request response : SnapMessage}
@@ -181,30 +308,86 @@ theorem sublist_of_codesAnswer {requested : List Hash32} {codes : List ByteArray
     (codes.map Cryptography.Hash.Keccak.keccak256).Sublist requested :=
   List.isSublist_iff_sublist.mp h
 
+/-- An answer of access lists passes the check exactly when two conditions hold.
+
+It holds no more entries than there are expected hashes.
+
+Each entry is the empty string, or the bytes it was read from hash to the expected hash there.
+
+A decoded answer keeps the encoding of each entry as those bytes. -/
+theorem accessListsAnswer_eq_true_iff {expected : List Hash32} {lists : List Encoded} :
+    accessListsAnswer expected lists = true ↔
+      lists.length ≤ expected.length ∧
+        ∀ (i : Nat) (hi : i < lists.length) (he : i < expected.length),
+          lists[i].item = .bytes .empty ∨
+            Cryptography.Hash.Keccak.keccak256 lists[i].bytes = expected[i] := by
+  simp only [accessListsAnswer, Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true]
+  refine and_congr_right fun hlen => ?_
+  rw [List.forall_mem_iff_forall_getElem]
+  simp only [List.length_zip, List.getElem_zip, Bool.or_eq_true, beq_iff_eq]
+  refine ⟨fun H i hi he => ?_, fun H i hi => ?_⟩
+  · rcases H i (by omega) with h | h
+    · exact .inl h
+    · exact .inr (eq_of_beq h)
+  · rcases H i (by omega) (by omega) with h | h
+    · exact .inl h
+    · right
+      rw [h]
+      exact beq_self_eq_true _
+
 /-- Each access list of a checked answer is absent, or hashes to the access list hash of its block.
 
 That block is the one at its position. -/
-theorem of_accessListsAnswer {expected : List Hash32} {lists : List Item}
+theorem of_accessListsAnswer {expected : List Hash32} {lists : List Encoded}
     (h : accessListsAnswer expected lists) :
     lists.length ≤ expected.length ∧
       ∀ (i : Nat) (hi : i < lists.length) (he : i < expected.length),
-        lists[i] = .bytes .empty ∨
-          ∃ bytes, Serialization.Rlp.encode lists[i] = .ok bytes ∧
-            Cryptography.Hash.Keccak.keccak256 bytes = expected[i] := by
-  simp only [accessListsAnswer, Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true] at h
-  obtain ⟨hlen, hall⟩ := h
-  refine ⟨hlen, fun i hi he => ?_⟩
-  have hmem : (lists[i], expected[i]) ∈ lists.zip expected :=
-    List.mem_iff_getElem.mpr ⟨i, by simp; omega, by simp⟩
-  have := hall _ hmem
-  simp only [Bool.or_eq_true, beq_iff_eq] at this
-  rcases this with he' | henc
-  · exact .inl he'
-  · right
-    cases hb : Serialization.Rlp.encode lists[i] with
-    | error e => simp [hb] at henc
-    | ok bytes =>
-      simp only [hb] at henc
-      exact ⟨bytes, rfl, eq_of_beq henc⟩
+        lists[i].item = .bytes .empty ∨
+          Cryptography.Hash.Keccak.keccak256 lists[i].bytes = expected[i] :=
+  accessListsAnswer_eq_true_iff.mp h
+
+/-! ## Trie node paths -/
+
+/-- A path of 32 bytes reads as its 64 nibbles. -/
+theorem readPath_full {bytes : ByteArray} (h : bytes.size = 32) :
+    readPath bytes = .ok (Trie.bytesToNibbleList bytes) := by
+  simp [readPath, h]
+
+/-- A compact path of fewer than 32 bytes reads as the nibbles it encodes, whatever its flag. -/
+theorem readPath_compact (path : TriePath) (isLeaf : Bool)
+    (h : (Trie.nibbleListToCompact path isLeaf).size < 32) :
+    readPath (Trie.nibbleListToCompact path isLeaf) = .ok path := by
+  simp [readPath, Nat.ne_of_lt h, h, Trie.compactToNibbleList_nibbleListToCompact]
+
+/-- A group read from a list of paths asks for one node per path after the first.
+
+A list of one path asks for one node. -/
+theorem nodeCount_readGroup {paths : List ByteArray} {group : PathGroup}
+    (h : readGroup paths = .ok group) : nodeCount [group] = max 1 (paths.length - 1) := by
+  rcases paths with _ | ⟨account, _ | ⟨slot, more⟩⟩
+  · cases h
+  · simp only [readGroup] at h
+    cases hr : readPath account <;>
+      simp [hr, bind, Except.bind, pure, Except.pure] at h
+    subst h
+    simp [nodeCount]
+  · simp only [readGroup] at h
+    cases ha : readPath account <;> cases hs : readPath slot <;>
+      cases hm : more.mapM readPath <;>
+      simp [ha, hs, hm, bind, Except.bind, pure, Except.pure] at h
+    subst h
+    simp [nodeCount, mapM_ok_length hm]
+
+/-- The lists of paths read as one group each, in order. -/
+theorem length_readGroups {paths : List (List ByteArray)} {groups : List PathGroup}
+    (h : readGroups paths = .ok groups) : groups.length = paths.length :=
+  mapM_ok_length h
+
+/-- Every prefix of an accepted TrieNodes answer is accepted. -/
+theorem trieNodesAnswer_take {groups : List PathGroup} {nodes : List ByteArray}
+    (h : trieNodesAnswer groups nodes = true) (n : Nat) :
+    trieNodesAnswer groups (nodes.take n) = true := by
+  simp only [trieNodesAnswer, decide_eq_true_eq, List.length_take] at h ⊢
+  omega
 
 end EthLib.Execution.Network

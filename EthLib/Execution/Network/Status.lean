@@ -9,11 +9,11 @@ public import EthLib.Networking.Devp2p.ForkId
 
 The handshake of the eth capability, Status (0x00), and the notice BlockRangeUpdate (0x11).
 
-The source is "Status (0x00)" and "BlockRangeUpdate (0x11)" of [`caps/eth.md`][eth].
+The sources are the sections Status (0x00) and BlockRangeUpdate (0x11) of [`caps/eth.md`][eth].
 
 The Status of eth/68 comes from [EIP-7642][eip-7642].
 
-[eth]: https://github.com/ethereum/devp2p/blob/88f1c80800d622cc3a542a2125bbe33cc18c9f9c/caps/eth.md#status-0x00
+[eth]: https://github.com/ethereum/devp2p/blob/277ceb399c15df86efb17d51eb58200c26879784/caps/eth.md#status-0x00
 
 - eth/68: `[version, networkid, td, blockhash, genesis, forkid]`.
 - eth/69 on: `[version, networkid, genesis, forkid, earliest, latest, latestHash]`.
@@ -101,9 +101,13 @@ def forkId : Status → ForkId
 
 /-- The message as an RLP list, in the field order of its version. -/
 def toItem : Status → Item
+  -- EIP-7642, eth/68: `[version: P, networkid: P, td: P, blockhash: B_32, genesis: B_32, forkid]`.
   | eth68 v n td h g id =>
     .list [Codec.toItem v, Codec.toItem n, Codec.toItem td, Codec.toItem h, Codec.toItem g,
       Codec.toItem id]
+  -- eth.md, from eth/69: the version, the network ID, the genesis hash and the fork identifier.
+  --
+  -- Then the range: `earliest: P, latest: P, latestHash: B_32`.
   | eth69 v n g id r => .list ([Codec.toItem v, Codec.toItem n, Codec.toItem g, Codec.toItem id] ++
       r.items)
 
@@ -161,10 +165,14 @@ No rule of the specification reads them.
 -/
 def checkStatus (version : EthVersion) (s : Schedule) (number timestamp : Nat)
     (status : Status) : Except StatusError Unit := do
+  -- eth.md, Status: the version is the current protocol version, so it must be the negotiated one.
   if status.version ≠ version.number then throw (.version status.version)
+  -- EIP-2364: the fork identifier passes the rules of EIP-2124, else the peer is incompatible.
   (s.validate number timestamp status.forkId).mapError .forkId
   match status with
+  -- eth/68 announces no range.
   | .eth68 .. => pure ()
+  -- From eth/69, eth.md defers the range of Status to BlockRangeUpdate: `earliest > latest` fails.
   | .eth69 _ _ _ _ r => if r.Valid then pure () else throw (.range r.earliest r.latest)
 
 end EthLib.Execution.Network

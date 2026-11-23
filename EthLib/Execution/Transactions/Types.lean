@@ -2,6 +2,8 @@ module
 
 public import EthLib.Base.Address
 public import EthLib.Base.Fork
+public import EthLib.Base.Hash32
+public import EthLib.Execution.ErrorFormat
 public import EthLib.Serialization.Rlp.Item
 
 /-!
@@ -11,11 +13,32 @@ The five kinds of transaction, and the fork that adds each kind.
 
 A transaction is legacy, or it is typed as [EIP-2718](https://eips.ethereum.org/EIPS/eip-2718) asks.
 
-Section 4.2 of the Yellow Paper, Shanghai version, bounds each integer field below 2^256.
+Section 4.2 of the Yellow Paper, Shanghai version, puts the integer fields below 2^256.
+
+That covers the gas limit, the gas price and the two fee caps, which [EIP-1559][eip1559] bounds too.
+
+So they are 256-bit words here, and a larger value fails at decoding.
+
+Without that bound, a larger value would still fail in a block in all but one case.
+
+A fee of 2^256 or more fails, since no balance can pay it.
+
+The fee is the gas limit times the gas price, or times the maximum fee per gas.
+
+So the bound alone rejects only a gas limit of 2^256 or more with a price of 0, before Fusaka.
+
+Such a transaction fails here, even in a block whose gas limit is at least as large.
+
+From Fusaka, [EIP-7825][eip7825] caps the gas limit at 2^24.
+
+From Glamsterdam, [EIP-8037][eip8037] caps it at 2^32 - 1 instead.
 
 Source: [`Paper.tex` at `efc5f9a`][yp].
 
 [yp]: https://github.com/ethereum/yellowpaper/blob/efc5f9a1f356cba376c978eedb63cb0363c2aa85/Paper.tex
+[eip1559]: https://eips.ethereum.org/EIPS/eip-1559#specification
+[eip7825]: https://eips.ethereum.org/EIPS/eip-7825#specification
+[eip8037]: https://eips.ethereum.org/EIPS/eip-8037#transaction-validation
 -/
 
 @[expose] public section
@@ -183,8 +206,14 @@ It always has a recipient, so it never creates a contract. -/
 structure SetCodeTransaction where
   /-- The chain of the transaction, a 64-bit number. -/
   chainId : UInt64
-  /-- The number of transactions that the sender sent before. -/
-  nonce : U256
+  /-- The number of transactions that the sender sent before, a 64-bit number.
+
+  So a nonce of 2^64 or more fails at decoding.
+
+  The other kinds of transaction hold their nonce in 256 bits.
+
+  No EIP fixes this width. -/
+  nonce : UInt64
   /-- The most wei per unit of gas that goes to the fee recipient of the block. -/
   maxPriorityFeePerGas : U256
   /-- The most wei per unit of gas that the sender pays, base fee included. -/
@@ -227,9 +256,13 @@ inductive Transaction where
 
 The type is the first byte of a typed transaction. -/
 def typeFork (type : UInt8) : Option Fork :=
+  -- EIP-2930 adds type 1 at Berlin.
   if type = 1 then some .berlin
+  -- EIP-1559 adds type 2 at London.
   else if type = 2 then some .london
+  -- EIP-4844 adds type 3, at Dencun by EIP-7569.
   else if type = 3 then some .dencun
+  -- EIP-7702 adds type 4, at Pectra by EIP-7600.
   else if type = 4 then some .pectra
   else none
 
@@ -237,6 +270,7 @@ namespace Transaction
 
 /-- The type of a transaction: 0 for a legacy transaction, else its EIP-2718 type. -/
 def type : Transaction → UInt8
+  -- Yellow Paper §4.2: `T_x = 0` for a legacy transaction.
   | .legacy _ => 0
   | .accessList _ => 1
   | .feeMarket _ => 2
@@ -247,7 +281,19 @@ def type : Transaction → UInt8
 
 A legacy transaction exists from Frontier. -/
 def fork (t : Transaction) : Fork :=
+  -- No EIP adds a typed transaction 0, the type of a legacy transaction, so its fork is Frontier.
   (typeFork t.type).getD .frontier
+
+/-- The transaction with a signature of 0, as a simulation runs a call. -/
+def unsigned : Transaction → Transaction
+  -- `T_r = T_s = 0`, with `T_w = 0` for a legacy transaction and `T_y = 0` for a typed one.
+  --
+  -- No source defines this form: a simulation gives its own sender instead of recovering it.
+  | .legacy tx => .legacy { tx with v := 0, r := 0, s := 0 }
+  | .accessList tx => .accessList { tx with yParity := 0, r := 0, s := 0 }
+  | .feeMarket tx => .feeMarket { tx with yParity := 0, r := 0, s := 0 }
+  | .blob tx => .blob { tx with yParity := 0, r := 0, s := 0 }
+  | .setCode tx => .setCode { tx with yParity := 0, r := 0, s := 0 }
 
 end Transaction
 
@@ -269,23 +315,58 @@ inductive TransactionError where
   | initCodeTooLarge (size : Nat)
   /-- The gas limit `gas` is above the limit of a transaction. -/
   | gasLimitExceeded (gas : Nat)
-  /-- The nonce is `2^64 - 1` or more. -/
-  | nonceOverflow
-  /-- The priority fee per gas is above the maximum fee per gas. -/
-  | priorityFeeGreaterThanMaxFee
+  /-- The nonce `nonce`, of the transaction or of its sender, is `2^64 - 1` or more. -/
+  | nonceOverflow (nonce : Nat)
+  /-- The priority fee per gas `priorityFee` is above the maximum fee per gas `maxFee`. -/
+  | priorityFeeGreaterThanMaxFee (priorityFee maxFee : Nat)
   /-- The transaction signs the chain `actual`, not the chain `expected` of the network. -/
   | wrongChainId (expected actual : Nat)
   /-- A blob transaction carries no blob. -/
   | noBlobData
   /-- A blob transaction carries `count` blobs, more than the limit. -/
   | blobCountExceeded (count : Nat)
-  /-- A versioned hash of a blob does not start with the version of a KZG commitment. -/
-  | invalidBlobVersionedHash
+  /-- The versioned hash `hash` at `index`, counted from 0, has the wrong version. -/
+  | invalidBlobVersionedHash (index : Nat) (hash : Hash32)
   /-- A set code transaction carries no authorization. -/
   | emptyAuthorizationList
   /-- The intrinsic gas or the floor, `gas`, is above the limit of the gas of a transaction. -/
   | intrinsicGasAboveLimit (gas : Nat)
-  deriving DecidableEq, Repr
+  deriving DecidableEq
+
+/-- A transaction error constructor, named in full, applied to its arguments. -/
+def transactionErrorFormat (name : String) (args : List Std.Format) (prec : Nat) : Std.Format :=
+  constructorFormat ("EthLib.Execution.Transactions.TransactionError." ++ name) args prec
+
+/-- The form of a transaction error in Lean syntax, with its arguments.
+
+Each value has its name, and each hash is in hex. -/
+def TransactionError.reprPrec : TransactionError → Nat → Std.Format
+  | .emptyTransaction, p => transactionErrorFormat "emptyTransaction" [] p
+  | .unsupportedType type, p => transactionErrorFormat "unsupportedType" [namedArg "type" type] p
+  | .decoding error, p => transactionErrorFormat "decoding" [reprArg error] p
+  | .encoding error, p => transactionErrorFormat "encoding" [reprArg error] p
+  | .invalidSignature, p => transactionErrorFormat "invalidSignature" [] p
+  | .insufficientGas needed gas, p =>
+    transactionErrorFormat "insufficientGas" [namedArg "needed" needed, namedArg "gas" gas] p
+  | .initCodeTooLarge size, p => transactionErrorFormat "initCodeTooLarge" [namedArg "size" size] p
+  | .gasLimitExceeded gas, p => transactionErrorFormat "gasLimitExceeded" [namedArg "gas" gas] p
+  | .nonceOverflow nonce, p => transactionErrorFormat "nonceOverflow" [namedArg "nonce" nonce] p
+  | .priorityFeeGreaterThanMaxFee priorityFee maxFee, p =>
+    transactionErrorFormat "priorityFeeGreaterThanMaxFee"
+      [namedArg "priorityFee" priorityFee, namedArg "maxFee" maxFee] p
+  | .wrongChainId expected actual, p =>
+    transactionErrorFormat "wrongChainId" [namedArg "expected" expected, namedArg "actual" actual] p
+  | .noBlobData, p => transactionErrorFormat "noBlobData" [] p
+  | .blobCountExceeded count, p =>
+    transactionErrorFormat "blobCountExceeded" [namedArg "count" count] p
+  | .invalidBlobVersionedHash index hash, p =>
+    transactionErrorFormat "invalidBlobVersionedHash"
+      [namedArg "index" index, namedArg "hash" hash] p
+  | .emptyAuthorizationList, p => transactionErrorFormat "emptyAuthorizationList" [] p
+  | .intrinsicGasAboveLimit gas, p =>
+    transactionErrorFormat "intrinsicGasAboveLimit" [namedArg "gas" gas] p
+
+instance : Repr TransactionError := ⟨TransactionError.reprPrec⟩
 
 /-- The stable code of an error, one per constructor, for the C exports.
 
@@ -301,12 +382,12 @@ def TransactionError.code : TransactionError → UInt32
   | .insufficientGas .. => 6
   | .initCodeTooLarge _ => 7
   | .gasLimitExceeded _ => 8
-  | .nonceOverflow => 9
-  | .priorityFeeGreaterThanMaxFee => 10
+  | .nonceOverflow _ => 9
+  | .priorityFeeGreaterThanMaxFee .. => 10
   | .wrongChainId .. => 11
   | .noBlobData => 12
   | .blobCountExceeded _ => 13
-  | .invalidBlobVersionedHash => 14
+  | .invalidBlobVersionedHash .. => 14
   | .emptyAuthorizationList => 15
   | .intrinsicGasAboveLimit _ => 16
 

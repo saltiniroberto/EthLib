@@ -1,6 +1,8 @@
 module
 
-public import EthLib.Base.Exports.Proofs.PyValue
+public import EthLib.Base.Exports.PyValue
+public import EthLib.Engine.Capabilities
+public import EthLib.Engine.Exports.Errors
 public import EthLib.Engine.PayloadBodies
 
 /-!
@@ -8,37 +10,19 @@ public import EthLib.Engine.PayloadBodies
 
 The C export of `engine_getPayloadBodiesByHash` and `engine_getPayloadBodiesByRange`.
 
-The store crosses as a list of entries, one per block, with no hash twice.
-
-An entry holds the block hash, and its number if the block is canonical.
-
-Then come the fork of the block, its transactions, its withdrawals and its block access list.
-
-No two canonical entries share a number.
-
-The node serves every entry by its hash.
-
-The withdrawals are `None` exactly before Shapella.
-
-Each withdrawal is a tuple of the index, the validator index, the address and the amount.
-
-The block access list must be `None` before Glamsterdam, and is `None` from it when pruned.
-
-The fork is at most Glamsterdam.
+The store crosses as a list of entries, one per block.
 
 The number of the latest known block and the request limit cross beside the store.
-
-A canonical entry must hold the latest known block, and the limit must be at least 32.
 
 The request is a JSON-RPC request object, with its method and its parameters.
 
 The result is the JSON answer, as a Python value.
 
-A JSON-RPC error has the code of its Engine API error, without the sign: 32602 or 38004.
-
 A malformed store, block number or limit has code 0.
 
 So do a request without a method, an unknown method, and an argument that Lean cannot read.
+
+A second export reads the JSON result of any version, and writes it back.
 -/
 
 public section
@@ -46,10 +30,9 @@ public section
 namespace EthLib.Engine.Exports
 
 open Lean (Json)
-open EthLib.Exports (Result PyValue pyExport)
+open EthLib.Exports (Result PyValue UnreadArgument pyExport rejectArgument toResult)
 open EthLib.Base
 open EthLib.Execution.Blocks (Withdrawal)
-open EthLib.Engine.Json (dataJson listJson optionJson withdrawalJson)
 
 /-- A withdrawal as it crosses: the index, the validator index, the address and the amount. -/
 abbrev WithdrawalEntry := UInt64 × UInt64 × Address × UInt64
@@ -61,19 +44,26 @@ abbrev BodyEntry := Bytes32 × Option Nat × String × List ByteArray ×
 /-- A field of a stored body, which must be given exactly when the block's fork has it. -/
 def storeField {α : Type} {f fork : Fork} (what : String) (x : Option α) :
     Result (Since f fork α) :=
-  (Json.since what x).mapError fun
-    | .invalidParams reason => (0, s!"store: {reason}")
-    | e => (0, s!"store: {reprStr e}")
+  toResult none ((Json.since what x).mapError fun
+    | .invalidParams reason => UnreadArgument.mk s!"store: {reason}"
+    | e => UnreadArgument.mk s!"store: {reprStr e}")
 
 /-- The hash, the canonical number and the stored body of an entry. -/
 def storedOf (entry : BodyEntry) : Result (Bytes32 × Option Nat × StoredBody) := do
+  -- An entry holds the block hash, and its number if the block is canonical.
+  --
+  -- Then come the fork of the block, its transactions, its withdrawals and its block access list.
   let (hash, number, forkName, transactions, withdrawals, accessList) := entry
   -- The methods are specified up to Glamsterdam, the fork of their version 2.
   let fork ← EthLib.Exports.forkUpTo .glamsterdam forkName.toUTF8
+  -- Each withdrawal is a tuple of the index, the validator index, the address and the amount.
   let withdrawals := withdrawals.map fun ws =>
     ws.map fun (index, validatorIndex, address, amount) =>
       ({ index, validatorIndex, address, amount } : Withdrawal)
+  -- The withdrawals are `None` exactly before Shapella.
   let withdrawals ← storeField (f := .shapella) (fork := fork) "withdrawals" withdrawals
+  -- The block access list must be `None` before Glamsterdam, and is `None` from it when pruned.
+  --
   -- From Glamsterdam, `None` is a pruned list, so the field is always given there.
   let accessList ← storeField (f := .glamsterdam) (fork := fork) "block access list"
     (if .glamsterdam ≤ fork then some accessList else accessList.map some)
@@ -81,23 +71,8 @@ def storedOf (entry : BodyEntry) : Result (Bytes32 × Option Nat × StoredBody) 
 
 /-- The method of a name, as the version and whether it is by range. -/
 def bodiesMethod (method : String) : Option (Nat × Bool) :=
-  match method with
-  | "engine_getPayloadBodiesByHashV1" => some (1, false)
-  | "engine_getPayloadBodiesByHashV2" => some (2, false)
-  | "engine_getPayloadBodiesByRangeV1" => some (1, true)
-  | "engine_getPayloadBodiesByRangeV2" => some (2, true)
-  | _ => none
-
-/-- The JSON of a body of version 1. -/
-def bodyV1Json (b : ExecutionPayloadBodyV1) : Json :=
-  Json.mkObj [
-    ("transactions", listJson (dataJson ·.toList) b.transactions),
-    ("withdrawals", optionJson (listJson withdrawalJson) b.withdrawals)]
-
-/-- The JSON of a body of version 2. -/
-def bodyV2Json (b : ExecutionPayloadBodyV2) : Json :=
-  (bodyV1Json b.toExecutionPayloadBodyV1).setObjVal! "blockAccessList"
-    (optionJson (dataJson ·.toList) b.blockAccessList)
+  ((methodVersion "getPayloadBodiesByHash" method).map (·, false)).or
+    ((methodVersion "getPayloadBodiesByRange" method).map (·, true))
 
 /-- The answer to a payload bodies request, from a store of bodies.
 
@@ -106,42 +81,46 @@ def payloadBodiesOf (args : List BodyEntry × Nat × Nat × PyValue) : Result Py
   let (entries, latest, maxRequest, request) := args
   let entries ← entries.mapM storedOf
   -- A store holds each block once, and one canonical block at each number.
-  unless (entries.map (·.1)).Nodup do throw (0, "store: two entries with one block hash")
-  unless (entries.filterMap (·.2.1)).Nodup do throw (0, "store: two canonical entries at a number")
+  unless (entries.map (·.1)).Nodup do rejectArgument none "store: two entries with one block hash"
+  unless (entries.filterMap (·.2.1)).Nodup do
+    rejectArgument none "store: two canonical entries at a number"
   let canonical (n : Nat) : Option StoredBody :=
     (entries.find? (·.2.1 == some n)).map (·.2.2)
+  -- A canonical entry must hold the latest known block, and the limit must be at least 32.
   if missing : (canonical latest).isSome = false then
-    throw (0, s!"store: no canonical entry at the latest known block {latest}")
+    rejectArgument none s!"store: no canonical entry at the latest known block {latest}"
   else
   if below : maxRequest < MIN_BODIES_REQUEST_LIMIT then
-    throw (0, s!"store: a limit of {maxRequest}, below {MIN_BODIES_REQUEST_LIMIT}")
+    rejectArgument none s!"store: a limit of {maxRequest}, below {MIN_BODIES_REQUEST_LIMIT}"
   else
   let store : BodyStore := {
+    -- The node serves every entry by its hash.
     byHash := fun hash => (entries.find? (·.1 == hash)).map (·.2.2)
     canonical, latest, latest_held := Bool.not_eq_false _ ▸ missing
     maxRequest, le_maxRequest := Nat.not_lt.1 below }
   let request := request.toJson
   let some method := (request.getObjValAs? String "method").toOption
-    | throw (0, "request: no method")
-  let some (version, byRange) := bodiesMethod method | throw (0, s!"no method {method}")
-  let engine {α : Type} (act : Except EngineError α) : Result α :=
-    act.mapError fun e => (e.code, s!"engine error: {reprStr e}")
+    | rejectArgument none "request: no method"
+  let some (version, byRange) := bodiesMethod method | rejectArgument none s!"no method {method}"
   let params := request.getObjValD "params"
+  -- A JSON-RPC error has the code of its Engine API error, without the sign: 32602 or 38004.
   let answer : Json ← match version, byRange with
     | 1, false =>
-      let hashes ← engine (bodiesByHashParams params)
-      pure (listJson (optionJson bodyV1Json) (← engine (getPayloadBodiesByHashV1 store hashes)))
+      let hashes ← toResult "engine error" (bodiesByHashParams params)
+      let bodies ← toResult "engine error" (getPayloadBodiesByHashV1 store hashes)
+      pure (payloadBodiesV1Json bodies)
     | 1, true =>
-      let (start, count) ← engine (bodiesByRangeParams params)
-      let bodies ← engine (getPayloadBodiesByRangeV1 store start count)
-      pure (listJson (optionJson bodyV1Json) bodies)
+      let (start, count) ← toResult "engine error" (bodiesByRangeParams params)
+      let bodies ← toResult "engine error" (getPayloadBodiesByRangeV1 store start count)
+      pure (payloadBodiesV1Json bodies)
     | _, false =>
-      let hashes ← engine (bodiesByHashParams params)
-      pure (listJson (optionJson bodyV2Json) (← engine (getPayloadBodiesByHashV2 store hashes)))
+      let hashes ← toResult "engine error" (bodiesByHashParams params)
+      let bodies ← toResult "engine error" (getPayloadBodiesByHashV2 store hashes)
+      pure (payloadBodiesV2Json bodies)
     | _, true =>
-      let (start, count) ← engine (bodiesByRangeParams params)
-      let bodies ← engine (getPayloadBodiesByRangeV2 store start count)
-      pure (listJson (optionJson bodyV2Json) bodies)
+      let (start, count) ← toResult "engine error" (bodiesByRangeParams params)
+      let bodies ← toResult "engine error" (getPayloadBodiesByRangeV2 store start count)
+      pure (payloadBodiesV2Json bodies)
   return .ofJson answer
 
 /-- The answer to a payload bodies request, from a store of bodies.
@@ -154,5 +133,26 @@ Then come its transactions, its withdrawals or `None`, and its block access list
 @[export eth_engine_get_payload_bodies]
 def payloadBodiesExport (args : PyValue) : Result PyValue :=
   pyExport payloadBodiesOf args
+
+/-- A result of a payload bodies method, read at the version of its name and written back. -/
+def readPayloadBodiesResultOf (args : String × PyValue) : Result PyValue := do
+  let (method, result) := args
+  let some (version, _) := bodiesMethod method | rejectArgument none s!"no method {method}"
+  let result := result.toJson
+  let answer : Json ← if version = 1 then
+      payloadBodiesV1Json <$> toResult "engine error" (payloadBodiesV1OfJson result)
+    else payloadBodiesV2Json <$> toResult "engine error" (payloadBodiesV2OfJson result)
+  return .ofJson answer
+
+/-- The result of an `engine_getPayloadBodiesByHash` or `ByRange` method, read and written back.
+
+The arguments are the method name and the result, as `json.loads` gives it.
+
+A result that does not decode is reported as invalid parameters, with code 32602.
+
+An unknown method name has code 0. -/
+@[export eth_engine_read_payload_bodies_result]
+def readPayloadBodiesResultExport (args : PyValue) : Result PyValue :=
+  pyExport readPayloadBodiesResultOf args
 
 end EthLib.Engine.Exports

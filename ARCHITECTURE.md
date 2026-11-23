@@ -12,8 +12,8 @@ With these fixed, two people can write two modules at the same time and expect t
 EthLib aims to specify the whole Ethereum protocol in Lean, and to prove what the protocol guarantees.
 In its end state, from the bytes a node receives, EthLib defines every value a correct node computes, and its theorems say why the result is secure.
 
-A definition is in scope when a published source specifies it: an EIP, an RFC, a paper, a specification repository, or another primary source.
-EthLib is a specification in its own right, at the same level as the others.
+A definition is in scope when a published source specifies it: an EIP, an RFC, a paper, or another primary source, or, as a reference point, a specification repository.
+EthLib is a formal specification in its own right.
 It follows what they define, and none of them shapes how EthLib is organised.
 
 The rest of this section lists what that goal covers, part by part.
@@ -38,14 +38,18 @@ Each part names the EIPs that define it where they exist, and a later fork adds 
 ### Serialization
 
 - e2store: the typed records of history files. The era1 and era files built on them belong to the execution and consensus layers.
+- JSON-RPC: the JSON form of the base types that the Engine API and the execution JSON-RPC API exchange.
 - RLP: the encoding of execution-layer objects, and its canonical form.
 - SSZ: basic and composite types, the progressive lists and containers of EIP-7916 and EIP-7495, merkleization, and Merkle proofs by generalized index.
 
 ### Networking
 
 - Discovery: Ethereum Node Records of EIP-778, and the discovery protocols that exchange them.
-- Execution-layer peers: the encrypted RLPx transport, and the "p2p" capability that opens a session.
+- Execution-layer peers: the encrypted RLPx transport, the "p2p" capability that opens a session, the states that a session passes through, and the snap capability.
+  A node uses snap to download the state of a recent block.
 - Consensus-layer peers: gossip topics and their message IDs, request and response protocols, and the Snappy compression and length prefixes they use.
+- Consensus-layer connections: the libp2p transports, the Noise handshake, the negotiation of protocols and the multiplexing of streams.
+- Gossip: the gossipsub router that relays messages between consensus-layer peers.
 
 ### Execution layer
 
@@ -66,6 +70,7 @@ Each part names the EIPs that define it where they exist, and a later fork adds 
 - Validators: deposits, exits, withdrawals, consolidations, shuffling into committees, and the selection of proposers and sync committees.
 - Fork choice: LMD-GHOST with Casper FFG, proposer boost, optimistic sync, and fast confirmation.
 - The interface to the execution layer: what the consensus layer asks of an execution engine, and what it learns back.
+  Between two clients, the Engine API of [Interfaces](#interfaces) carries these calls.
 - Honest validator duties: proposing, attesting, aggregating and serving on a sync committee.
 - Light clients: the sync protocol that follows the chain from sync committee signatures.
 - Weak subjectivity: how long a checkpoint stays safe to start from.
@@ -74,6 +79,28 @@ Each part names the EIPs that define it where they exist, and a later fork adds 
 - History files: the era files of the beacon blocks and states, one group per era, with their slot indices.
 - The protocols proposed to replace the current ones: faster finality, available chains with a finality gadget, and a consensus layer built on post-quantum signatures.
 
+### Interfaces
+
+Independent teams write the parts of a node and the tools around it.
+So the interfaces between those parts have published specifications, and EthLib is to specify each of them:
+
+- Engine API: the calls between the consensus client and the execution client of a node, from `ethereum/execution-apis`.
+- Execution JSON-RPC API: the methods of an execution client, from `ethereum/execution-apis`, such as the account proof that `eth_getProof` returns (EIP-1186).
+- Beacon API: the methods of a consensus client, from `ethereum/beacon-APIs`.
+- Builder API: the messages between a proposer and the builders that bid for its payload, from `ethereum/builder-specs`.
+- Relay API: what a relay serves to the builders that submit blocks and to anyone who reads its data, from `flashbots/relay-specs`.
+- Keymanager API: the calls that management tools make to a validator client, which holds the keys and the anti-slashing database, from `ethereum/keymanager-APIs`.
+- Remote-signing API: the calls that a validator client makes to a remote signer, which holds the keys and signs for it, from `ethereum/remote-signing-api`.
+
+The relay API and the two validator-client APIs come after the others in the order of work.
+The relay API stays in scope because no rule excludes it.
+Its containers build on the builder API and on the consensus containers.
+So EthLib keeps those compatible with it: each relay container can be written with EthLib's types, and encodes as `flashbots/relay-specs` defines it.
+
+The keymanager API and the remote-signing API need feedback from the implementers that use them: validator clients, key-management tools and remote signers.
+That feedback settles what their sources leave open, and which parts come first.
+Work on them can start before it, but their specification is accepted only with it.
+
 ### Models
 
 - Signatures and commitments: unforgeability of each signature scheme, and binding of each commitment, in the random oracle model where the scheme needs it.
@@ -81,7 +108,8 @@ Each part names the EIPs that define it where they exist, and a later fork adds 
 - Refinement: for each model, a theorem that the specification is an instance of it.
 
 A client is out of scope.
-Peer management, storage, sync strategies, the mempool and the RPC are choices each client makes, and no specification fixes them.
+Peer management, storage, sync strategies and the mempool are choices each client makes, and no specification fixes them.
+What a client must share with other nodes, or with the other parts of a node, is in scope where a published specification fixes it.
 A client can build on EthLib, and the bindings exist so that clients can run its definitions.
 
 There is one definition of each function, and clients run that definition.
@@ -92,14 +120,17 @@ When a definition is too slow, a change makes that definition fast and keeps its
 EthLib holds three kinds of Lean code, and they answer different questions.
 
 A **specification** says what the protocol computes.
-It is executable, pure and total, and it follows its source definition by definition.
+It is executable, pure and total, and it follows its source definition.
+Where speed needs another algorithm, such as Pippenger's for a sum of scalar multiples, the definition uses it.
+A theorem then states that the definition computes the formula of the source, under the source's preconditions.
 Clients and other Lean projects import it, and the bindings run it.
 
 A **property** says what a specification guarantees.
 Round trips of encodings, bounds on a fee and the rejection of malformed input are all properties.
 They are stated about the specification itself, so they hold for exactly the code that runs.
 A known answer fixes one input and its output, so it is a test and not a property.
-Known answers live in the Python test suite, which runs the specification through the bindings.
+Known answers stay out of the default build.
+They run in the Python test suite, which runs the specification through the bindings, and in Lean only outside the default build, as `CONTRIBUTING.md` describes.
 
 A **model** says why the protocol is secure.
 It is abstract where the specification is concrete: a hash becomes a random oracle, a network becomes an adversary that schedules messages.
@@ -107,8 +138,29 @@ The unforgeability of a signature scheme is proved about a model, and so are the
 A model connects to the specification by a refinement theorem, which says that the concrete definition is an instance of the abstract one.
 Without that theorem, the security proof is about a different object than the one clients run.
 
-Each kind depends only on the kinds before it.
-A specification never imports a property or a model, and a property never imports a model.
+A refinement theorem is a property.
+A **refinement module** is a property module that states a refinement theorem, or uses one in a proof.
+A refinement that holds by definition is still stated as a theorem, so that a reader can find it.
+Its proof unfolds the definitions, often with `rfl`.
+`rootWith_hash` in `EthLib/Cryptography/Proofs/Vrf/Unpredictability.lean` is one.
+
+A module is a model because of what it says, not because of what it imports.
+A module that imports VCVio is a property when its theorems are about the specification.
+
+Each kind imports directly only the kinds before it, and refinement modules are the one exception.
+A specification never imports a property or a model.
+A property never imports a model directly, unless it is a refinement module.
+So a property module that imports a model directly, but neither states nor uses a refinement theorem, breaks the rule.
+A property may import a refinement module, and so reach a model through it, without being a refinement module itself.
+`coverage/kinds.toml` lists the models by module prefix, and the refinement modules by name.
+`scripts/check_layers.py` fails on a property module that imports a listed model directly, unless `coverage/kinds.toml` lists that property module as a refinement module.
+The check sees only the models that the file lists.
+It cannot see whether a listed module states or uses a refinement theorem, so the reviewer of the module confirms it.
+The check exempts three kinds of module, none of which needs to be a refinement module:
+
+- a module whose body holds only imports, such as `EthLib/Consensus/Proofs.lean`, since it states nothing;
+- the aggregators `EthLib.lean`, `EthLib/Proofs.lean` and `EthLib/Exports.lean`, which import every layer;
+- a model, which may import another model.
 
 ## Layers
 
@@ -123,7 +175,7 @@ Each layer is a directory under `EthLib/`, which `CONTRIBUTING.md` calls a domai
 | Networking | the messages peers exchange, with their framing and compression | `EthLib/Networking/` |
 | Serialization | the encodings the protocol sends, hashes and stores | `EthLib/Serialization/` |
 | Cryptography | hashes and Merkle trees, then the schemes built on them | `EthLib/Cryptography/` |
-| Base | the bytes, the integers and the forks that every layer uses, and the protocol rules that Execution and Consensus share, such as the blob schedule and the gas limit step | `EthLib/Base/` |
+| Base | the bytes, the integers and the forks that every layer uses, and the configuration and protocol rules that several layers share, such as the chain configuration and the gas limit step | `EthLib/Base/` |
 
 Models sit above all of them, under `Proofs/` in the layer they are about, as [Packages](#packages) describes.
 
@@ -140,17 +192,31 @@ When a scheme needs a wire encoding, such as the SSZ encoding of a signature, th
 
 Execution and Consensus sit side by side and never import each other.
 The consensus layer needs one fact from the execution layer: whether an execution payload is valid.
-So the execution engine that answers it is a parameter of the consensus state transition, not an import.
-The consensus state transition can then be proved about with any engine, and instantiated with the Execution layer's.
+So the execution engine that answers it is a parameter, never an import, of each consensus function that asks.
+From Bellatrix until Glamsterdam, `processExecutionPayload` asks, and from Glamsterdam, `verifyExecutionPayloadEnvelope` does.
+Each such function can then be proved about with any engine, and instantiated with the Engine layer's.
 
 Some definitions need the types of both layers.
 The execution payload of a beacon block stands for an execution block, and the conversion between them reads both.
 Such a definition lives in the Engine layer, the only layer that imports both Execution and Consensus.
 
+The execution engine shows the general rule for an operation that a module needs from a layer it cannot import.
+The module declares the operations it needs, in its own types, and takes them as a resource, as [Shared types](#shared-types) describes.
+By that rule, their production instance lives in the lowest layer that imports both sides, which is Engine for Execution and Consensus.
+So `ExecutionEngine` in `EthLib/Consensus/Transition/Execution.lean` declares the checks of a payload, and `executionEngine` in `EthLib/Engine/ExecutionEngine.lean` builds them from the Execution layer.
+A module imports an operation of a lower layer directly.
+When a test or a model must replace such an operation, the function takes it as a resource too, and a test passes a test stub.
+`SignatureChecks` is one example: the stub `SignatureChecks.acceptAll` replaces the BLS checks for the consensus test vectors that carry placeholder signatures.
+
 The Networking layer holds formats that need no chain state.
 A gossip validation rule that reads the beacon state, such as the checks on a `beacon_block` message, belongs to Consensus, which imports Networking.
 In the same way, the eth wire protocol of devp2p carries blocks, transactions and receipts.
 So its messages live in `EthLib/Execution/Network/`, which has those types and imports Networking.
+
+A protocol layer owns the tables that give bytes their meaning.
+For example, Consensus gives the SSZ type and the length bounds of each gossip topic, of each request and of each response chunk, in `EthLib/Consensus/Gossip/Bounds.lean`, `EthLib/Consensus/ReqResp/Bounds.lean` and `EthLib/Consensus/ReqResp/ResponseBounds.lean`.
+Networking owns the framing and its own payload cap.
+It applies the smaller of that cap and the length bound that its caller passes, as `decodePayload` does in `EthLib/Networking/Gossip/Payload.lean` and in `EthLib/Networking/ReqResp/Encoding.lean`.
 
 ## Rules
 
@@ -159,13 +225,32 @@ A pull request that breaks one says why in its description.
 `scripts/check_layers.py` checks every rule that the import lines decide.
 
 - A module imports only from its own layer or from a lower one.
+- Within a layer, imports between directories form no cycle.
+  This includes specification, property, model and C export modules.
+  A C export's `meta import` of a property is a compile-time dependency and does not enter this runtime directory graph.
+  Lean rejects executable uses of that property's declarations in runtime definitions.
+  Each directory includes its subdirectories and its root file, such as `BuilderApi.lean` for `BuilderApi/`.
+  Imports between a directory and one inside it do not count.
+  The rule applies at every directory depth, so it checks both `Evm/` and `Evm/Gas/`.
+  The script follows imports at any depth, including through a module in a parent directory.
+  It reports each import that leaves its directory on the way to a cycle.
+  A shared module belongs in the parent directory or in a directory that both sides can import without a cycle.
+  A shared module in the parent directory imports neither side.
 - Execution and Consensus never import each other; only Engine imports both.
 - No module with an `Xmss` component reaches one with a `Sphincs` component through its imports, nor the reverse.
   What both hash-based signatures use lives in a neutral module, such as `HashSig` or `Wots`.
+- A specification under `Cryptography/Hash/` or `Cryptography/Merkle/`, or in their roots `Hash.lean` and `Merkle.lean`, imports no other part of Cryptography.
 - A cryptographic module never imports Serialization.
 - A specification never imports a property, a C export or a model.
+- A property imports a model directly only if `coverage/kinds.toml` lists that property as a refinement module.
+  A module that only gathers imports, an aggregator and a model are exempt.
 - A specification imports nothing outside the Lean toolchain, which ships `Init`, `Std` and `Lean`.
   Mathlib and the probability libraries enter only in properties and models.
+- No export runs specification code while it is elaborated.
+  No export, and no module that an export reaches through its imports, meta-imports a module that reaches a specification.
+  A specification never uses `meta import`, since an export may reach it later.
+  The command that derives the Python conversions of an export runs while the export is elaborated, and its module meta-imports only the Lean toolchain.
+- A C export imports only EthLib and the Lean toolchain, and a property that it imports reaches nothing else, directly or through other properties.
 - A construction shared by two modules is written once, in the lowest layer both can import.
   A binary Merkle tree used by SSZ and by a hash-based signature is one example.
 
@@ -178,8 +263,26 @@ So the types that cross a module boundary are fixed here, and `EthLib/Base/` def
 - Bytes of any length are a `ByteArray`.
 - Bytes of a fixed length `n` are a `Vector UInt8 n`.
   The length is then part of the type, as `CONTRIBUTING.md` asks, and a 48-byte commitment cannot be passed where a 96-byte signature is expected.
+  Such a value crosses a module boundary in its typed form, not as a `ByteArray`.
+  Some functions still take or return such a value as a `ByteArray`.
+  [#2189](https://github.com/ethereum/EthLib/issues/2189) lists those found so far, and each pull request that converts one removes it there.
+  At an external interface, one parser turns the bytes into the typed value or a typed error.
+  A C export, EVM call data and a wire format are such interfaces.
 - A fixed-size type keeps the name its source gives it, defined once by the layer that owns the concept.
   `Hash32`, `Bytes32` and `Address` belong to Base, `BLSPubkey` to Cryptography, `Root` and `Slot` to Consensus.
+- Two of these types can have the same bytes and different meanings.
+  A KZG commitment and a KZG proof are both 48 bytes.
+  In consensus-specs, a Merkle root and the hash of an execution block are two classes of 32 bytes.
+  A one-field structure over `Vector UInt8 n` keeps such types apart, because Lean then rejects one where the other is expected.
+  This form applies to `KZGCommitment` and `VersionedHash`, which stay abbreviations until a pull request converts them.
+  Another type takes the form only by a pull request that converts it and reports the cost of its port.
+  That cost is the conversions at call sites, the edited theorems and the breaking change for Lean importers.
+- Such a structure follows its source.
+  It names a role, not validity, so a check such as `KeyValidate` stays a function or a separate type.
+  A conversion between two of these types appears only where the rule converts, as the execution block hash becomes a root in consensus-specs.
+  A name that the source only aliases, as execution-specs aliases `Hash32` to `Bytes32`, stays an `abbrev`.
+  Two sources can disagree on whether a name is a type of its own, as they do for `Hash32`.
+  Its doc comment then records both readings, each by the layer that holds it, and the choice.
 - An integer keeps the range its source gives it.
   An unbounded integer is a `Nat`, and a 64-bit one is a `UInt64`.
   Where the source makes overflow invalid, an operation that would overflow is an error, never a silent wrap.
@@ -190,6 +293,72 @@ So the types that cross a module boundary are fixed here, and `EthLib/Base/` def
 - A construction that is generic in its hash, such as a Merkle tree or a hash-based signature, takes the hash as an argument.
   The specification passes the concrete hash.
   A model passes a random oracle, and its theorems then hold for the same definition.
+- A hash taken as an argument is one case of a resource.
+  A resource is what a specification takes as an argument, so that a model, a test or another layer can supply it.
+  The KZG trusted setup, the BLS signature checks and the execution engine are other cases.
+  A resource enters as an explicit argument, either data or a record of operations.
+  Resources that one caller supplies together can share one record, as in `BlockSources`.
+  A hash that no model or test replaces is not a resource, and stays concrete, as Keccak-256 does in the EVM.
+- A resource is one of two kinds.
+  A protocol resource has a value that the protocol fixes or computes, such as the trusted setup or the BLS checks.
+  It has one named production instance.
+  That instance lives in the lowest layer that can import both the declaration of the resource and the code that computes its value.
+  So `SignatureChecks.bls` lives in Consensus, `TrustedSetup.ofHex` in Cryptography, and `executionEngine` in Engine.
+  An environment oracle answers what the specification leaves to the node, such as `BlockSources.blobsAndProofs`.
+  It has no production instance, and the theorems about it hold for every answer, or for every answer that meets its laws.
+- The laws of a resource are a separate `Prop`, written as a property in the proof library of the lowest layer that can state it.
+  A theorem shows that the production instance meets them.
+  Where no theorem does yet, `SOUNDNESS.md` names the missing proof as an assumption.
+- A security property that holds only with high probability is not such a law.
+  The theorems take it as a hypothesis, and `SOUNDNESS.md` names it as an assumption, as it does for `SignatureChecks.AggregateSoundOn`.
+- A test stub of a resource is an instance written for tests.
+  It has a name, and a docstring that says which answers it fixes.
+  Where a theorem can show it, a theorem shows that the stub breaks the laws or the assumptions.
+  `SignatureChecks.acceptAll` accepts every signature, and `SignatureChecks.not_aggregateSoundOn_acceptAll` shows that it fails `AggregateSoundOn` on one call when no key signed anything.
+  A C export passes the production instance, unless it replays test vectors built for a stub.
+  Its docstring then says so.
+- A gas meter is not a resource.
+  The protocol computes gas, and the EVM takes the meter as a class so that one definition runs with the meter of each fork.
+  The two meters, `Nat` and `StateGasMeter`, and the class of their laws, `LawfulGasMeter`, stay in the specification library.
+  The definition of a message call, `processMessage`, needs those laws to show that execution ends.
+
+## Operation boundaries
+
+An operation boundary is a resource that is a record of operations, declared by the module that uses them and supplied by its callers, such as `ExecutionEngine`.
+[Shared types](#shared-types) says where its production instance, its laws and its test stubs live.
+The shared types make the two sides fit, but they do not make them compose.
+Each side must also know what the other guarantees, what it assumes, and what happens when an operation fails.
+So an operation boundary also has a contract card: a short list of facts in the doc comment of the module that declares the operations.
+
+New operation boundaries carry a card.
+Existing ones, such as `ExecutionEngine`, `SignatureChecks` and `BlockSources`, do not yet carry cards.
+
+The conversions between Lean values and Python values, `ToPy`, `FromPy`, `ToPyItems` and `FromPyItems`, are not operation boundaries.
+No specification takes them as an argument, so the conversion types and the classes `LawfulPy` and `LawfulPyItems` that state their laws belong to `PythonConversions`.
+The instances for the base types live in `Base/Proofs/Exports/PyValue.lean` and enter the exports through `public meta import`.
+They check the conversions during elaboration and produce no runtime dependency on that property module.
+
+The card is a list in the doc comment, with one item per field, in this order:
+
+- Boundary: which layer uses the operations, which provides them, and where the production instance lives, or that an environment oracle has none.
+- Owns: each type and state that crosses the boundary, with the layer that owns it.
+- Operations: what each operation answers, and what each test stub answers.
+- Laws: what the laws require, and whether a theorem or an assumption in `SOUNDNESS.md` covers the production instance.
+- Failure: the error type, what each outcome means, and what the calling specification does with it.
+- Guarantees: what success implies, and what it does not.
+- Assumes: what each side assumes of the other beyond the laws.
+- Readings: where the primary sources disagree or are silent, the reading taken, with the primary source that supports it.
+
+A field with nothing to record says "none", so a reader can tell an empty field from a forgotten one.
+The card holds the coarse facts that the types do not show.
+It describes the operations and the laws, and does not restate their definitions.
+It is a plain list, not a `text` block, so that each field reads as prose under the rules for doc comments in [`CONTRIBUTING.md`](CONTRIBUTING.md#doc-comments-in-lean).
+A field with several facts has one sub-item per fact, each one sentence on its own line, within 100 columns.
+Its fields describe behaviour and name no function, theorem, law or assumption, so that a renamed definition leaves the card correct.
+A type that crosses the boundary is named in backticks.
+A source is linked as `[text][ref]`, with the definition at the end of the comment.
+As [Sources](#sources) says, the Readings field cites only primary sources, and never names execution-specs or consensus-specs.
+Where none of them settles a reading, the field states the reading itself.
 
 ## Forks
 
@@ -233,25 +402,45 @@ These stages, and not the status of the EIP document itself, decide where the sp
   Another project can also import a pinned revision of EthLib and build on it.
 - An EIP Considered or Scheduled for Inclusion in a named upgrade lives on a branch of ethereum/EthLib named after that upgrade.
   The work is then visible to everyone, and it follows the devnets of the upgrade.
-- An upgrade merges into `master` once it is Scheduled for mainnet, with only its Scheduled EIPs.
+- An upgrade merges into `master` once its meta EIP records a mainnet activation, with only its Scheduled EIPs.
+  EIP-7723 gives stages to EIPs, not to upgrades, so the activation table of the meta EIP is the signal.
   An EIP Declined for Inclusion leaves the branch.
+- EIP-7723 lets a Scheduled EIP move back to Considered or to Declined.
+  If that happens after the merge, the EIP leaves `master`, and a Considered EIP returns to the branch.
 
 So a contribution that adds an EIP ahead of its stage is not accepted, whoever or whatever writes it.
 This keeps the repository free of changes that may never activate.
 
+Two kinds of change have no stage of their own.
+
+- A blob-parameter-only fork of EIP-7892 changes parameters and no rule.
+  It enters when a meta EIP records its mainnet activation, as EIP-7607 of Fusaka does for BPO1 and BPO2.
+  The code cites the EIP that fixes its parameters: EIP-8134 for BPO1 and EIP-8135 for BPO2.
+- A standard outside the EIP process has no inclusion stages.
+  A version that an upgrade requires, such as a version of the Engine API or of a libp2p protocol, enters with that upgrade.
+  A standard that nodes of a deployed fork already use enters once it can be cited at a pinned commit.
+  The beacon API and the era file format are such standards.
+  Any other standard enters only as an exception that the maintainers choose, as the next paragraph says.
+
 A few components are the exception, because EthLib means to be their reference by the time they reach mainnet, several upgrades ahead.
-The hash-based signatures XMSS and SPHINCS are such components.
-The maintainers choose these components, and each has an issue that records the decision.
+The maintainers choose these components, and record each decision in an issue.
+The two components on the list have no such issue yet, only the issues that started their work:
+
+- the hash-based signature XMSS, in [#29](https://github.com/ethereum/EthLib/issues/29),
+- the hash-based signature SPHINCS, in [#41](https://github.com/ethereum/EthLib/issues/41).
+
 Each is specified on its own, outside `Fork`, so no rule of an upgrade uses it.
 It joins the timeline by the rule above, when an upgrade schedules it.
 
 The stages apply to changes, not to forks.
-A constructor of `Fork`, such as Hegotá, exists as soon as one of its changes has entered.
+On the branch of an upgrade, its constructor of `Fork`, such as Hegotá, exists from the first change that enters.
+On `master`, the constructor appears when the upgrade merges.
 The rules that wait for its other changes reject it as not yet specified.
 The parity catalogue lists the cases of each pinned devnet, and a case runs only once its change has entered.
 `scripts/check_spec_releases.py` reports when the specification repositories start the tests of a new upgrade, which tells a reviewer that a branch is due.
 
-The Scope section lists what EthLib covers in the end, not the order of the work.
+The Scope section lists what EthLib covers in the end.
+It gives no order of work, except that the relay API and the two validator-client APIs come last.
 
 ### A rule takes the fork
 
@@ -277,6 +466,11 @@ A theorem can then quantify over forks.
 A rule of one layer does not branch at a fork that changes only the other layer.
 At Altair, an execution rule behaves as at London.
 The beacon chain starts at Phase 0, so a theorem about the consensus layer assumes `fork ≥ .phase0` where it needs to.
+
+A rule written once has a cost.
+An edit made for one fork can change the rule at earlier forks, and no build error says so.
+So CI compares the value at each fork of each numeric rule of the execution layer with a snapshot.
+The snapshot is `tests/execution/history/rules.tsv`, and its [README](tests/execution/history/README.md) says what it covers.
 
 ### Constants that change at forks
 
@@ -336,13 +530,21 @@ When a constant depends on both, the function of the fork takes the preset as an
 
 ## Sources
 
-EthLib is a specification at the same level as execution-specs and consensus-specs, so its code stands on its own.
-The code cites only primary sources: an EIP or an RFC with its section, a NIST or SEC standard, or a paper.
+EthLib is a formal specification, and its code stands on its own.
+The texts of execution-specs and consensus-specs are reference points, not formal specifications.
+The code cites only primary sources as the authority for a rule.
+Such a source is an EIP or an RFC with its section, a NIST or SEC standard, or a paper.
 Where no primary source states a rule, the doc comment states the rule itself, in words and in mathematics.
 A reader then needs no other specification.
-A contributor may read execution-specs and consensus-specs to understand a rule and to check the work, but the code does not cite them.
+A contributor may read execution-specs and consensus-specs to understand a rule and to check the work.
+The code does not cite them as the authority for a rule.
 
-Test vectors are the exception, because a test must say what it checks against.
+The Lean text and the READMEs of the modules under `EthLib/` never name or link them, as [`CONTRIBUTING.md`](CONTRIBUTING.md#sources-of-truth) says.
+Their pinned commits belong to the test suites that run their vectors.
+Step comments never trace those texts or name their functions, as [`CONTRIBUTING.md`](CONTRIBUTING.md#step-comments) explains.
+They state each step formally, in EthLib's own terms, and never quote code in a programming language.
+
+Test vectors are the one exception, because a test must say what it checks against.
 Each fixture keeps its pinned origin and digests in `tests/`.
 Two tests that pin two commits of one repository can disagree without anyone noticing.
 So each repository that fixtures come from has one pinned commit, recorded in `tests/sources.toml`, and every test that reads from the repository uses it.
@@ -350,24 +552,40 @@ Update the pin in one pull request, and check every test that reads from the rep
 
 ## Packages
 
-EthLib is one Lake package, and three libraries hold its code.
+EthLib is one Lake package, and four libraries hold its code.
 
 - The library `EthLib` holds the specifications.
 - The library `Proofs` holds the properties and the models, in the `Proofs/` directory of each layer.
 - The library `Exports` holds the C exports that the Python bindings call.
+- The library `PythonConversions` holds the Python conversion core and its law proofs, which import only that core and the Lean toolchain.
+  Separate ownership lets both `Exports` and `Proofs` import them without a cycle between native libraries.
 
-The package also builds two executables: `check-decls`, which checks the compiled declarations, and `gen-bindings`, which writes the binding contract from Lean.
-A fourth library, `CheckDeclsTest`, holds the test cases of that executable, in `scripts/`.
-It is not a default target, and `scripts/test_check_decls.sh` builds it.
+The bindings initialize the runtime phase of `EthLib.Exports` and link the objects reached through its ordinary imports.
+The linker hides EthLib's compile-time and legacy initializers so that their unused sections can be discarded.
+Runtime initializers and C exports remain public.
+So conversion proofs can enter through `meta import` without linking their objects into the extension.
+
+The executables `check-decls`, `check-accessors` and `check-theorems` inspect the compiled declarations.
+They check which constructs the declarations use, which defaulting accessors the specification calls, and which theorems it needs.
+`gen-bindings` writes the binding contract from Lean, and `known-answers` runs pinned test vectors.
+The library `KernelVectors`, in `tests/kernel/`, proves known answers in the kernel, and no default target imports it.
+Four more libraries hold test cases in `scripts/`: `CheckDeclsTest`, `CheckAccessorsTest`, `CheckTheoremsTest` and `CheckTheoremsAttributesTest`.
+They are not default targets.
+Their test scripts, `scripts/test_check_decls.sh`, `scripts/test_check_accessors.sh` and `scripts/test_check_theorems.sh`, build them.
+`CheckTheoremSupport` holds the source attribute inspection used by `check-theorems`.
+`rule-history` writes the value of each fork-indexed rule at each fork.
+Its test cases are in one more library of `scripts/`, `RuleHistoryTest`, which `scripts/test_rule_history.sh` builds.
 
 The package requires Mathlib and VCVio, a library of probabilistic computations.
 Only the properties and the models may import them, or Batteries.
 A specification or an export imports nothing beyond the Lean toolchain.
 So the code that clients and the bindings run depends on no other library.
 Lake still downloads Mathlib and VCVio for a project that requires EthLib, because a requirement holds for the whole package.
+Mathlib also runs a hook on `lake update`: it builds Mathlib's `cache` tool and downloads Mathlib's build files, which the specification and the exports never use.
+A project that imports only the specification or the exports can set `MATHLIB_NO_CACHE_ON_UPDATE=1` to skip it.
 
 A model is a module under `Proofs/`, like a property.
-The rule that no property imports a model is a rule between modules, not between packages.
+The rule that, among the properties, only a refinement module imports a model directly is a rule between modules, not between packages.
 
 ## Where a new module goes
 
@@ -384,6 +602,41 @@ A new module finds its place by answering three questions in order.
    If two modules need the same thing, write it once, in the lower of their layers.
 
 Then the module follows the layout of `CONTRIBUTING.md`: the specification in `EthLib/<Domain>/<Module>/`, its theorems in `EthLib/<Domain>/Proofs/<Module>/`, and its C exports in `EthLib/<Domain>/Exports/`.
+A theorem stays in the specification file in two cases, because a specification never imports a property:
+
+- A definition or an instance of the specification uses it.
+  `gasHeld_le_of_measure_lt` in `EthLib/Execution/Evm/Interpreter.lean` is one, since `runFrameWith` needs its bound.
+- The users of a definition rely on it, such as a `@[simp]` lemma.
+  A project that imports only the specification can then still use it.
+
+`lake exe check-theorems` starts from definitions, instances and persistent `@[simp]` theorems.
+It follows constants in their types and private bodies, and resolved references recorded in Lean's `.ilean` files.
+These references retain a named lemma even when simplification erases its proof term.
+The search follows the helpers of every retained theorem, including simplification rules.
+
+Lean's `.ilean` files keep references attached to original source syntax.
+A lemma named only in a tactic macro can disappear from both those references and the compiled proof term.
+The checker can then report the lemma as movable despite a retained proof using it.
+No specification module defines a tactic macro.
+If one is added, review its hidden lemma dependencies before moving a reported theorem.
+
+The check reads persistent theorem attributes written in declarations or `attribute` commands.
+It permits `simp`, `deprecated` and `inherit_doc`; another attribute stops the check until it has a placement rule.
+The last two attributes carry deprecation or documentation metadata and do not retain a theorem by themselves.
+This guard parses declaration modifiers and standalone `attribute` commands, since Lean's compiled environment has no general query for applied attributes.
+It does not reparse bodies, whose local notation can disappear after import.
+The guard does not inspect attributes that custom command macros generate without an explicit source application.
+The search covers the specification modules and `EthLib.lean`, and identifies a declaration by its defining module, not its namespace.
+Definitions local to theorem proofs are not independent roots, but executable `where` helpers are.
+Generated theorems are not migration findings.
+Every other theorem goes under `Proofs/`, even when a property uses it through a specification import.
+
+`scripts/check_theorems_baseline.txt` records the findings awaiting migration.
+The check fails on a finding absent from the baseline and on a baseline entry absent from its findings.
+The baseline may only shrink.
+CI compares it with the base revision using `scripts/check_theorems_baseline.py` and rejects added entries.
+The first change that creates the baseline initializes it from the existing findings.
+It keeps the findings in `EthLib/Cryptography/Bls/` because their migration is outside the scope of issue [#2611](https://github.com/ethereum/EthLib/issues/2611).
 A model goes under `Proofs/` too, as the models of Casper FFG and LMD-GHOST do in `EthLib/Consensus/Proofs/Models/`.
 Modules of one kind share a directory, under the part of the layer that uses them.
 The precompiles are one kind, and only the EVM calls them, so ECRECOVER sits in `EthLib/Execution/Evm/Precompiles/Ecrecover.lean`, and its theorems in `EthLib/Execution/Proofs/Evm/Precompiles/Ecrecover.lean`.

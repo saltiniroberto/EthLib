@@ -1,16 +1,26 @@
 module
 
+public import EthLib.Engine.Proofs.BeaconApiEvents
 public import EthLib.Engine.Proofs.Block
 public import EthLib.Engine.Proofs.BuildPayload
+public import EthLib.Engine.Proofs.Capabilities
+public import EthLib.Engine.Proofs.ConsensusRoute
 public import EthLib.Engine.Proofs.ExecutionEngine
 public import EthLib.Engine.Proofs.ForkchoiceUpdated
 public import EthLib.Engine.Proofs.GetBlobs
+public import EthLib.Engine.Proofs.GetInclusionList
 public import EthLib.Engine.Proofs.GetPayload
 public import EthLib.Engine.Proofs.Json
 public import EthLib.Engine.Proofs.Jwt
+public import EthLib.Engine.Proofs.Jwt.Json
 public import EthLib.Engine.Proofs.NewPayload
+public import EthLib.Engine.Proofs.Node
+public import EthLib.Engine.Proofs.Node.Proposal
+public import EthLib.Engine.Proofs.Node.View
 public import EthLib.Engine.Proofs.PayloadBodies
 public import EthLib.Engine.Proofs.PreparePayload
+public import EthLib.Engine.Proofs.RpcView
+public import EthLib.Engine.Proofs.TransitionConfiguration
 
 /-!
 # `EthLib.Engine.Proofs`

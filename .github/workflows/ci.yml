@@ -41,7 +41,7 @@ jobs:
           fetch-depth: 2
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "0.13.6"
           enable-cache: false
@@ -140,6 +140,24 @@ jobs:
             | xargs -0 uv run --no-project --python 3.12 python scripts/check_memory.py \
                 --summary "$GITHUB_STEP_SUMMARY"
 
+      # Known answers that the kernel checks, outside the default build.
+      # Each file must elaborate alone in under 20 CPU seconds, with a peak memory under 2 GiB.
+      # check-decls does not read this library, so a search rejects the tactics
+      # that trust compiled code, and axioms.
+      - name: kernel vectors
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          if grep -rnE 'native_decide|\+native|bv_decide|ofReduceBool|implemented_by|@\[extern|\baxiom\b' \
+              tests/kernel; then
+            echo "::error::tests/kernel trusts compiled code or states an axiom"
+            exit 1
+          fi
+          lake build --wfail KernelVectors
+          find tests/kernel -name '*.lean' -print0 | sort -z \
+            | xargs -0 uv run --no-project --python 3.12 python scripts/check_memory.py \
+                --warn-gib 2 --fail-gib 2 --fail-cpu-seconds 20 --summary "$GITHUB_STEP_SUMMARY"
+
       # Every compiled declaration: its axioms, and anything the kernel cannot
       # unfold or the compiler runs differently. Only the findings that exist
       # today, listed in scripts/check_decls_baseline.txt, pass.
@@ -147,14 +165,68 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash scripts/build_timing_report.sh run declarations "$BUILD_TIMING_RESULTS" -- lake exe check-decls
 
+      # Find every defaulting accessor of the specification, such as xs[i]!.
+      # Only the sites listed in scripts/check_accessors_baseline.txt pass.
+      - name: defaulting accessors
+        if: ${{ !cancelled() }}
+        run: lake exe check-accessors
+
+      # Each fork-indexed rule must compute the values in tests/execution/history/rules.tsv.
+      # A pull request that changes a line names the source that requires it.
+      - name: rule history
+        if: ${{ !cancelled() }}
+        run: lake exe rule-history --check
+
       # The check must report exactly what its fixtures plant.
       - name: declaration check fixtures
         if: ${{ !cancelled() }}
         run: scripts/test_check_decls.sh
 
+      # The accessor check must report exactly the sites its fixtures plant.
+      - name: accessor check fixtures
+        if: ${{ !cancelled() }}
+        run: scripts/test_check_accessors.sh
+
+      # The rule history must write exactly the lines that its fixtures plant.
+      - name: rule history fixtures
+        if: ${{ !cancelled() }}
+        run: scripts/test_rule_history.sh
+
+      - name: specification theorems
+        if: ${{ !cancelled() }}
+        run: lake exe check-theorems
+
+      - name: theorem baseline
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          PUSH_BEFORE: ${{ github.event_name == 'push' && github.event.before || '' }}
+        run: |
+          # PR merge commits and newly created branches use their first parent.
+          baseline_base=HEAD^1
+          if [[ -n "$PUSH_BEFORE" && ! "$PUSH_BEFORE" =~ ^0+$ ]]; then
+            baseline_base="$PUSH_BEFORE"
+            if ! git cat-file -e "$baseline_base^{commit}" 2>/dev/null; then
+              git fetch --no-tags --depth=1 origin "$baseline_base"
+            fi
+          fi
+          uv run --no-project --python 3.12 python scripts/check_theorems_baseline.py --base "$baseline_base"
+
+      - name: theorem check fixtures
+        if: ${{ !cancelled() }}
+        run: scripts/test_check_theorems.sh
+
+      - name: theorem baseline fixtures
+        if: ${{ !cancelled() }}
+        run: uv run --no-project --python 3.12 python -m unittest scripts/test_check_theorems_baseline.py
+
       - name: module system regression
         if: ${{ !cancelled() }}
         run: bash scripts/test_module_system.sh
+
+      - name: export proof regression
+        if: ${{ !cancelled() }}
+        run: bash scripts/test_export_proofs.sh
 
       # A separate package that requires EthLib, as a downstream project does, must still build.
       # EthLib is built above, so this elaborates one small file, in a few seconds.
@@ -175,6 +247,10 @@ jobs:
       - name: build pipeline regressions
         if: ${{ !cancelled() && steps.bindings.outcome == 'success' }}
         run: uv run --no-sync python -m unittest discover -s scripts -p 'test_build_pipeline.py'
+
+      - name: runtime object selection regressions
+        if: ${{ !cancelled() }}
+        run: uv run --no-project --python 3.12 python -m unittest scripts/test_setup_runtime.py
 
       # A failed run still publishes its logs and the status of each measured command.
       - name: build timing report
@@ -253,7 +329,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "0.13.6"
           enable-cache: false
@@ -326,6 +402,13 @@ jobs:
           ETHLIB_ARCHIVES: ${{ runner.temp }}/archives
         run: uv run --no-sync pytest -m archive bindings/python/tests/history
 
+      # The embedded KZG trusted setup, against its pinned setup file of under 1 MB.
+      - name: pinned KZG trusted setup
+        if: matrix.python == '3.12'
+        env:
+          ETHLIB_ARCHIVES: ${{ runner.temp }}/archives
+        run: uv run --no-sync pytest -m archive bindings/python/tests/kzg/test_trusted_setup.py
+
       # The generators rewrite every case, so a changed vector shows up as a diff.
       - name: unchanged vectors
         run: git diff --exit-code -- tests/cryptography
@@ -365,7 +448,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "0.13.6"
           enable-cache: false
@@ -404,7 +487,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "0.13.6"
           enable-cache: false
@@ -473,7 +556,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "0.13.6"
           enable-cache: false
@@ -493,12 +576,12 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "0.13.6"
           enable-cache: false
@@ -546,6 +629,9 @@ jobs:
       - name: docstrings, unit tests
         run: uv run --no-sync python -m unittest scripts/test_check_docstrings.py
 
+      - name: memory check, unit tests
+        run: uv run --no-sync python -m unittest scripts/test_check_memory.py
+
   soundness:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -558,7 +644,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "0.13.6"
           enable-cache: false
@@ -583,6 +669,19 @@ jobs:
       - run: uv run --no-project --python 3.12 python scripts/check_fork_cap.py
 
       - run: uv run --no-project --python 3.12 python -m unittest scripts/test_check_fork_cap.py
+
+      # No Lean comment quotes code in a programming language or cites the Python specs,
+      # except notation that its source writes, listed with a reason in the allowlist.
+      - run: uv run --no-project --python 3.12 python scripts/check_comment_code.py
+
+      - run: uv run --no-project --python 3.12 python -m unittest scripts/test_check_comment_code.py
+
+      # No library module runs a command such as #print or #eval at every build,
+      # except one listed with a reason in the allowlist.
+      # lake exe check-decls, in the build job, fails on any axiom beyond the three standard ones.
+      - run: uv run --no-project --python 3.12 python scripts/check_lean_commands.py
+
+      - run: uv run --no-project --python 3.12 python -m unittest scripts/test_check_lean_commands.py
 
       # Every test cites only the pinned commits of tests/sources.toml, and every pinned
       # vector directory names its sources.

@@ -1,5 +1,7 @@
 """The messages of the eth capability of devp2p."""
 
+from collections.abc import Sequence
+
 # Every domain links into one extension module.
 # That module lives in the `cryptography` package.
 from ethlib.cryptography import _native
@@ -36,9 +38,25 @@ def check_status(version: int, schedule: bytes, number: int, timestamp: int, dat
     _native.eth_check_status(version, schedule, number, timestamp, data)
 
 
+def session(
+    version: int,
+    schedule: bytes,
+    number: int,
+    timestamp: int,
+    events: Sequence[tuple[bool, int, bytes]],
+) -> list[tuple[str, int]]:
+    """The verdict and the pending request count after each eth message sent or received."""
+    return _native.eth_session(version, schedule, number, timestamp, list(events))
+
+
 def check_headers(version: int, request: bytes, response: bytes) -> None:
     """Accept the BlockHeaders data `response` as an answer to the GetBlockHeaders `request`."""
     _native.eth_check_headers(version, request, response)
+
+
+def check_body(fork: str, header: bytes, body: bytes) -> None:
+    """Accept the BlockBodies `body` for the header `header` at `fork`, or raise EthWireError."""
+    _native.eth_check_body(fork, header, body)
 
 
 def check_pooled(version: int, request: bytes, response: bytes) -> None:
@@ -89,11 +107,13 @@ __all__ = [
     "STATUS",
     "TRANSACTIONS",
     "EthWireError",
+    "check_body",
     "check_headers",
     "check_partial_receipts",
     "check_pooled",
     "check_status",
     "decode_message",
     "receipts_match",
+    "session",
     "wire_hash",
 ]

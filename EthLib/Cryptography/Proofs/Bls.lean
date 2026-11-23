@@ -13,6 +13,7 @@ public import EthLib.Cryptography.Proofs.Bls.Fr
 public import EthLib.Cryptography.Proofs.Bls.FrZMod
 public import EthLib.Cryptography.Proofs.Bls.FrBatchInverse
 public import EthLib.Cryptography.Proofs.Bls.G1Group
+public import EthLib.Cryptography.Proofs.Bls.JacobianLaw
 public import EthLib.Cryptography.Proofs.Bls.Compress
 public import EthLib.Cryptography.Proofs.Bls.G1Msm
 public import EthLib.Cryptography.Proofs.Bls.G1Order
@@ -35,14 +36,7 @@ public import EthLib.Cryptography.Proofs.Bls.TwistFrobenius
 public import EthLib.Cryptography.Proofs.Bls.CofactorAlgebra
 public import EthLib.Cryptography.Proofs.Bls.CofactorCardinality
 public import EthLib.Cryptography.Proofs.Bls.CofactorCertificateHelpers
-public import EthLib.Cryptography.Proofs.Bls.CofactorPointQ13
-public import EthLib.Cryptography.Proofs.Bls.CofactorPointQ23
-public import EthLib.Cryptography.Proofs.Bls.CofactorPointIndependent13
-public import EthLib.Cryptography.Proofs.Bls.CofactorPointIndependent23
-public import EthLib.Cryptography.Proofs.Bls.CofactorPointQ2713
-public import EthLib.Cryptography.Proofs.Bls.CofactorPointQ11953
-public import EthLib.Cryptography.Proofs.Bls.CofactorPointQ262069
-public import EthLib.Cryptography.Proofs.Bls.CofactorPointLarge
+public import EthLib.Cryptography.Proofs.Bls.CofactorPoints
 public import EthLib.Cryptography.Proofs.Bls.CofactorIndependence
 public import EthLib.Cryptography.Proofs.Bls.CofactorPrimes
 public import EthLib.Cryptography.Proofs.Bls.CofactorSpan
@@ -50,6 +44,7 @@ public import EthLib.Cryptography.Proofs.Bls.CofactorSubgroupLanding
 public import EthLib.Cryptography.Proofs.Bls.CofactorEffective
 public import EthLib.Cryptography.Proofs.Bls.G2SubgroupSpan
 public import EthLib.Cryptography.Proofs.Bls.PairingCongr
+public import EthLib.Cryptography.Proofs.Bls.PairingFactor
 public import EthLib.Cryptography.Proofs.Bls.FinalExponentiation
 public import EthLib.Cryptography.Proofs.Bls.MillerLoop
 public import EthLib.Cryptography.Proofs.Bls.MillerChain

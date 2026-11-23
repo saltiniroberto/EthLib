@@ -5,13 +5,7 @@ public import EthLib.Cryptography.Xmss.Tree
 /-!
 # leanXMSS verification
 
-Signature verification.
-
-```text
-    X  = Tree.fold(0, idx, Ots.leaf(0, idx, m, rho^0, y^0), pi^0)
-    X' = Tree.fold(1, b,   Ots.leaf(1, b,   X, rho^1, y^1), pi^1)
-    accept  iff  neither Ots.leaf fails and X' = root
-```
+Signature verification, the two layers one after the other.
 
 `b = floor(idx / 2^16)` is the bottom tree of leaf index `idx`.
 
@@ -33,6 +27,14 @@ A fixed count is what keeps the aggregation circuit a fixed size.
 Nothing here needs to be constant time: every value it reads is public.
 
 Source: the leanXMSS specification draft, section "The scheme".
+
+Each layer runs steps 2 to 7 of the verification of Construction 3 of [ePrint 2025/055][hbms], §4.2.
+
+Construction 3 has one tree, where this scheme has two layers.
+
+The bottom root is the message of the top layer, and only the top root is compared with the key's.
+
+[hbms]: https://eprint.iacr.org/2025/055
 -/
 
 @[expose] public section
@@ -89,8 +91,8 @@ Returns nothing when the signed digest is not a codeword.
 
 - `e`: the signing key's index on its layer.
 - `msg`: the 32-byte message on the bottom layer, a 16-byte root on the top. -/
-def layerRoot {m : Type → Type} [Monad m] (H : ByteArray → m (Vector UInt8 32))
-    (pp : PublicParam) (layer : Layer) (e : Nat) (msg : ByteArray)
+def layerRoot {m : Type → Type} [Monad m] (H : Array UInt64 → m Lanes4)
+    (pp : PublicParam) (layer : Layer) (e : Nat) (msg : Array UInt64)
     (sig : LayerSignature) : m (Option Digest) := do
   -- Recover the key's leaf from the one-time signature.
   let some leaf ← otsLeaf H pp layer (UInt32.ofNat e) msg sig.randomizer sig.chainValues
@@ -103,16 +105,20 @@ def layerRoot {m : Type → Type} [Monad m] (H : ByteArray → m (Vector UInt8 3
 A yes or a no, never a reason.
 
 Which step rejected a well-formed signature carries no consensus meaning. -/
-def verifyWith {m : Type → Type} [Monad m] (H : ByteArray → m (Vector UInt8 32))
+def verifyWith {m : Type → Type} [Monad m] (H : Array UInt64 → m Lanes4)
     (pk : PublicKey) (msg : Message) (sig : Signature) : m Bool := do
   let pp := pk.publicParam
-  -- Step 1: the bottom key signs the message, so its path reaches bottom tree `b`'s root.
-  let some bottomRoot ← layerRoot H pp .bottom sig.leafIndex.toNat (packBytes msg) sig.bottom
+  -- Step 1: `X = Tree.fold(0, idx, Ots.leaf(0, idx, m, rho^0, y^0), pi^0)`.
+  --
+  -- The bottom key signs the message, so its path reaches bottom tree `b`'s root.
+  let some bottomRoot ← layerRoot H pp .bottom sig.leafIndex.toNat msg.toArray sig.bottom
     | return false
-  -- Step 2: the top key `b` signs that root, so its path reaches the top root.
-  let some root ← layerRoot H pp .top (bottomTree sig.leafIndex) (packBytes bottomRoot) sig.top
+  -- Step 2: `X' = Tree.fold(1, b, Ots.leaf(1, b, X, rho^1, y^1), pi^1)`.
+  --
+  -- The top key `b` signs that root, so its path reaches the top root.
+  let some root ← layerRoot H pp .top (bottomTree sig.leafIndex) bottomRoot.toArray sig.top
     | return false
-  -- Step 3: neither layer failed, and the top root is the key's.
+  -- Step 3: accept exactly when neither `Ots.leaf` fails and `X' = root`.
   return decide (root = pk.root)
 
 /-- `Ver(pk, m, sigma)`, with Keccak-256. -/

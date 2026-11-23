@@ -20,9 +20,11 @@ GAS = 3000
 #
 # File: tests/frontier/precompiles/test_ecrecover.py
 # Repository: ethereum/execution-specs
-# Commit: e27f097ec7b3e6e8ee9c2c1873c183e8f7da7a6e
+# Commit: 391d8a05d5cb182542ac7e7330c858b6ee03f990
 # Licence: CC0-1.0
-CASES = json.loads((Path(__file__).resolve().parent / "ecrecover_cases.json").read_text())
+CASES = json.loads(
+    (Path(__file__).resolve().parent / "execution_specs" / "ecrecover_cases.json").read_text()
+)
 
 
 @pytest.mark.parametrize("fork", FORKS)
@@ -42,8 +44,9 @@ def test_out_of_gas(fork: str) -> None:
     with raises(
         ValueError,
         (
-            "EthLib.Execution.Evm.Precompiles.PrecompileError.ecrecover\n  "
-            "(EthLib.Execution.Evm.Precompiles.Ecrecover.EcrecoverError.outOfGas 3000 2999)"
+            "EthLib.Execution.Evm.Precompiles.PrecompileError.ecrecover "
+            "(EthLib.Execution.Evm.Precompiles.Ecrecover.EcrecoverError.outOfGas "
+            "(cost := 3000) (gas := 2999))"
         ),
     ):
         run(fork, ADDRESS, bytes.fromhex(CASES[0]["input"]), GAS - 1)

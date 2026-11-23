@@ -32,8 +32,7 @@ public section
 namespace EthLib.Consensus.Exports
 
 open Base Serialization.Ssz
-open EthLib.Exports (Result)
-open Serialization.Ssz.Exports (runSsz)
+open EthLib.Exports (Result rejectArgument toResult)
 
 /-- From Heze, the bits of the inclusion lists of a bid, from their SSZ bytes.
 
@@ -45,11 +44,11 @@ The bits are required from Heze, and must be absent before. -/
 def inclusionListBitsOf {preset : Preset} {fork : Fork} (bits : ByteArray) :
     Result (Since .hegota fork (InclusionListBits preset)) :=
   if heze : .hegota ≤ fork then do
-    if bits.isEmpty then throw (0, s!"inclusion list bits are required at {fork.name}")
+    if bits.isEmpty then rejectArgument none s!"inclusion list bits are required at {fork.name}"
     let bits ← decodeInput (InclusionListBits preset) bits
     return fun _ => bits
   else if bits.isEmpty then return fun later => absurd later heze
-  else throw (0, s!"no inclusion list bits at {fork.name}")
+  else rejectArgument none s!"no inclusion list bits at {fork.name}"
 
 /-- From Gloas: the bid of a builder for a payload that it built on a state, as SSZ bytes. -/
 @[export eth_consensus_get_execution_payload_bid]
@@ -64,9 +63,9 @@ def getExecutionPayloadBidExport
   let commitments ← decodeInput (BlobKZGCommitments preset fork) commitments
   let feeRecipient ← decodeInput ExecutionAddress feeRecipient
   let bits ← inclusionListBitsOf bits
-  let bid ← runSsz "bid rejected" (getExecutionPayloadBid state payload requests commitments slot
+  let bid ← toResult "bid rejected" (getExecutionPayloadBid state payload requests commitments slot
     feeRecipient builderIndex value bits)
-  runSsz "bid rejected" (SszType.serialize bid)
+  toResult "bid rejected" (SszType.serialize bid)
 
 /-- From Gloas: the signed bid of a proposer that builds its own payload, as SSZ bytes. -/
 @[export eth_consensus_get_self_built_execution_payload_bid]
@@ -81,9 +80,9 @@ def getSelfBuiltExecutionPayloadBidExport
   let commitments ← decodeInput (BlobKZGCommitments preset fork) commitments
   let feeRecipient ← decodeInput ExecutionAddress feeRecipient
   let bits ← inclusionListBitsOf bits
-  let signed ← runSsz "bid rejected" (getSelfBuiltExecutionPayloadBid state payload requests
+  let signed ← toResult "bid rejected" (getSelfBuiltExecutionPayloadBid state payload requests
     commitments feeRecipient bits)
-  runSsz "bid rejected" (SszType.serialize signed)
+  toResult "bid rejected" (SszType.serialize signed)
 
 /-- From Gloas: the envelope that reveals a payload after the block of its bid, as SSZ bytes. -/
 @[export eth_consensus_get_execution_payload_envelope]
@@ -94,8 +93,8 @@ def getExecutionPayloadEnvelopeExport (name fork block payload requests : ByteAr
   let block ← decodeInput (BeaconBlock preset fork) block
   let payload ← decodeInput (ExecutionPayload preset fork) payload
   let requests ← decodeInput (ExecutionRequests preset fork) requests
-  let envelope ← runSsz "envelope rejected"
+  let envelope ← toResult "envelope rejected"
     (getExecutionPayloadEnvelope block gloas payload requests)
-  runSsz "envelope rejected" (SszType.serialize envelope)
+  toResult "envelope rejected" (SszType.serialize envelope)
 
 end EthLib.Consensus.Exports

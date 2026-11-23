@@ -60,6 +60,11 @@ _AUTHORIZATION = [
 ]
 
 
+def _bits(kind: int, name: str) -> int:
+    """The bits of a scalar field: 64 for a typed chain ID and a set-code nonce, else 256."""
+    return 64 if (name == "CHAINID" and kind >= 1) or (name == "NONCE" and kind == 4) else 256
+
+
 def _field(kind: int, name: str) -> int:
     names = FIELDS[kind]
     if name in ("SIGNATURE_R", "SIGNATURE_S"):
@@ -133,6 +138,12 @@ def _scalar_fault(prefix: str, value: bytes | list, bits: int = 256) -> str | No
     if int.from_bytes(value, "big") >= 2**bits:
         return f"{prefix}scalarTooLarge {int.from_bytes(value, 'big')} {bits}"
     return None
+
+
+def _scalar(value: bytes | list) -> int:
+    """The integer of a scalar field."""
+    assert isinstance(value, bytes), value
+    return int.from_bytes(value, "big")
 
 
 def _fields(tx: bytes, kind: int) -> list:
@@ -219,12 +230,16 @@ def _chain_fault(fields: list, kind: int, fork: str, chain_id: int) -> str:
     """
     if kind != 0:
         signed = int.from_bytes(fields[_field(kind, "CHAINID")], "big")
-        return f"wrongChainId {chain_id} {signed}" if signed != chain_id else "invalidSignature"
+        return (
+            f"wrongChainId (expected := {chain_id}) (actual := {signed})"
+            if signed != chain_id
+            else "invalidSignature"
+        )
     v = int.from_bytes(fields[_field(kind, "V")], "big")
     eip155 = FORKS.index(fork) >= FORKS.index("spuriousDragon")
     signed = (v - 35) // 2
     if eip155 and v >= 35 and signed < 2**64 and signed != chain_id:
-        return f"wrongChainId {chain_id} {signed}"
+        return f"wrongChainId (expected := {chain_id}) (actual := {signed})"
     return "invalidSignature"
 
 
@@ -268,10 +283,15 @@ def _one(
         return _signature_fault(fields, kind)
     if name == "INVALID_CHAINID":
         return _chain_fault(fields, kind, fork, chain_id)
-    if name == "NONCE_TOO_BIG":
-        return "nonceOverflow"
+    if name in ("NONCE_TOO_BIG", "NONCE_OVERFLOW"):
+        index = _field(kind, "NONCE")
+        overflow = f"nonceOverflow (nonce := {_scalar(fields[index])})"
+        fault = _scalar_fault(f"decoding: field {index}: ", fields[index], _bits(kind, "NONCE"))
+        return fault or overflow
     if name == "PRIORITY_GREATER_THAN_MAX_FEE_PER_GAS_2":
-        return "priorityFeeGreaterThanMaxFee"
+        priority = _scalar(fields[_field(kind, "PRIORITY")])
+        maximum = _scalar(fields[_field(kind, "MAXFEE")])
+        return f"priorityFeeGreaterThanMaxFee (priorityFee := {priority}) (maxFee := {maximum})"
     if name == "TYPE_4_EMPTY_AUTHORIZATION_LIST":
         return "emptyAuthorizationList"
     if name.startswith("TYPE_4_INVALID_AUTHORI"):
@@ -279,21 +299,18 @@ def _one(
     if name in ("INTRINSIC_GAS_TOO_LOW", "INTRINSIC_NO_FLOOR_GAS"):
         limit = int.from_bytes(fields[_field(kind, "GASLIMIT")], "big")
         if intrinsic is None:
-            return f"insufficientGas {N} {limit}"
+            return f"insufficientGas (needed := {N}) (gas := {limit})"
         if FORKS.index(fork) >= FORKS.index("pectra"):
             intrinsic = max(intrinsic, _floor_gas(fields[_field(kind, "DATA")]))
-        return f"insufficientGas {intrinsic} {limit}"
+        return f"insufficientGas (needed := {intrinsic}) (gas := {limit})"
     if name == "INITCODE_SIZE_EXCEEDED":
-        return f"initCodeTooLarge {len(fields[_field(kind, 'DATA')])}"
-    if name == "NONCE_OVERFLOW":
-        index = _field(kind, "NONCE")
-        return _scalar_fault(f"decoding: field {index}: ", fields[index]) or "nonceOverflow"
+        return f"initCodeTooLarge (size := {len(fields[_field(kind, 'DATA')])})"
     if name.endswith("_OVERFLOW"):
         field = name.removesuffix("_OVERFLOW")
         if field == "GASPRICE" and kind >= 2:
             field = "MAXFEE"
         at = f"decoding: field {_field(kind, field)}: "
-        fault = _scalar_fault(at, fields[_field(kind, field)])
+        fault = _scalar_fault(at, fields[_field(kind, field)], _bits(kind, field))
         assert fault is not None, (name, tx.hex())
         return fault
     for prefix, fault in (("RLP_LEADING_ZEROS_", "leadingZeroInScalar"), ("RLP_INVALID_", None)):
@@ -305,7 +322,7 @@ def _one(
                 return at + fault
             if field.removeprefix("SIGNATURE_") in _BYTES:
                 return at + ("listAsBytes" if isinstance(fields[index], list) else "bytesAsList")
-            return _scalar_fault(at, fields[index])
+            return _scalar_fault(at, fields[index], _bits(kind, field))
     raise KeyError(f"no message for the exception {name}")
 
 
@@ -318,9 +335,9 @@ def expected_template(
     kind = kind_of(tx)
     # EIP-2718: a transaction is an RLP list, or a type byte below 0x80 and a payload.
     if kind is None or kind not in FIRST_FORK_OF_TYPE:
-        return f"unsupportedType {tx[0]}"
+        return f"unsupportedType (type := {tx[0]})"
     if FORKS.index(fork) < FORKS.index(FIRST_FORK_OF_TYPE[kind]):
-        return f"unsupportedType {kind}"
+        return f"unsupportedType (type := {kind})"
     names = [e.removeprefix("TransactionException.") for e in exceptions.split("|")]
     found = {
         template

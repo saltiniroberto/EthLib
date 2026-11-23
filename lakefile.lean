@@ -13,29 +13,33 @@ Lake produces:
 
 `setup.py` builds the Python C extension under `bindings/python/`, not Lake.
 
-It enumerates the `.c.o.export` files and the Lean toolchain's static archives.
+It selects `.c.o.export` files through the ordinary imports of `EthLib.Exports`.
 
-It links them all statically into a single self-contained Python extension.
+It links these objects into one Python extension beside the shared Lean runtime.
 -/
 
 package «EthLib» where
   -- The release version, the same as in `pyproject.toml` (`scripts/release_manifest.py`).
   version := v!"0.3.0"
-  moreLeancArgs := #["-fPIC"]
+  moreLeancArgs := #["-fPIC", "-ffunction-sections", "-fdata-sections"]
 
-require "leanprover-community" / "mathlib" @ git "v4.35.0"
+require "leanprover-community" / "mathlib" @ git "v4.36.0"
 
--- Probability and oracle computations, for the leanXMSS and BLS security proofs only.
+-- Probability and oracle computations, for the security proofs.
+--
+-- `SOUNDNESS.md` (D2) lists the proofs that import it, directly or through another file.
+--
+-- `scripts/soundness_facts.py` generates that list.
 --
 -- The library code never imports it.
 --
--- A commit on VCVio's `main`, built against the same Mathlib.
-require VCVio from git "https://github.com/Verified-zkEVM/VCVio.git" @
-  "bbf05eeeedf84c5f98baaf5ab846f2d2479cc8ab"
+-- VCVio's release tag for this Lean version, built against the same Mathlib.
+require VCVio from git "https://github.com/Verified-zkEVM/VCVio.git" @ "v4.36.0"
 
 @[default_target]
 lean_lib «EthLib» where
-  -- Lean v4.35.0, Source Files and Modules, section 5.4.
+  -- Lean v4.36.0, Source Files and Modules, section 5.4.
+  --
   -- Ordinary importers load public definitions without private proof bodies.
   requiresModuleSystem := true
   precompileModules := true
@@ -44,9 +48,9 @@ lean_lib «EthLib» where
 
 The executable specification never depends on this library.
 
-Theorems produce no code, so `precompileModules` is off.
+`precompileModules` is off, since default targets need no native proof objects.
 
-Proof object files then stay out of the Python extension link.
+The Python extension links only the runtime imports of `EthLib.Exports`.
 
 `platformIndependent` keeps the specification's shared library out of each proof's trace.
 
@@ -60,20 +64,63 @@ lean_lib «Proofs» where
     `EthLib.Execution.Proofs, `EthLib.Consensus.Proofs, `EthLib.Base.Proofs, `EthLib.Engine.Proofs]
   precompileModules := false
   platformIndependent := true
+  -- Mathlib's concrete-instances linter flags an instance assumption without variables.
+  --
+  -- It asks for a global instance in its place, or for its removal when one exists.
+  --
+  -- The SPHINCS+ proofs quantify over every parameter class, and a global instance fixes one.
+  --
+  -- The random-oracle bounds hold for every sampler of digests, and a removal keeps one.
+  --
+  -- So either fix narrows a statement.
+  leanOptions := #[⟨`weak.linter.concreteInstances, false⟩]
 
 /-- The C exports the Python extension calls, and nothing else.
 
 It is a separate library, so that the specification never imports an `@[export]` symbol.
 
-`precompileModules` is on, because `setup.py` links these objects.
+`precompileModules` builds the objects that `setup.py` links.
 
-Each domain's export tree is also a root, so that its modules belong to this library. -/
+One root and its initializer name make this a plugin, so the specification's plugin loads first.
+
+The extension initializes only runtime imports.
+
+The linker discards EthLib's unused compile-time and legacy initializers.
+
+The globs assign each domain's export tree to this library. -/
 @[default_target]
 lean_lib «Exports» where
   requiresModuleSystem := true
-  roots := #[`EthLib.Exports, `EthLib.Base.Exports, `EthLib.Cryptography.Exports,
-    `EthLib.Networking.Exports, `EthLib.Execution.Exports, `EthLib.Consensus.Exports,
-    `EthLib.Serialization.Exports, `EthLib.Engine.Exports]
+  roots := #[`EthLib.Exports]
+  libName := "EthLib_EthLib_Exports"
+  -- The conversion core and its laws belong to `PythonConversions` below.
+  globs := #[.one `EthLib.Exports, .one `EthLib.Base.Exports,
+    .one `EthLib.Base.Exports.Bindings, .one `EthLib.Base.Exports.ChainConfig,
+    .one `EthLib.Base.Exports.Echo, .one `EthLib.Base.Exports.Fin,
+    .one `EthLib.Base.Exports.PyDerive, .one `EthLib.Base.Exports.PyValue,
+    .one `EthLib.Base.Exports.PyValueJson,
+    .andSubmodules `EthLib.Cryptography.Exports, .andSubmodules `EthLib.Networking.Exports,
+    .andSubmodules `EthLib.Execution.Exports, .andSubmodules `EthLib.Consensus.Exports,
+    .andSubmodules `EthLib.Serialization.Exports, .andSubmodules `EthLib.Engine.Exports]
+  precompileModules := true
+  defaultFacets := #[LeanLib.leanArtsFacet, LeanLib.staticExportFacet]
+
+/-- Python conversion types and the proofs of their laws.
+
+The core imports only the Lean toolchain, and the law module imports only the core.
+
+These modules belong to neither `Exports` nor `Proofs`.
+
+Lake assigns a module to the last library whose globs match it, so this block stays after `Proofs`.
+
+A downstream project can then precompile the exports without a native library cycle.
+
+The bindings link the core's runtime objects, but not the meta-imported law module. -/
+lean_lib «PythonConversions» where
+  requiresModuleSystem := true
+  roots := #[`EthLib.Base.Exports.Result, `EthLib.Base.Exports.PyValueCore,
+    `EthLib.Base.Proofs.Exports.PyValue]
+  libName := "EthLib_PythonConversions"
   precompileModules := true
 
 /-- Checks the compiled declarations of every library.
@@ -87,6 +134,27 @@ lean_exe «check-decls» where
   supportInterpreter := true
   -- The checker loads private proof bodies to inspect their dependencies.
   allowNonModules := true
+
+/-- Runs pinned test vectors through the compiled specification, with no export in between.
+
+No default target builds it.
+
+`lake exe known-answers` builds and runs it. -/
+lean_exe «known-answers» where
+  srcDir := "scripts"
+  root := `KnownAnswers
+
+/-- A library of known answers that the kernel checks.
+
+Each file stays within the budget that `CONTRIBUTING.md` sets.
+
+No default target imports it.
+
+`lake build KernelVectors` builds it, and `scripts/check_memory.py` measures each of its files. -/
+lean_lib «KernelVectors» where
+  requiresModuleSystem := true
+  srcDir := "tests/kernel"
+  globs := #[.submodules `KernelVectors]
 
 /-- Writes the binding contract from the Lean docstrings and error codes.
 
@@ -105,4 +173,73 @@ lean_lib «CheckDeclsTest» where
   srcDir := "scripts"
   roots := #[`CheckDeclsTest, `CheckDeclsForeign]
   -- The classic root checks findings behind ordinary module boundaries.
+  allowNonModules := true
+
+/-- Lists the defaulting accessors of the specification, such as `xs[i]!`, `set!` and `get!`.
+
+It compares them with an exact list that may only shrink.
+
+Run it after `lake build` with `lake exe check-accessors`. -/
+lean_exe «check-accessors» where
+  srcDir := "scripts"
+  root := `CheckAccessors
+  supportInterpreter := true
+  -- The checker loads private definition bodies to find the accessors they call.
+  allowNonModules := true
+
+/-- Sites the accessor check must count, and sites it must skip.
+
+Not a default target: `scripts/test_check_accessors.sh` builds and checks it. -/
+lean_lib «CheckAccessorsTest» where
+  srcDir := "scripts"
+  roots := #[`CheckAccessorsTest]
+
+/-- Writes the value of each fork-indexed rule at each fork, from the compiled code.
+
+Run it after `lake build EthLib` with `lake exe rule-history`.
+
+With `--check`, it fails when `tests/execution/history/rules.tsv` differs from the code. -/
+lean_exe «rule-history» where
+  srcDir := "scripts"
+  root := `RuleHistory
+  supportInterpreter := true
+
+/-- Rules that the rule history must list, and declarations that it must skip.
+
+Not a default target: `scripts/test_rule_history.sh` builds and checks it. -/
+lean_lib «RuleHistoryTest» where
+  srcDir := "scripts"
+  roots := #[`RuleHistoryTest]
+
+/-- Source attribute inspection used by the theorem placement check. -/
+lean_lib «CheckTheoremSupport» where
+  srcDir := "scripts"
+  roots := #[`CheckTheoremAttributes]
+  allowNonModules := true
+
+/-- Checks that specification theorems support definitions, instances or simplification.
+
+It compares the remaining theorems with an exact baseline that may only shrink.
+
+Run it after `lake build` with `lake exe check-theorems`. -/
+lean_exe «check-theorems» where
+  srcDir := "scripts"
+  root := `CheckTheorems
+  supportInterpreter := true
+  -- The dependency search loads private definition and proof bodies.
+  allowNonModules := true
+
+/-- Theorems the placement check must keep, report or skip.
+
+Not a default target: `scripts/test_check_theorems.sh` builds and checks it. -/
+lean_lib «CheckTheoremsTest» where
+  srcDir := "scripts"
+  roots := #[`CheckTheoremsTest]
+
+/-- Persistent theorem attributes on which the placement check must stop.
+
+Not a default target: `scripts/test_check_theorems.sh` builds and checks it. -/
+lean_lib «CheckTheoremsAttributesTest» where
+  srcDir := "scripts"
+  roots := #[`CheckTheoremsAttributesTest]
   allowNonModules := true

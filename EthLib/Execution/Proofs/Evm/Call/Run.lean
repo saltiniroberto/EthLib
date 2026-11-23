@@ -107,34 +107,40 @@ variable {R : Evm fork Meter → Evm fork Meter → Prop}
 
 The relation must be reflexive and transitive, and hold of each exceptional halt.
 
-Each halt and each step starts from a frame with the invariant.
+Each halt and each step starts from a frame with the invariant, and each step from a running one.
 
 Each step must keep the relation, which keeps the invariant.
 
 The runner must end each message from a caller with the invariant in a frame that `C` relates.
 
 The run must start from a frame with the invariant. -/
-theorem rel_runFrame (refl : ∀ evm, R evm evm) (trans : ∀ {a b c}, R a b → R b c → R a c)
+theorem rel_runFrame [LawfulGasMeter Meter] (refl : ∀ evm, R evm evm)
+    (trans : ∀ {a b c}, R a b → R b c → R a c)
     (keeps : ∀ {a b}, Inv a → R a b → Inv b)
     (halt : ∀ evm error, Inv evm → R evm (exceptionalHalt evm error))
-    (steps : ∀ {evm result}, Inv evm → step evm = .ok result → StepResult.Keeps R C evm result)
+    (steps : ∀ {evm result}, Inv evm → evm.running = true → step evm = .ok result →
+      StepResult.Keeps R C evm result)
     (runs : ∀ caller message lt ended, Inv caller → runChild caller message lt = .ok ended →
       C caller message ended.val)
     {evm after : Evm fork Meter} {within : GasMeter.gasHeld evm.gas ≤ bound} (start : Inv evm)
     (h : runFrame step decreases bound runChild evm within = .ok after) : R evm after := by
-  fun_induction runFrame step decreases bound runChild evm within
+  revert start h
+  refine runFrame_induct
+    (motive := fun evm _ r => Inv evm → r = .ok after → R evm after)
+    ?case1 ?case2 ?case3 ?case4 ?case5 ?case6 ?case7 ?case8 evm within
+  all_goals (intros; rename_i start h)
   case case1 => cases h
   case case2 => cases h; exact halt _ _ start
   case case3 =>
-    rename_i result _ ih
-    have r : R _ _ := steps start result
+    rename_i running _ result _ ih
+    have r : R _ _ := steps start running result
     exact trans r (ih (keeps start r) h)
   case case4 => cases h
   case case5 => cases h
   case case6 => cases h; exact halt _ _ start
   case case7 =>
-    rename_i hchild _ _ _ hran _ resumed _ ih
-    obtain ⟨c, hres⟩ := steps start hchild
+    rename_i running _ _ _ hchild _ _ _ hran _ resumed _ ih
+    obtain ⟨c, hres⟩ := steps start running hchild
     have r := hres _ _ resumed (runs _ _ _ _ (keeps start c) hran)
     exact trans r (ih (keeps start r) h)
   case case8 => cases h; exact refl _
@@ -161,7 +167,9 @@ def Entered (fork : Fork) (message : Message fork) (state : TransactionState)
         message.value = .ok entry ∧
       entrySubstate = { substate with
         logs := pushTransferLog fork substate.logs message.caller message.currentTarget
-          message.value })
+          message.value
+        simulatedLogs := pushSimulatedTransferLog fork substate.simulatedLogs message.caller
+          message.currentTarget message.value })
 
 /-- A message that moves no value starts from the start state and the substate of its caller. -/
 theorem Entered.of_not_transfers {message : Message fork} {state entry : TransactionState}
@@ -268,7 +276,7 @@ theorem processMessage_frame_byKind [LawfulGasMeter Meter]
         ∀ ended, processMessage fork message state substate meter held = .ok ended →
           Mcall message state substate meter ended.val := by
       intro message state substate meter held hn ended h
-      rw [processMessage] at h
+      rw [processMessage_unfold] at h
       obtain ⟨ended0, hdo, rolled⟩ := Base.map_ok_iff.mp h
       have hval := congrArg Subtype.val rolled
       simp only at hval
@@ -337,7 +345,7 @@ theorem processMessage_frame_byKind [LawfulGasMeter Meter]
                 (skip _ hpa (.inr (by split at hnone <;> first | exact hnone | contradiction)))
     refine ⟨callCase, ?_⟩
     intro message state substate meter held hn ended h
-    rw [processCreateMessage] at h
+    rw [processCreateMessage_unfold] at h
     obtain ⟨prepared, hp, h⟩ := Base.bind_ok_iff.mp h
     obtain ⟨⟨evm, used⟩, hrun, h⟩ := Base.bind_ok_iff.mp h
     dsimp only at h
@@ -403,8 +411,8 @@ theorem processMessage_rel_byKind [LawfulGasMeter Meter]
         Mcreate message state substate meter ended.val) :=
   processMessage_frame_byKind (F := fun a b => Inv a → R a b)
     (fun runs _ h hinv =>
-      rel_runFrame refl trans keeps halt steps (fun caller message lt ended _ hran =>
-        runs caller message lt ended hran) hinv h)
+      rel_runFrame refl trans keeps halt (fun hinv _ h => steps hinv h)
+        (fun caller message lt ended _ hran => runs caller message lt ended hran) hinv h)
     (fun evm _ _ hinv => stop evm hinv) (fun _ _ h hinv => precompile h hinv) call create n
 
 /-- A relation of messages, as a relation of a caller and a child, is the same for both kinds. -/

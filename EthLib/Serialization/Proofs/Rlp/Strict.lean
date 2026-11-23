@@ -1,6 +1,8 @@
 module
 
+import EthLib.Base.Proofs.Bytes
 public import EthLib.Serialization.Proofs.Rlp.Bytes
+import EthLib.Serialization.Proofs.Rlp.Loops
 
 /-!
 # `Serialization.Proofs.Rlp.Strict`
@@ -28,6 +30,8 @@ Each one could be read as an item, but the encoding writes that item with fewer 
 
 namespace EthLib.Serialization.Rlp
 
+open EthLib.Base (byteArray_getElem_eq_get!)
+
 /-- A whole input whose first item fails fails with the same error. -/
 theorem decode_eq_error (input : ByteArray) (e : RlpError)
     (h : decodeItem input 0 input.size = .error e) :
@@ -41,8 +45,9 @@ theorem decodeItem_singleByteWithPrefix (x : UInt8) (hx : x < 0x80) {input : Byt
     decodeItem input pos stop = .error (.singleByteWithPrefix x) := by
   obtain ⟨hPos, hFirst, hTail⟩ := extract_toList_eq_cons hStop h
   obtain ⟨hPos', hSecond, -⟩ := extract_toList_eq_cons hStop hTail
-  rw [decodeItem.eq_def]
-  simp [hPos, hFirst, readPrefix, hx, bind, Except.bind, hSecond, show pos + 1 + 1 ≤ stop by omega]
+  rw [decodeItem_eq]
+  simp [byteArray_getElem_eq_get!, hPos, hFirst, readPrefix, hx, bind, Except.bind, hSecond,
+    show pos + 1 + 1 ≤ stop by omega, show pos + 1 < input.size by omega]
 
 /-- `b7 + k`, then `k` length bytes of which the first is zero, for `1 <= k <= 8`. -/
 theorem decodeItem_leadingZero_bytes (k : Nat) (hk1 : 1 ≤ k) (hk8 : k ≤ 8) (lengthTail : List UInt8)
@@ -59,8 +64,9 @@ theorem decodeItem_leadingZero_bytes (k : Nat) (hk1 : 1 ≤ k) (hk8 : k ≤ 8) (
   simp only [List.length_cons, List.length_append] at hCount
   obtain ⟨hPos, hFirst, hTail⟩ := extract_toList_eq_cons hStop h
   obtain ⟨-, hZero, -⟩ := extract_toList_eq_cons hStop (by rw [hTail]; rfl)
-  rw [decodeItem.eq_def]
-  simp [hPos, hFirst, hZero, readPrefix, readPrefix.readLongLength, UInt8.lt_iff_toNat_lt,
+  rw [decodeItem_eq]
+  simp [byteArray_getElem_eq_get!, hPos, hFirst, hZero, readPrefix, readPrefix.readLongLength,
+    UInt8.lt_iff_toNat_lt,
     UInt8.toNat_ofNat', hMod,
     show ¬ 0xb7 + (lengthTail.length + 1) < 0x80 by omega,
     show ¬ 0xb7 + (lengthTail.length + 1) < 0xb8 by omega,
@@ -83,8 +89,9 @@ theorem decodeItem_leadingZero_list (k : Nat) (hk1 : 1 ≤ k) (hk8 : k ≤ 8) (l
   simp only [List.length_cons, List.length_append] at hCount
   obtain ⟨hPos, hFirst, hTail⟩ := extract_toList_eq_cons hStop h
   obtain ⟨-, hZero, -⟩ := extract_toList_eq_cons hStop (by rw [hTail]; rfl)
-  rw [decodeItem.eq_def]
-  simp [hPos, hFirst, hZero, readPrefix, readPrefix.readLongLength, UInt8.lt_iff_toNat_lt,
+  rw [decodeItem_eq]
+  simp [byteArray_getElem_eq_get!, hPos, hFirst, hZero, readPrefix, readPrefix.readLongLength,
+    UInt8.lt_iff_toNat_lt,
     UInt8.toNat_ofNat', hMod,
     show ¬ 0xf7 + (lengthTail.length + 1) < 0x80 by omega,
     show ¬ 0xf7 + (lengthTail.length + 1) < 0xb8 by omega,
@@ -100,9 +107,10 @@ theorem decodeItem_longFormForShortLength_bytes (l : UInt8) (h0 : 0 < l) (h56 : 
     decodeItem input pos stop = .error (.longFormForShortLength l.toNat) := by
   obtain ⟨hPos, hFirst, hTail⟩ := extract_toList_eq_cons hStop h
   obtain ⟨hPos', hSecond, -⟩ := extract_toList_eq_cons hStop hTail
-  rw [decodeItem.eq_def]
+  rw [decodeItem_eq]
   simp only [UInt8.lt_iff_toNat_lt] at h0 h56
-  simp [hPos, hFirst, hSecond, readPrefix, readPrefix.readLongLength, readBigEndian,
+  simp [byteArray_getElem_eq_get!, hPos, hFirst, hSecond, readPrefix, readPrefix.readLongLength,
+    readBigEndian,
     UInt8.lt_iff_toNat_lt, bind, Except.bind, show l ≠ 0 from fun h => by simp [h] at h0,
     show l.toNat < 56 from h56, show ¬ stop - (pos + 1) < 1 by omega]
 
@@ -113,9 +121,10 @@ theorem decodeItem_longFormForShortLength_list (l : UInt8) (h0 : 0 < l) (h56 : l
     decodeItem input pos stop = .error (.longFormForShortLength l.toNat) := by
   obtain ⟨hPos, hFirst, hTail⟩ := extract_toList_eq_cons hStop h
   obtain ⟨hPos', hSecond, -⟩ := extract_toList_eq_cons hStop hTail
-  rw [decodeItem.eq_def]
+  rw [decodeItem_eq]
   simp only [UInt8.lt_iff_toNat_lt] at h0 h56
-  simp [hPos, hFirst, hSecond, readPrefix, readPrefix.readLongLength, readBigEndian,
+  simp [byteArray_getElem_eq_get!, hPos, hFirst, hSecond, readPrefix, readPrefix.readLongLength,
+    readBigEndian,
     UInt8.lt_iff_toNat_lt, bind, Except.bind, show l ≠ 0 from fun h => by simp [h] at h0,
     show l.toNat < 56 from h56, show ¬ stop - (pos + 1) < 1 by omega]
 

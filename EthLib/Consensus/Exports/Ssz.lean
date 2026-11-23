@@ -1,9 +1,11 @@
 module
 
+public import EthLib.Consensus.BeaconApi.Spelling
 public import EthLib.Consensus.Containers.Attestation
 public import EthLib.Consensus.Containers.Bid
 public import EthLib.Consensus.Containers.Block
 public import EthLib.Consensus.Containers.BuilderApi
+public import EthLib.Consensus.Containers.BuilderConfig
 public import EthLib.Consensus.Containers.Builder
 public import EthLib.Consensus.Containers.Execution
 public import EthLib.Consensus.Containers.InclusionList
@@ -11,6 +13,7 @@ public import EthLib.Consensus.Containers.Operations
 public import EthLib.Consensus.Containers.PayloadAttestation
 public import EthLib.Consensus.Containers.PowBlock
 public import EthLib.Consensus.Containers.ProposerPreferences
+public import EthLib.Consensus.Containers.RelayApi
 public import EthLib.Consensus.Containers.Requests
 public import EthLib.Consensus.Containers.Signing
 public import EthLib.Consensus.Containers.State
@@ -38,7 +41,7 @@ From Glamsterdam on, a container whose form EthLib does not hold yet fails with 
 
 Another export upgrades an attestation, indexed attestation or attester slashing of Fulu to Gloas.
 
-From Bellatrix to Fulu the names also cover the containers of the Builder API.
+From Bellatrix to Fulu the names also cover the containers of the Builder API and the Relay API.
 -/
 
 public section
@@ -46,8 +49,7 @@ public section
 namespace EthLib.Consensus.Exports
 
 open Base Serialization.Ssz
-open EthLib.Exports (Result PyValue pyExport)
-open Serialization.Ssz.Exports (runSsz)
+open EthLib.Exports (Result PyValue pyExport rejectArgument toResult)
 
 /-- A container type of the beacon chain, with its SSZ codec. -/
 structure Container where
@@ -57,6 +59,19 @@ structure Container where
   [codec : SszType type]
 
 attribute [instance] Container.codec
+
+/-- A container of the beacon chain, with its SSZ codec and its spelling in the Beacon API.
+
+Each container must declare its spelling, so none falls back to a default. -/
+structure BeaconContainer where
+  /-- The Lean type of the container. -/
+  type : Type
+  /-- Its SSZ codec. -/
+  [codec : SszType type]
+  /-- How the Beacon API writes it in JSON. -/
+  [spelling : BeaconApi.ApiSpelling type]
+
+attribute [instance] BeaconContainer.codec BeaconContainer.spelling
 
 /-- Whether EthLib holds the light client containers at a fork: from Altair. -/
 def lightClientAt (fork : Fork) : Bool := .altair ≤ fork
@@ -70,7 +85,7 @@ Capella stops adding historical batches, and adds historical summaries instead.
 Fulu carries blobs in data column sidecars instead of blob sidecars.
 
 The light client containers start at Altair; EthLib does not yet hold their Gloas form. -/
-def containerOf (preset : Preset) (fork : Fork) : String → Option Container
+def containerOf (preset : Preset) (fork : Fork) : String → Option BeaconContainer
   | "Fork" => some ⟨ForkVersions⟩
   | "ForkData" => some ⟨ForkData⟩
   | "SigningData" => some ⟨SigningData⟩
@@ -196,12 +211,24 @@ def containerOf (preset : Preset) (fork : Fork) : String → Option Container
     if HasBuilderApi fork then some ⟨BlindedBeaconBlock preset fork⟩ else none
   | "SignedBlindedBeaconBlock" =>
     if HasBuilderApi fork then some ⟨SignedBlindedBeaconBlock preset fork⟩ else none
+  | "BlobsBundle" =>
+    if .dencun ≤ fork ∧ fork < .glamsterdam then some ⟨BuilderBlobsBundle preset fork⟩ else none
+  | "ExecutionPayloadAndBlobsBundle" =>
+    if .dencun ≤ fork ∧ fork < .glamsterdam then some ⟨ExecutionPayloadAndBlobsBundle preset fork⟩
+    else none
   | "BuilderRequestAuth" => if .glamsterdam ≤ fork then some ⟨BuilderRequestAuth⟩ else none
   | "SignedBuilderRequestAuth" =>
     if .glamsterdam ≤ fork then some ⟨SignedBuilderRequestAuth⟩ else none
   | "BuilderPreferences" => if .glamsterdam ≤ fork then some ⟨BuilderPreferences⟩ else none
   | "BuilderPreferencesRequest" =>
     if .glamsterdam ≤ fork then some ⟨BuilderPreferencesRequest⟩ else none
+  | "BuilderEntry" => if .glamsterdam ≤ fork then some ⟨BuilderEntry⟩ else none
+  | "BuilderConfig" => if .glamsterdam ≤ fork then some ⟨BuilderConfig⟩ else none
+  | "BidTrace" => if HasBuilderApi fork then some ⟨BidTrace⟩ else none
+  | "SubmitBlockRequest" =>
+    if HasBuilderApi fork then some ⟨SubmitBlockRequest preset fork⟩ else none
+  | "BuilderSubmitNewBlockRequest" =>
+    if HasBuilderApi fork then some ⟨BuilderSubmitNewBlockRequest preset fork⟩ else none
   | _ => none
 
 /-- The containers whose form EthLib holds from Glamsterdam on.
@@ -209,7 +236,7 @@ def containerOf (preset : Preset) (fork : Fork) : String → Option Container
 Gloas and Heze change some containers, and EthLib holds those forms only as specified. -/
 def specifiedFromGlamsterdam : List String := [
   "BuilderRequestAuth", "SignedBuilderRequestAuth", "BuilderPreferences",
-  "BuilderPreferencesRequest",
+  "BuilderPreferencesRequest", "BuilderEntry", "BuilderConfig",
   "Fork", "ForkData", "SigningData", "Checkpoint", "Validator", "AttestationData", "Eth1Data",
   "DepositMessage", "DepositData", "BeaconBlockHeader", "SignedBeaconBlockHeader", "Eth1Block",
   "ProposerSlashing", "Deposit", "VoluntaryExit", "SignedVoluntaryExit", "SingleAttestation",
@@ -238,7 +265,7 @@ def specifiedAt (fork : Fork) (type : String) : Bool :=
 def presetAndFork (name fork : ByteArray) : Result (Preset × Fork) := do
   let preset ← presetOf (← nameOf name)
   let fork ← forkOf fork
-  if .glamsterdam ≤ fork then throw (0, s!"fork {fork.name} not yet specified")
+  if .glamsterdam ≤ fork then rejectArgument none s!"fork {fork.name} not yet specified"
   return (preset, fork)
 
 /-- The root of the value that the bytes encode, and the bytes of that value. -/
@@ -247,12 +274,12 @@ def sszStaticOf (args : String × String × String × ByteArray) : Result (Root 
   let preset ← presetOf name
   let fork ← forkOf fork.toUTF8
   let some container := containerOf preset fork type
-    | throw (0, s!"no container {type} at {fork.name}")
+    | rejectArgument none s!"no container {type} at {fork.name}"
   if !specifiedAt fork type then
-    throw (0, s!"{type} not yet specified at {fork.name}")
-  let value ← runSsz "input rejected" (SszType.deserialize container.type data)
-  let root ← runSsz "root rejected" (SszType.hashTreeRoot value)
-  let bytes ← runSsz "value rejected" (SszType.serialize value)
+    rejectArgument none s!"{type} not yet specified at {fork.name}"
+  let value ← toResult "input rejected" (SszType.deserialize container.type data)
+  let root ← toResult "root rejected" (SszType.hashTreeRoot value)
+  let bytes ← toResult "value rejected" (SszType.serialize value)
   return (root, bytes)
 
 /-- The root of the value that the bytes encode, and the bytes of that value, as a pair.
@@ -270,13 +297,13 @@ def merkleProofOf (args : String × String × String × ByteArray × UInt64) :
   let preset ← presetOf name
   let fork ← forkOf fork.toUTF8
   let some container := containerOf preset fork type
-    | throw (0, s!"no container {type} at {fork.name}")
+    | rejectArgument none s!"no container {type} at {fork.name}"
   if !specifiedAt fork type then
-    throw (0, s!"{type} not yet specified at {fork.name}")
-  let value ← runSsz "input rejected" (SszType.deserialize container.type data)
+    rejectArgument none s!"{type} not yet specified at {fork.name}"
+  let value ← toResult "input rejected" (SszType.deserialize container.type data)
   let shape := SszType.desc container.type
-  let node ← runSsz "node rejected" (nodeRoot shape (SszType.toValue value) gindex.toNat)
-  let branch ← runSsz "branch rejected" (buildProof shape (SszType.toValue value) gindex.toNat)
+  let node ← toResult "node rejected" (nodeRoot shape (SszType.toValue value) gindex.toNat)
+  let branch ← toResult "branch rejected" (buildProof shape (SszType.toValue value) gindex.toNat)
   return (⟨node⟩, branch.map fun sibling => ⟨sibling⟩)
 
 /-- The node at a generalized index of the value that the bytes encode, and its branch, as a pair.
@@ -290,9 +317,9 @@ def merkleProofExport (args : PyValue) : Result PyValue := pyExport merkleProofO
 /-- The root and the bytes of the upgrade of the value that bytes encode. -/
 def upgradeToGloasOf {α β : Type} [SszType α] [SszType β] (upgrade : α → β) (data : ByteArray) :
     Result (Root × ByteArray) := do
-  let post := upgrade (← runSsz "input rejected" (SszType.deserialize α data))
-  let root ← runSsz "root rejected" (SszType.hashTreeRoot post)
-  let bytes ← runSsz "value rejected" (SszType.serialize post)
+  let post := upgrade (← toResult "input rejected" (SszType.deserialize α data))
+  let root ← toResult "root rejected" (SszType.hashTreeRoot post)
+  let bytes ← toResult "value rejected" (SszType.serialize post)
   return (root, bytes)
 
 /-- The Gloas form of an attestation, indexed attestation or attester slashing of Fulu. -/
@@ -305,7 +332,7 @@ def upgradeOperationOf (args : String × String × ByteArray) : Result (Root × 
     upgradeToGloasOf (IndexedAttestation.upgradeToGloas (preset := preset)) data
   | "AttesterSlashing" =>
     upgradeToGloasOf (AttesterSlashing.upgradeToGloas (preset := preset)) data
-  | _ => throw (0, s!"no upgrade of {type} to Gloas")
+  | _ => rejectArgument none s!"no upgrade of {type} to Gloas"
 
 /-- The root and the bytes of the Gloas form of a container of Fulu, as a pair.
 
@@ -323,8 +350,9 @@ def upgradeOperationExport (args : PyValue) : Result PyValue := pyExport upgrade
 @[export eth_consensus_verify_blob_sidecar_inclusion_proof]
 def verifyBlobSidecarInclusionProofExport (name fork data : ByteArray) : Result Bool := do
   let (preset, fork) ← presetAndFork name fork
-  if ¬(.dencun ≤ fork ∧ fork < .fusaka) then throw (0, s!"no container BlobSidecar at {fork.name}")
-  let sidecar ← runSsz "input rejected" (SszType.deserialize (BlobSidecar preset) data)
+  if ¬(.dencun ≤ fork ∧ fork < .fusaka) then
+    rejectArgument none s!"no container BlobSidecar at {fork.name}"
+  let sidecar ← toResult "input rejected" (SszType.deserialize (BlobSidecar preset) data)
   return verifyBlobSidecarInclusionProof preset fork sidecar
 
 end EthLib.Consensus.Exports

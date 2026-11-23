@@ -33,6 +33,8 @@ The file also names two sums of a state that the bounds of the steps use.
 
 They are the sum of the effective balances and the sum of the recent slashed balances.
 
+It names a count too: the validators plus the pending deposits, which bounds the registry.
+
 It shows that a checked sum of a list and the total active balance succeed under such bounds.
 
 It then names the bounds on the amounts of a state that a run of slots needs.
@@ -45,7 +47,7 @@ A run also needs the budget below a ceiling, and its epochs within a horizon.
 
 It also needs the inactivity scores and the participation lists to match the registry.
 
-Its indices must be in range.
+Its indices must be in range, and each effective balance at most the largest one of its validator.
 
 The budget covers the larger of each balance and its effective balance, and the pending deposits.
 
@@ -204,9 +206,7 @@ theorem getTotalActiveBalance_exists_ok {state : BeaconState preset fork}
       (total = preset.EFFECTIVE_BALANCE_INCREMENT ∨ total.toNat ≤ effectiveBalanceSum state) := by
   have inside : ∀ i ∈ getActiveValidatorIndices state (getCurrentEpoch state),
       i.toNat < state.validators.data.size := by
-    intro i member
-    obtain ⟨_, found, -⟩ := (mem_getActiveValidatorIndices within).mp member
-    exact (Array.getElem?_eq_some_iff.mp found).1
+    exact fun i member => lt_size_of_mem_getActiveValidatorIndices member
   have lt := Nat.lt_of_le_of_lt (sumMarked_le_effectiveBalanceSum (state := state)
     (markIndices state.validators.data.size
       (getActiveValidatorIndices state (getCurrentEpoch state)))) summed
@@ -222,6 +222,25 @@ theorem getTotalActiveBalance_exists_ok {state : BeaconState preset fork}
     rw [Nat.toUInt64_eq, UInt64.toNat_ofNat', Nat.mod_eq_of_lt lt]
     exact sumMarked_le_effectiveBalanceSum _
   · exact .inl rfl
+
+/-- A total active balance is at least one increment.
+
+It is at most the larger of one increment and the sum of the effective balances. -/
+theorem getTotalActiveBalance_bounds {state : BeaconState preset fork} {total : Gwei}
+    (computed : getTotalActiveBalance state = .ok total) :
+    preset.EFFECTIVE_BALANCE_INCREMENT.toNat ≤ total.toNat ∧
+      total.toNat ≤ max preset.EFFECTIVE_BALANCE_INCREMENT.toNat (effectiveBalanceSum state) := by
+  have ok := getTotalActiveBalance_ok computed
+  refine ⟨UInt64.le_iff_toNat_le.mp (le_getTotalBalance ok), ?_⟩
+  obtain ⟨-, fits, rfl⟩ := getTotalBalance_ok_iff.mp ok
+  have marked := sumMarked_le_effectiveBalanceSum (state := state)
+    (markIndices state.validators.data.size
+      (getActiveValidatorIndices state (getCurrentEpoch state)))
+  rw [UInt64.max_def]
+  split
+  · rw [Nat.toUInt64_eq, UInt64.toNat_ofNat', Nat.mod_eq_of_lt fits]
+    omega
+  · omega
 
 /-- The total balance of indices of the registry succeeds when the effective balances fit.
 
@@ -254,6 +273,17 @@ def ParticipationMatches (state : BeaconState preset fork) : Prop :=
 def InactivityScoresMatch (state : BeaconState preset fork) : Prop :=
   ∀ altair : .altair ≤ fork, (state.inactivityScores altair).data.size = state.validators.data.size
 
+/-- Each effective balance is at most the largest one of its validator, at the fork of the state. -/
+def EffectiveBalancesCapped (state : BeaconState preset fork) : Prop :=
+  ∀ validator ∈ state.validators.data,
+    validator.effectiveBalance ≤ withdrawalMaxEffectiveBalance preset fork validator
+
+/-- From Electra, each queued consolidation names two validators of the registry. -/
+def ConsolidationsInside (state : BeaconState preset fork) : Prop :=
+  ∀ electra : .pectra ≤ fork, ∀ consolidation ∈ (state.pendingConsolidations electra).data,
+    consolidation.sourceIndex.toNat < state.validators.data.size ∧
+      consolidation.targetIndex.toNat < state.validators.data.size
+
 /-- The sum over the registry of the larger of each balance and its effective balance.
 
 The registry and the balances are read in step, so an entry past the shorter list does not count. -/
@@ -265,6 +295,15 @@ def stakeSum (state : BeaconState preset fork) : Nat :=
 def pendingDepositSum (state : BeaconState preset fork) : Nat :=
   if electra : .pectra ≤ fork then pendingAmount (state.pendingDeposits electra).data.toList
   else 0
+
+/-- The number of validators plus, from Electra, the number of pending deposits.
+
+Each pending deposit can add at most one validator, when it is applied and leaves the queue.
+
+So this count bounds the registry after every pending deposit is applied. -/
+def registryLoad (state : BeaconState preset fork) : Nat :=
+  state.validators.data.size +
+    if electra : .pectra ≤ fork then (state.pendingDeposits electra).data.size else 0
 
 /-- The bounds on the amounts of a state that a run of slots needs.
 

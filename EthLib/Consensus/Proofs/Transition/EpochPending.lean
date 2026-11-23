@@ -20,7 +20,13 @@ So the queue splits into the deposits added to the balances, those dropped, and 
 
 A pass postpones exactly the deposits it reads whose validator exits and is not withdrawn.
 
-The validators it tests are those at the start of the pass.
+The validator is the first with the key of the deposit.
+
+It exits when its exit epoch is before the far future.
+
+It is withdrawn when its withdrawable epoch is before the next epoch.
+
+The validators a pass tests are those at its start.
 
 The balances plus the amounts in the queue never rise.
 
@@ -37,6 +43,8 @@ In Electra, while deposits of the old mechanism remain, it reads no request eith
 So only such deposits leave the queue.
 
 From Gloas, the churn of deposits is the churn of activations alone.
+
+The pending deposits keep the pending consolidations.
 -/
 
 @[expose] public section
@@ -47,54 +55,6 @@ open Base Uint64
 
 variable {preset : Preset} {fork : Base.Fork} {config : Config} {checks : SignatureChecks}
   {state after : BeaconState preset fork}
-
-/-- A pass over the pending deposits keeps one balance for each validator. -/
-theorem balancesMatch_passPendingDeposits {stop : PendingDeposit → Bool} {nextEpoch : Epoch}
-    {available : Gwei} :
-    ∀ {deposits : List PendingDeposit} {state : BeaconState preset fork} {processed : Gwei}
-      {count : Nat} {postponed : Array PendingDeposit} {pass},
-      passPendingDeposits config checks stop nextEpoch available state processed count postponed
-        deposits = .ok pass →
-      BalancesMatch state → BalancesMatch pass.1.state
-  | [], _, _, _, _, _, computed, holds => by
-    simp only [passPendingDeposits, pure, Except.pure, Except.ok.injEq] at computed
-    subst computed
-    exact holds
-  | deposit :: rest, state, processed, count, postponed, pass, computed, holds => by
-    unfold passPendingDeposits at computed
-    simp only [bind, Except.bind, pure, Except.pure] at computed
-    split at computed
-    · cases computed
-      exact holds
-    split at computed
-    · cases computed
-    split at computed
-    · split at computed
-      · cases computed
-      rename_i credited
-      split at computed
-      · cases computed
-      cases computed
-      exact balancesMatch_passPendingDeposits (deposits := rest) ‹_›
-        ((applyPendingDeposit_kept credited).1 holds)
-    split at computed
-    · split at computed
-      · cases computed
-      cases computed
-      exact balancesMatch_passPendingDeposits (deposits := rest) ‹_› holds
-    split at computed
-    · cases computed
-    split at computed
-    · cases computed
-      exact holds
-    split at computed
-    · cases computed
-    rename_i credited
-    split at computed
-    · cases computed
-    cases computed
-    exact balancesMatch_passPendingDeposits (deposits := rest) ‹_›
-      ((applyPendingDeposit_kept credited).1 holds)
 
 /-- A pass that starts within the churn available credits no more than that churn inside it. -/
 theorem passPendingDeposits_processed_le {stop : PendingDeposit → Bool} {nextEpoch : Epoch}
@@ -167,7 +127,7 @@ theorem depositTargetStatus_applyPendingDeposit {deposit : PendingDeposit}
         have : FAR_FUTURE_EPOCH.toNat = 2 ^ 64 - 1 := rfl
         omega
       have small := addValidatorToRegistry_size_lt computed
-      simp only [depositTargetStatus, pushed, Array.findIdx?_push]
+      simp only [depositTargetStatus, getValidator, pushed, Array.findIdx?_push]
       cases found : state.validators.data.findIdx? (·.pubkey == pubkey) with
       | some position =>
         -- The validator found before keeps its position, below the new one.
@@ -189,7 +149,7 @@ theorem depositTargetStatus_applyPendingDeposit {deposit : PendingDeposit}
       rfl
   · simp only [liftAccessor_ok, bind_ok_iff] at computed
     obtain ⟨_, _, computed⟩ := computed
-    simp only [depositTargetStatus, increaseBalance_validators computed]
+    simp only [depositTargetStatus, getValidator, increaseBalance_validators computed]
 
 /-- The status of a deposit target never fails on an index.
 
@@ -197,7 +157,7 @@ The validator found with the key is the one that the read at its converted index
 theorem depositTargetStatus_ne_indexOutOfRange (state : BeaconState preset fork)
     (nextEpoch : Epoch) (pubkey : Cryptography.Bls.BLSPubkey) (index : ValidatorIndex) :
     depositTargetStatus state nextEpoch pubkey ≠ .error (.indexOutOfRange index) := by
-  unfold depositTargetStatus
+  unfold depositTargetStatus getValidator
   split
   · rename_i position found
     obtain ⟨inside, _⟩ := Array.findIdx?_eq_some_iff_getElem.mp found
@@ -208,6 +168,69 @@ theorem depositTargetStatus_ne_indexOutOfRange (state : BeaconState preset fork)
         getElem?_toNat_eq_of_ofNatChecked converted, Array.getElem?_eq_getElem inside, pure,
         Except.pure]
   · simp [pure, Except.pure]
+
+/-- In a registry of fewer than `2^64` validators, the two tests read the first with the key.
+
+It exits when its exit epoch is below `2^64 - 1`, the far future.
+
+It is withdrawn when its withdrawable epoch is below the next epoch.
+
+A key that no validator has gives two false tests. -/
+theorem depositTargetStatus_eq {state : BeaconState preset fork} {nextEpoch : Epoch}
+    {pubkey : Cryptography.Bls.BLSPubkey} (small : state.validators.data.size < 2 ^ 64) :
+    depositTargetStatus state nextEpoch pubkey =
+      .ok (match state.validators.data.find? (·.pubkey == pubkey) with
+        | some validator => (decide (validator.exitEpoch.toNat < 2 ^ 64 - 1),
+            decide (validator.withdrawableEpoch.toNat < nextEpoch.toNat))
+        | none => (false, false)) := by
+  rw [Array.find?_eq_bind_findIdx?_getElem?]
+  unfold depositTargetStatus getValidator
+  cases found : state.validators.data.findIdx? (·.pubkey == pubkey) with
+  | none => rfl
+  | some position =>
+    obtain ⟨inside, _⟩ := Array.findIdx?_eq_some_iff_getElem.mp found
+    have converted := ofNatChecked_of_lt (Nat.lt_trans inside small)
+    have far : FAR_FUTURE_EPOCH.toNat = 2 ^ 64 - 1 := rfl
+    simp only [liftArith, converted, Except.mapError, bind, Except.bind,
+      getElem?_toNat_eq_of_ofNatChecked converted, Array.getElem?_eq_getElem inside,
+      Option.bind_some, pure, Except.pure, UInt64.lt_iff_toNat_lt, far]
+
+/-- A status that succeeds is the two tests on the first validator with the key.
+
+It exits when its exit epoch is below `2^64 - 1`, the far future.
+
+It is withdrawn when its withdrawable epoch is below the next epoch.
+
+A key that no validator has gives two false tests. -/
+theorem depositTargetStatus_of_ok {state : BeaconState preset fork} {nextEpoch : Epoch}
+    {pubkey : Cryptography.Bls.BLSPubkey} {status : Bool × Bool}
+    (ok : depositTargetStatus state nextEpoch pubkey = .ok status) :
+    status = (match state.validators.data.find? (·.pubkey == pubkey) with
+        | some validator => (decide (validator.exitEpoch.toNat < 2 ^ 64 - 1),
+            decide (validator.withdrawableEpoch.toNat < nextEpoch.toNat))
+        | none => (false, false)) := by
+  rw [Array.find?_eq_bind_findIdx?_getElem?]
+  unfold depositTargetStatus getValidator at ok
+  cases found : state.validators.data.findIdx? (·.pubkey == pubkey) with
+  | none =>
+    rw [found] at ok
+    simp only [pure, Except.pure, Except.ok.injEq] at ok
+    simp [ok]
+  | some position =>
+    rw [found] at ok
+    obtain ⟨inside, _⟩ := Array.findIdx?_eq_some_iff_getElem.mp found
+    by_cases small : position < 2 ^ 64
+    · have converted := ofNatChecked_of_lt small
+      have far : FAR_FUTURE_EPOCH.toNat = 2 ^ 64 - 1 := rfl
+      simp only [liftArith, converted, Except.mapError, bind, Except.bind,
+        getElem?_toNat_eq_of_ofNatChecked converted, Array.getElem?_eq_getElem inside,
+        Option.bind_some, pure, Except.pure, UInt64.lt_iff_toNat_lt, far,
+        Except.ok.injEq] at ok ⊢
+      exact ok.symm
+    · exfalso
+      cases converted : ofNatChecked position with
+      | error _ => simp [liftArith, converted, Except.mapError, bind, Except.bind] at ok
+      | ok _ => exact small (ofNatChecked_ok_iff.mp converted).1
 
 /-- The pending deposits of an epoch end with a pass over the queue from its front.
 
@@ -250,17 +273,6 @@ theorem processPendingDeposits_pass {electra : .pectra ≤ fork}
   · rename_i unreached
     rw [ite_eq_right_of_eq_false _ _ (eq_false unreached)]
     rfl
-
-/-- The pending deposits of an epoch keep one balance for each validator. -/
-theorem balancesMatch_processPendingDeposits {electra : .pectra ≤ fork}
-    (computed : processPendingDeposits config checks state electra = .ok after)
-    (holds : BalancesMatch state) : BalancesMatch after := by
-  obtain ⟨_, _, _, _, pass, _, _, _, _, passed, validators, balances, _⟩ :=
-    processPendingDeposits_pass computed
-  have kept := balancesMatch_passPendingDeposits passed holds
-  unfold BalancesMatch at kept ⊢
-  rw [validators, balances]
-  exact kept
 
 /-- The pending deposits of an epoch leave a queue at most as long as before. -/
 theorem processPendingDeposits_size_le {electra : .pectra ≤ fork}
@@ -559,6 +571,47 @@ theorem passPendingDeposits_applied {stop : PendingDeposit → Bool} {nextEpoch 
       rw [kept] at filtered
       simp only [List.filter_cons, known, notMoved, Bool.false_eq_true, ↓reduceIte, filtered]
 
+/-- A reflexive, transitive relation holds across a pass over the pending deposits.
+
+It must hold across each deposit that the pass applies. -/
+theorem passPendingDeposits_of
+    (R : BeaconState preset fork → BeaconState preset fork → Prop)
+    (refl : ∀ s, R s s)
+    (trans : ∀ {s m t}, R s m → R m t → R s t)
+    (admit : ∀ {s t} {d : PendingDeposit},
+      applyPendingDeposit config checks s d = .ok t → R s t)
+    {stop : PendingDeposit → Bool} {nextEpoch : Epoch} {available : Gwei}
+    {deposits : List PendingDeposit} {state : BeaconState preset fork} {processed : Gwei}
+    {count : Nat} {postponed : Array PendingDeposit} {pass}
+    (computed : passPendingDeposits config checks stop nextEpoch available state processed count
+      postponed deposits = .ok pass) : R state pass.1.state := by
+  obtain ⟨_, _, _, facts⟩ := passPendingDeposits_applied computed
+  exact foldlM_ok_invariant (R state) (fun _ _ _ prior ok => trans prior (admit ok)) (refl _)
+    facts.applies
+
+/-- A pass over the pending deposits keeps one balance for each validator. -/
+theorem balancesMatch_passPendingDeposits {stop : PendingDeposit → Bool} {nextEpoch : Epoch}
+    {available : Gwei} :
+    ∀ {deposits : List PendingDeposit} {state : BeaconState preset fork} {processed : Gwei}
+      {count : Nat} {postponed : Array PendingDeposit} {pass},
+      passPendingDeposits config checks stop nextEpoch available state processed count postponed
+        deposits = .ok pass →
+      BalancesMatch state → BalancesMatch pass.1.state :=
+  fun computed => passPendingDeposits_of (fun s t => BalancesMatch s → BalancesMatch t)
+    (fun _ holds => holds) (fun one two holds => two (one holds))
+    (fun ok => (applyPendingDeposit_kept ok).1) computed
+
+/-- The pending deposits of an epoch keep one balance for each validator. -/
+theorem balancesMatch_processPendingDeposits {electra : .pectra ≤ fork}
+    (computed : processPendingDeposits config checks state electra = .ok after)
+    (holds : BalancesMatch state) : BalancesMatch after := by
+  obtain ⟨_, _, _, _, pass, _, _, _, _, passed, validators, balances, _⟩ :=
+    processPendingDeposits_pass computed
+  have kept := balancesMatch_passPendingDeposits passed holds
+  unfold BalancesMatch at kept ⊢
+  rw [validators, balances]
+  exact kept
+
 /-- The pending deposits of an epoch read a prefix of the queue, at most the limit per epoch.
 
 They apply some of those in order, and move the others to the end of the queue in order.
@@ -585,6 +638,86 @@ theorem processPendingDeposits_applied {electra : .pectra ≤ fork}
     exact ⟨read, _, applied, postponed, _, _, _, facts.split, by simpa using facts.pushed,
       by simpa using facts.bounded, facts.appliedSublist, facts.movedSublist, facts.perm,
       facts.applies, rfl⟩
+
+/-- A new validator keeps the pending consolidations. -/
+theorem addValidatorToRegistry_pendingConsolidations {pubkey : Cryptography.Bls.BLSPubkey}
+    {credentials : Bytes32} {amount : Gwei}
+    (computed : addValidatorToRegistry state pubkey credentials amount = .ok after) :
+    after.pendingConsolidations = state.pendingConsolidations := by
+  unfold addValidatorToRegistry at computed
+  split at computed
+  · simp only [addValidatorToRegistryAltair, bind_ok_iff, liftAccessor_ok,
+      pure, Except.pure, Except.ok.injEq] at computed
+    obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, rfl⟩ := computed
+    rfl
+  · split at computed <;> cases computed
+    rfl
+
+/-- A pending deposit keeps the pending consolidations. -/
+theorem applyPendingDeposit_pendingConsolidations {deposit : PendingDeposit}
+    (computed : applyPendingDeposit config checks state deposit = .ok after) :
+    after.pendingConsolidations = state.pendingConsolidations := by
+  rcases applyPendingDeposit_cases computed with rfl | ⟨_, raised⟩ | ⟨_, added⟩
+  · rfl
+  · obtain ⟨_, _, rfl⟩ := increaseBalance_eq_ok_iff.mp raised
+    rfl
+  · exact addValidatorToRegistry_pendingConsolidations added
+
+/-- The pending deposits of an epoch keep the pending consolidations. -/
+theorem processPendingDeposits_pendingConsolidations {electra : .pectra ≤ fork}
+    (computed : processPendingDeposits config checks state electra = .ok after) :
+    after.pendingConsolidations = state.pendingConsolidations := by
+  obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, folded, rfl⟩ :=
+    processPendingDeposits_applied computed
+  exact foldlM_ok_invariant (fun b => b.pendingConsolidations = state.pendingConsolidations)
+    (fun _ _ _ prior step => (applyPendingDeposit_pendingConsolidations step).trans prior) rfl
+    folded
+
+/-- A new validator keeps the slashed balances and the historical roots.
+
+It also keeps the historical summaries. -/
+theorem addValidatorToRegistry_history {pubkey : Cryptography.Bls.BLSPubkey}
+    {credentials : Bytes32} {amount : Gwei}
+    (computed : addValidatorToRegistry state pubkey credentials amount = .ok after) :
+    after.slashings = state.slashings ∧ after.historicalRoots = state.historicalRoots ∧
+      after.historicalSummaries = state.historicalSummaries := by
+  unfold addValidatorToRegistry at computed
+  split at computed
+  · simp only [addValidatorToRegistryAltair, bind_ok_iff, liftAccessor_ok,
+      pure, Except.pure, Except.ok.injEq] at computed
+    obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, rfl⟩ := computed
+    exact ⟨rfl, rfl, rfl⟩
+  · split at computed <;> cases computed
+    exact ⟨rfl, rfl, rfl⟩
+
+/-- A pending deposit keeps the slashed balances and the historical roots.
+
+It also keeps the historical summaries. -/
+theorem applyPendingDeposit_history {deposit : PendingDeposit}
+    (computed : applyPendingDeposit config checks state deposit = .ok after) :
+    after.slashings = state.slashings ∧ after.historicalRoots = state.historicalRoots ∧
+      after.historicalSummaries = state.historicalSummaries := by
+  rcases applyPendingDeposit_cases computed with rfl | ⟨_, raised⟩ | ⟨_, added⟩
+  · exact ⟨rfl, rfl, rfl⟩
+  · obtain ⟨_, _, rfl⟩ := increaseBalance_eq_ok_iff.mp raised
+    exact ⟨rfl, rfl, rfl⟩
+  · exact addValidatorToRegistry_history added
+
+/-- The pending deposits of an epoch keep the slashed balances and the historical roots.
+
+They also keep the historical summaries. -/
+theorem processPendingDeposits_history {electra : .pectra ≤ fork}
+    (computed : processPendingDeposits config checks state electra = .ok after) :
+    after.slashings = state.slashings ∧ after.historicalRoots = state.historicalRoots ∧
+      after.historicalSummaries = state.historicalSummaries := by
+  obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, folded, rfl⟩ :=
+    processPendingDeposits_applied computed
+  refine foldlM_ok_invariant (fun b => b.slashings = state.slashings ∧
+      b.historicalRoots = state.historicalRoots ∧
+      b.historicalSummaries = state.historicalSummaries)
+    (fun _ _ _ prior step => ?_) ⟨rfl, rfl, rfl⟩ folded
+  obtain ⟨slashings, roots, summaries⟩ := applyPendingDeposit_history step
+  exact ⟨slashings.trans prior.1, roots.trans prior.2.1, summaries.trans prior.2.2⟩
 
 /-- The pending deposits of an epoch read a prefix of the queue, at most the limit per epoch.
 
@@ -631,6 +764,71 @@ theorem processPendingDeposits_postponed {electra : .pectra ≤ fork}
       applies, rfl⟩
     rw [← facts.movedFilter]
     simpa using facts.pushed
+
+/-- An epoch postpones exactly the deposits read whose validator exits and is not withdrawn.
+
+That validator is the first with the key of the deposit.
+
+Its exit epoch is below `2^64 - 1`, the far future.
+
+Its withdrawable epoch is above the current epoch.
+
+The validator and its epochs are those of the state before.
+
+The epoch reads a prefix of the queue, at most the limit per epoch.
+
+It applies the others in order, and moves the postponed ones to the end of the queue in order.
+
+The state after is the state of those applied, with a new queue and a new churn left over. -/
+theorem processPendingDeposits_postponed_epochs {electra : .pectra ≤ fork}
+    (computed : processPendingDeposits config checks state electra = .ok after) :
+    ∃ (read rest : List PendingDeposit) (next : BeaconState preset fork)
+        (pending : PendingDeposits preset fork) (carried : Gwei),
+      (state.pendingDeposits electra).data.toList = read ++ rest ∧
+        pending.data.toList = rest ++ read.filter (fun deposit =>
+          (state.validators.data.find? (·.pubkey == deposit.pubkey)).any fun validator =>
+            validator.exitEpoch.toNat < 2 ^ 64 - 1 &&
+              (getCurrentEpoch state).toNat < validator.withdrawableEpoch.toNat) ∧
+        read.length ≤ preset.MAX_PENDING_DEPOSITS_PER_EPOCH.toNat ∧
+        (read.filter fun deposit =>
+            !(state.validators.data.find? (·.pubkey == deposit.pubkey)).any fun validator =>
+              validator.exitEpoch.toNat < 2 ^ 64 - 1 &&
+                (getCurrentEpoch state).toNat < validator.withdrawableEpoch.toNat).foldlM
+          (applyPendingDeposit config checks) state = .ok next ∧
+        after = { next with
+          pendingDeposits := fun _ => pending
+          depositBalanceToConsume := fun _ => carried } := by
+  -- The next epoch that the step computes is the current epoch plus one, with no overflow.
+  obtain ⟨_, _, _, _, _, added, _⟩ := processPendingDeposits_pass computed
+  rw [liftArith, mapError_ok_iff, addChecked_ok_iff] at added
+  have plusOne : (getCurrentEpoch state + 1).toNat = (getCurrentEpoch state).toNat + 1 :=
+    toNat_add_of_lt added.1
+  obtain ⟨read, rest, next, pending, carried, split, queue, bounded, statusOk, applies, record⟩ :=
+    processPendingDeposits_postponed computed
+  -- Each filter reads the two tests of a deposit read, which succeed and give them in epochs.
+  have tests : ∀ deposit ∈ read,
+      ((depositTargetStatus state (getCurrentEpoch state + 1) deposit.pubkey).toOption ==
+        some (true, false)) =
+      ((state.validators.data.find? (·.pubkey == deposit.pubkey)).any fun validator =>
+        validator.exitEpoch.toNat < 2 ^ 64 - 1 &&
+          (getCurrentEpoch state).toNat < validator.withdrawableEpoch.toNat) := by
+    intro deposit member
+    obtain ⟨status, ok⟩ := statusOk deposit member
+    rw [ok, depositTargetStatus_of_ok ok, plusOne]
+    cases state.validators.data.find? (·.pubkey == deposit.pubkey) with
+    | none => rfl
+    | some validator =>
+      rw [Bool.eq_iff_iff]
+      simp only [Except.toOption, Option.any_some, beq_iff_eq, Option.some.injEq,
+        Prod.mk.injEq, decide_eq_true_eq, decide_eq_false_iff_not, Bool.and_eq_true]
+      omega
+  refine ⟨read, rest, next, pending, carried, split, ?_, bounded, ?_, record⟩
+  · rw [queue]
+    congr 1
+    exact List.filter_congr fun deposit member => tests deposit member
+  · rw [← applies]
+    congr 1
+    exact List.filter_congr fun deposit member => by rw [bne, tests deposit member]
 
 /-- The queue before splits into the deposits added, the deposits dropped, and the queue after.
 

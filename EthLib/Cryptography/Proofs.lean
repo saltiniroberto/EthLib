@@ -1,16 +1,26 @@
 module
 
 public import EthLib.Cryptography.Proofs.Hash
+public import EthLib.Cryptography.Proofs.Exports.Keccak
 public import EthLib.Cryptography.Proofs.Bls
 public import EthLib.Cryptography.Proofs.Kzg
 public import EthLib.Cryptography.Proofs.Merkle
+public import EthLib.Cryptography.Proofs.Ecdsa.Encoding
 public import EthLib.Cryptography.Proofs.EvalDistEq
+public import EthLib.Cryptography.Proofs.SupportBind
+public import EthLib.Cryptography.Proofs.UniformReads
+public import EthLib.Cryptography.Proofs.RandomOracleTable
+public import EthLib.Cryptography.Proofs.RandomOracleFromCache
 public import EthLib.Cryptography.Proofs.ExceptTAnswers
 public import EthLib.Cryptography.Proofs.HashSig
 public import EthLib.Cryptography.Proofs.HashSig.Oracle
 public import EthLib.Cryptography.Proofs.HashSig.Bytes
+public import EthLib.Cryptography.Proofs.HashSig.Lanes
 public import EthLib.Cryptography.Proofs.HashSig.Commute
 public import EthLib.Cryptography.Proofs.HashSig.Interchange
+public import EthLib.Cryptography.Proofs.HashSig.Calls
+public import EthLib.Cryptography.Proofs.HashSig.FailedSearch
+public import EthLib.Cryptography.Proofs.HashSig.ProgrammedTable
 public import EthLib.Cryptography.Proofs.Wots
 public import EthLib.Cryptography.Proofs.Wots.Binding
 public import EthLib.Cryptography.Proofs.Wots.TargetSum
@@ -22,6 +32,8 @@ public import EthLib.Cryptography.Proofs.LogKeys
 public import EthLib.Cryptography.Proofs.LazyPermutation
 public import EthLib.Cryptography.Proofs.IndependentAnswers
 public import EthLib.Cryptography.Proofs.IndependentOutside
+public import EthLib.Cryptography.Proofs.OneCallPermutation
+public import EthLib.Cryptography.Proofs.Indifferentiability
 public import EthLib.Cryptography.Proofs.TaggedLazyPermutation
 public import EthLib.Cryptography.Proofs.ProgrammedPermutation
 public import EthLib.Cryptography.Proofs.DerivationTable
@@ -32,9 +44,18 @@ public import EthLib.Cryptography.Proofs.Secp256k1
 public import EthLib.Cryptography.Proofs.AltBn128
 public import EthLib.Cryptography.Proofs.Secp256r1
 public import EthLib.Cryptography.Proofs.Aes
+public import EthLib.Cryptography.Proofs.BinaryField
 public import EthLib.Cryptography.Proofs.Ethash
 public import EthLib.Cryptography.Proofs.Montgomery
+public import EthLib.Cryptography.Proofs.Montgomery.Fin
+public import EthLib.Cryptography.Proofs.Word64
 public import EthLib.Cryptography.Proofs.BaseField
+public import EthLib.Cryptography.Proofs.Fp2
+public import EthLib.Cryptography.Proofs.X25519
+public import EthLib.Cryptography.Proofs.MontgomeryCurve
+public import EthLib.Cryptography.Proofs.X25519.Field
+public import EthLib.Cryptography.Proofs.X25519.Ladder
+public import EthLib.Cryptography.Proofs.X25519.Agreement
 public import EthLib.Cryptography.Proofs.ChaCha20Poly1305
 public import EthLib.Cryptography.Proofs.Keystore
 public import EthLib.Cryptography.Proofs.MillerFunction

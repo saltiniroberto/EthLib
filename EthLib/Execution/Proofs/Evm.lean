@@ -6,7 +6,6 @@ public import EthLib.Execution.Proofs.Evm.Instructions.Bitwise
 public import EthLib.Execution.Proofs.Evm.Instructions.Keccak
 public import EthLib.Execution.Proofs.Evm.Precompiles
 public import EthLib.Execution.Proofs.Evm.Machine.Memory
-public import EthLib.Execution.Proofs.Evm.PowMod
 public import EthLib.Execution.Proofs.Evm.Reads
 public import EthLib.Execution.Proofs.Evm.Noninterference
 public import EthLib.Execution.Proofs.Evm.Words
@@ -24,6 +23,7 @@ public import EthLib.Execution.Proofs.Evm.Instructions.AccountData
 public import EthLib.Execution.Proofs.Evm.Instructions.LogData
 public import EthLib.Execution.Proofs.Evm.Instructions.TransientStorage
 public import EthLib.Execution.Proofs.Evm.Instructions.Storage
+public import EthLib.Execution.Proofs.Evm.Instructions.StorageStateGas
 public import EthLib.Execution.Proofs.Evm.Machine.JumpDest
 public import EthLib.Execution.Proofs.Evm.Instructions.ControlFlow
 public import EthLib.Execution.Proofs.Evm.Interpreter

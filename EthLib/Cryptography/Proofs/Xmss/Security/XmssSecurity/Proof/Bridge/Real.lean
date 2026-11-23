@@ -1,10 +1,11 @@
 module
 
 public import EthLib.Cryptography.Proofs.Xmss.Security.XmssSecurity.Proof.Bridge.Resolution
-public import EthLib.Cryptography.Proofs.Xmss.Unforgeability.Translate
+public import EthLib.Cryptography.Proofs.Xmss.Security.XmssSecurity.Translate
 public import EthLib.Cryptography.Proofs.Xmss.Tree
 public import EthLib.Cryptography.Proofs.Xmss.KeyGen
 public import EthLib.Cryptography.Proofs.Xmss.Ots
+public import EthLib.Cryptography.Proofs.Merkle.Build
 
 /-!
 # EthLib's key generation under the programmed cache
@@ -12,6 +13,8 @@ public import EthLib.Cryptography.Proofs.Xmss.Ots
 EthLib's key generation, with `H` a query to the oracle, makes `K = 13,434,881` hash calls.
 
 They are the seed hash, then `K - 1` calls from the scheme's seed `S`.
+
+Those are the parameter and the top tree.
 
 With every derivation programmed, a tree node EthLib computes from `S` is the model's node.
 
@@ -39,9 +42,11 @@ theorem keygenQueries_eq : keygenQueries = 13434881 := by decide
 abbrev realPrf (seed : MasterSeed) : Xmss.SeedPrf (OracleComp HashSpec) :=
   Xmss.seedPrf queryH (ofSeed seed)
 
-/-- EthLib's key generation from the scheme's seed `S`, after the seed hash. -/
-def realKeygen (seed : MasterSeed) : OracleComp HashSpec Xmss.PublicKey :=
-  Xmss.publicKeyOf queryH (realPrf seed)
+/-- EthLib's key generation from the scheme's seed `S`, after the seed hash.
+
+It derives the parameter, then builds the top tree. -/
+abbrev realKeygen (seed : MasterSeed) : OracleComp HashSpec (Xmss.PublicKey × Xmss.SecretKey) :=
+  Xmss.Internal.keyGenFrom queryH (realPrf seed) (ofSeed seed)
 
 /-! ## Counts -/
 
@@ -51,8 +56,8 @@ theorem queryCount_oracleHash (x : HashInput) :
   rw [← bind_pure (liftM (HashSpec.query x) : OracleComp HashSpec HashOutput)]
   exact .query x _ 0 fun a => .pure a
 
-theorem queryCount_queryH (x : ByteArray) :
-    QueryCount (queryH x : OracleComp HashSpec (Vector UInt8 32)) 1 :=
+theorem queryCount_queryH (x : Array UInt64) :
+    QueryCount (queryH x : OracleComp HashSpec Hash.Keccak.Lanes4) 1 :=
   (queryCount_oracleHash _).map _
 
 /-- `n` computations in order make the sum of their calls. -/
@@ -61,7 +66,7 @@ theorem QueryCount.ofFnInOrder {α : Type} {k n : Nat} {c : Fin k → OracleComp
   rw [HashSig.ofFnInOrder_eq_map_sequenceFin]
   exact (QueryCount.sequenceFin h).map _
 
-theorem queryCount_th (pp : Xmss.PublicParam) (A : Xmss.Address) (payload : ByteArray) :
+theorem queryCount_th (pp : Xmss.PublicParam) (A : Xmss.Address) (payload : Array UInt64) :
     QueryCount (Xmss.th queryH pp A payload : OracleComp HashSpec Xmss.Digest) 1 := by
   unfold Xmss.th
   exact (queryCount_queryH _).bind fun _ => .pure _
@@ -114,21 +119,72 @@ theorem queryCount_node (pp : Xmss.PublicParam) (s : Xmss.Seed) (layer : Xmss.La
     exact (queryCount_node pp s layer l _).bind fun _ =>
       (queryCount_node pp s layer l _).bind fun _ => queryCount_th _ _ _
 
+/-- A build at `level` makes the calls of its node: each node of the subtree is computed once. -/
+theorem queryCount_build (pp : Xmss.PublicParam) (s : Xmss.Seed) (layer : Xmss.Layer) :
+    ∀ (level : Nat) (j : Nat),
+      QueryCount (Xmss.build queryH pp (Xmss.seedPrf queryH s) layer level j :
+        OracleComp HashSpec (Merkle.Built Xmss.Digest))
+        (nodeQueries level)
+  | 0, j => by
+    have h := (queryCount_otsPublicLeaf pp s layer (UInt32.ofNat j)).bind
+      (f := fun value => (pure (Merkle.Built.leaf value) :
+        OracleComp HashSpec (Merkle.Built Xmss.Digest))) fun _ => .pure _
+    rw [Nat.add_zero] at h
+    unfold Xmss.build
+    rw [Merkle.build_zero]
+    exact h
+  | l + 1, j => by
+    have hcount : nodeQueries (l + 1) = nodeQueries l + (nodeQueries l + (1 + 0)) := by
+      simp only [nodeQueries, pow_succ]
+      have : 1 ≤ 2 ^ l := Nat.one_le_two_pow
+      omega
+    rw [hcount]
+    unfold Xmss.build
+    rw [Merkle.build_succ]
+    exact (queryCount_build pp s layer l _).bind fun _ =>
+      (queryCount_build pp s layer l _).bind fun _ =>
+        (queryCount_th _ _ _).bind fun _ => .pure _
+
 theorem queryCount_realKeygen (seed : MasterSeed) :
     QueryCount (realKeygen seed) (keygenQueries - 1) := by
-  unfold realKeygen Xmss.publicKeyOf
+  unfold realKeygen Xmss.Internal.keyGenFrom
   rw [Xmss.publicParamOf_seedPrf]
   rw [show keygenQueries - 1 = 1 + (nodeQueries 16 + 0) by decide]
   exact (queryCount_th _ _ _).bind fun _ =>
-    (queryCount_node _ _ _ 16 0).bind fun _ => .pure _
+    (queryCount_build _ _ _ 16 0).bind fun _ => .pure _
+
+/-! ## Resolved builds -/
+
+/-- A resolved node gives a resolved build of the same position, with the node's value on top. -/
+theorem resolves_build {α : Type} {cache : QueryCache HashSpec}
+    (hash : Merkle.Position → α → α → OracleComp HashSpec α)
+    (leaves : Nat → OracleComp HashSpec α) :
+    ∀ (p : Merkle.Position) (v : α), Resolves cache (Merkle.node hash leaves p) v →
+      ∃ t, Resolves cache (Merkle.build hash leaves p) t ∧ t.value = v := by
+  rintro ⟨level, j⟩
+  induction level generalizing j with
+  | zero =>
+    intro v h
+    exact ⟨.leaf v, by rw [Merkle.build_zero]; exact h.bind (.pure _), rfl⟩
+  | succ level ih =>
+    intro v h
+    -- The node resolves its two children, then its hash.
+    rw [Merkle.node_succ] at h
+    obtain ⟨a, ha, h⟩ := h.of_bind
+    obtain ⟨b, hb, h⟩ := h.of_bind
+    obtain ⟨left, hleft, rfl⟩ := ih (2 * j) a ha
+    obtain ⟨right, hright, rfl⟩ := ih (2 * j + 1) b hb
+    exact ⟨.node v left right, by
+      rw [Merkle.build_succ]
+      exact hleft.bind (hright.bind (h.bind (.pure _))), rfl⟩
 
 /-! ## Erasing the derivations -/
 
 /-- A query whose answer the cache holds resolves to it. -/
-theorem resolves_queryH {cache : QueryCache HashSpec} {x : ByteArray} {y : HashOutput}
-    (h : cache x.data.toList = some y) :
-    Resolves cache (queryH x : OracleComp HashSpec (Vector UInt8 32)) (ofOutput y) := by
-  change Resolves cache (ofOutput <$> (liftM (HashSpec.query x.data.toList) :
+theorem resolves_queryH {cache : QueryCache HashSpec} {x : Array UInt64} {y : HashOutput}
+    (h : cache (Hash.Keccak.lanesBytes x) = some y) :
+    Resolves cache (queryH x : OracleComp HashSpec Hash.Keccak.Lanes4) (ofOutput y) := by
+  change Resolves cache (ofOutput <$> (liftM (HashSpec.query (Hash.Keccak.lanesBytes x)) :
     OracleComp HashSpec HashOutput)) _
   rw [← bind_pure (liftM (HashSpec.query _) : OracleComp HashSpec HashOutput), map_bind]
   exact .query _ _ h _ _ (.pure _)
@@ -142,12 +198,12 @@ theorem Resolves.ofFnInOrder {α : Type} {cache : QueryCache HashSpec} {n : Nat}
 
 /-- The hash that starts chains `2j` and `2j + 1` of a bottom key is the bottom derivation's. -/
 theorem bottomPrfInput (seed : MasterSeed) (d : Derivations) (index : LeafIndex) (j : Fin (V / 2)) :
-    (Xmss.thInput (ofParam d.parameter) (Xmss.addrPrf .bottom (ofLeafIndex index) j)
-      (Xmss.packBytes (ofSeed seed))).data.toList
+    Hash.Keccak.lanesBytes (Xmss.thInput (ofParam d.parameter)
+      (Xmss.addrPrf .bottom (ofLeafIndex index) j) (ofSeed seed).toArray)
       = bottomInput d.parameter seed (index, ⟨j.val, j.isLt⟩) := by
   rw [bottomInput_eq]
-  simp only [Xmss.thInput, EthLib.Cryptography.HashSig.toList_data_append,
-    EthLib.Cryptography.HashSig.toList_data_packBytes, Xmss.Unforgeability.toList_ofParam,
+  simp only [Xmss.thInput_eq_append,
+    EthLib.Cryptography.Hash.Keccak.lanesBytes_append, Xmss.Unforgeability.toList_ofParam,
     Xmss.Unforgeability.toList_ofSeed, Xmss.Unforgeability.toList_addrPrf]
   rw [Xmss.Unforgeability.toNat_ofLeafIndex]
   -- The bottom layer adds no flag to `hi`.
@@ -156,12 +212,13 @@ theorem bottomPrfInput (seed : MasterSeed) (d : Derivations) (index : LeafIndex)
 
 /-- The hash that starts chains `2j` and `2j + 1` of a top key is the top derivation's. -/
 theorem topPrfInput (seed : MasterSeed) (d : Derivations) (key : TopIndex) (j : Fin (V / 2)) :
-    (Xmss.thInput (ofParam d.parameter) (Xmss.addrPrf .top (ofTopIndex key) j)
-      (Xmss.packBytes (ofSeed seed))).data.toList
+    Hash.Keccak.lanesBytes
+      (Xmss.thInput (ofParam d.parameter) (Xmss.addrPrf .top (ofTopIndex key) j)
+        ((ofSeed seed).toArray))
       = topInput d.parameter seed (key, ⟨j.val, j.isLt⟩) := by
   rw [topInput_eq]
-  simp only [Xmss.thInput, EthLib.Cryptography.HashSig.toList_data_append,
-    EthLib.Cryptography.HashSig.toList_data_packBytes, Xmss.Unforgeability.toList_ofParam,
+  simp only [Xmss.thInput_eq_append,
+    EthLib.Cryptography.Hash.Keccak.lanesBytes_append, Xmss.Unforgeability.toList_ofParam,
     Xmss.Unforgeability.toList_ofSeed, Xmss.Unforgeability.toList_addrPrf]
   rw [Xmss.Unforgeability.toNat_ofTopIndex]
   -- The top layer adds its flag to `hi`.
@@ -275,7 +332,7 @@ theorem erases_node (seed : MasterSeed) (d : Derivations) (layer : Xmss.Layer) (
       Erases (progCache seed d) (Xmss.node queryH (ofParam d.parameter) (realPrf seed)
           layer level j : OracleComp HashSpec Xmss.Digest)
         (ofDigest <$> EthLib.Cryptography.Merkle.node (Concrete.nodeAt d.parameter layer) leaves
-          level j)
+          ⟨level, j⟩)
   | 0, _, j, hj => by
     simpa [EthLib.Cryptography.Merkle.node_zero] using hleaves j (by simpa using hj)
   | l + 1, hlevel, j, hj => by
@@ -363,20 +420,17 @@ theorem realParam (h : Prepared seed d result cache) :
   rw [Xmss.publicParamOf_seedPrf]
   unfold Xmss.th
   have hparam : cache (paramInput seed) = some d.param := h.prog_le (progCache_param seed d)
-  -- The all-zero parameter is the bytes of the zero bit vector.
-  have hzero : Vector.replicate PUBLIC_PARAM_LEN (0 : UInt8)
-      = ofParam (0 : PublicParameter) := by
-    rw [Xmss.Unforgeability.ofParam, Xmss.Unforgeability.ofBV_eq_uintToBytes]
-    apply Vector.ext
-    intro i hi
-    simp [Xmss.uintToBytes]
+  -- The all-zero parameter is the lanes of the zero bit vector.
+  have hzero : (⟨0, 0⟩ : Xmss.PublicParam) = ofParam (0 : PublicParameter) := by
+    simp only [Xmss.Unforgeability.ofParam, HashSig.ofDigestLanes]
+    rfl
   -- The input is `0^128 | A_param | S`, the programmed parameter's.
-  have hinput : (Xmss.thInput (ofParam (0 : PublicParameter)) Xmss.addrParam
-      (Xmss.packBytes (ofSeed seed))).data.toList
+  have hinput : Hash.Keccak.lanesBytes (Xmss.thInput (ofParam (0 : PublicParameter)) Xmss.addrParam
+      ((ofSeed seed).toArray))
       = paramInput seed := by
     rw [paramInput_eq]
-    simp only [Xmss.thInput, EthLib.Cryptography.HashSig.toList_data_append,
-      EthLib.Cryptography.HashSig.toList_data_packBytes, Xmss.Unforgeability.toList_ofParam,
+    simp only [Xmss.thInput_eq_append,
+    EthLib.Cryptography.Hash.Keccak.lanesBytes_append, Xmss.Unforgeability.toList_ofParam,
       Xmss.Unforgeability.toList_ofSeed, Xmss.Unforgeability.toList_addrParam]
     rfl
   refine (resolves_queryH (y := d.param) ?_).bind ?_
@@ -385,15 +439,24 @@ theorem realParam (h : Prepared seed d result cache) :
   · rw [Xmss.Unforgeability.halfOf_zero_ofOutput]
     exact .pure _
 
-/-- EthLib's key generation from `S` resolves to the model's public key. -/
+/-- EthLib's key generation from `S` resolves to the model's public key, and a key with no tree.
+
+The key's top tree is a build that the cache resolves. -/
 theorem realKeygen (h : Prepared seed d result cache) :
-    Resolves cache (Bridge.realKeygen seed) (ofPublicKey ⟨result.1.1, d.parameter⟩) := by
-  unfold Bridge.realKeygen Xmss.publicKeyOf
-  refine h.realParam.bind ?_
+    ∃ top : Merkle.Built Xmss.Digest,
+      Resolves cache (Xmss.build queryH (ofParam d.parameter) (realPrf seed) .top LAYER_HEIGHT 0 :
+        OracleComp HashSpec _) top ∧
+      Resolves cache (Bridge.realKeygen seed) (ofPublicKey ⟨result.1.1, d.parameter⟩,
+        { schemeSeed := ofSeed seed, publicParam := ofParam d.parameter, top, cache := [] }) := by
   have hroot := h.realTopNode 16 le_rfl 0 (by decide)
   have hnode : Concrete.topNodeOfNat 0 = Concrete.rootNode := rfl
   rw [hnode, h.rootValue] at hroot
-  exact hroot.bind (.pure _)
+  obtain ⟨top, htop, hvalue⟩ := resolves_build _ _ _ _ hroot
+  refine ⟨top, htop, ?_⟩
+  unfold Bridge.realKeygen Xmss.Internal.keyGenFrom
+  refine h.realParam.bind (htop.bind ?_)
+  rw [hvalue]
+  exact .pure _
 
 end Prepared
 

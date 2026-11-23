@@ -8,9 +8,9 @@ import pytest
 from ethlib import engine
 from parity.runners import run_engine_chain
 
-from .cases import check, config
+from .cases import MAINNET_TERMINAL_TOTAL_DIFFICULTY, check, config
 
-ARCHIVE = "execution-specs/tests@v21.0.2/fixtures"
+ARCHIVE = "execution-specs/tests@v21.0.3/fixtures"
 
 DIRECTORY = "fixtures/blockchain_tests_engine"
 
@@ -43,7 +43,7 @@ def test_every_payload(archive) -> None:
                 )
             ] += 1
     # Without the parent's state, a payload that fails only in execution is syncing.
-    assert kinds == {"valid": 63256, "error": 46, "invalid": 51, "execution": 4991}
+    assert kinds == {"valid": 63286, "error": 46, "invalid": 51, "execution": 4997}
 
 
 def test_every_chain(archive) -> None:
@@ -83,12 +83,18 @@ def test_every_chain(archive) -> None:
                 "finalizedBlockHash": genesis,
             }
             method = f"engine_forkchoiceUpdatedV{payload['forkchoiceUpdatedVersion']}"
-            response = engine.forkchoice_updated(chain_config, tree, method, [state, None])
+            response = engine.forkchoice_updated(
+                chain_config,
+                tree,
+                method,
+                [state, None],
+                terminal_total_difficulty=MAINNET_TERMINAL_TOTAL_DIFFICULTY,
+            )
             assert response["payloadStatus"]["status"] == "VALID"
             head = block["blockHash"]
         assert head == fixture["lastblockhash"]
         chains += 1
-    assert chains == 56581
+    assert chains == 56609
 
 
 def test_every_payload_on_chain(archive) -> None:
@@ -97,4 +103,4 @@ def test_every_payload_on_chain(archive) -> None:
     for fixture in _fixtures(archive):
         kinds += run_engine_chain(fixture, fixture["pre"], fixture["genesisBlockHeader"])
     # The payloads that fail only in execution are now invalid, not syncing.
-    assert kinds == {"valid": 63256, "error": 46, "invalid": 51, "execution": 4991}
+    assert kinds == {"valid": 63286, "error": 46, "invalid": 51, "execution": 4997}

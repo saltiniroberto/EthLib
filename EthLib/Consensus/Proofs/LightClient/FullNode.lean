@@ -34,7 +34,8 @@ theorem mapM_toChunk_map_toArray :
     ∀ chunks : List Bytes32, (chunks.map Vector.toArray).mapM toChunk = .ok chunks
   | [] => rfl
   | chunk :: rest => by
-    simp [List.mapM_cons, toChunk, mapM_toChunk_map_toArray rest, bind, Except.bind, pure,
+    have read : toChunk chunk.toArray = .ok chunk := toChunk_ok_iff.mpr rfl
+    simp [List.mapM_cons, read, mapM_toChunk_map_toArray rest, bind, Except.bind, pure,
       Except.pure]
 
 /-- A branch that a full node builds for a node of a value proves that node.
@@ -92,7 +93,7 @@ theorem createLightClientBootstrap_stateAtBlock {config : Config} {state : Beaco
   unfold createLightClientBootstrap at created
   simp only [bind_ok_iff] at created
   obtain ⟨_, -, _, -, _, atBlock, -⟩ := created
-  exact LightClientError.require_ok.mp atBlock
+  exact Base.ensure_ok_iff.mp atBlock
 
 /-- An update has the slot of its block as its signature slot.
 
@@ -109,8 +110,8 @@ theorem createLightClientUpdate_signature {config : Config} {signatureFork final
   unfold createLightClientUpdate at created
   simp only [bind_ok_iff] at created
   obtain ⟨_, -, ⟨signatureAltair⟩, -, _, -, _, few, _, -, _, -, _, -, _, -, _, -, _, -, _, -, _, -,
-    _, -, _, -, tail⟩ := created
-  have enough := LightClientError.require_ok.mp few
+    _, -, _, -, _, -, tail⟩ := created
+  have enough := Base.ensure_ok_iff.mp few
   -- Every path to a result ends in an update with the slot of the block and the aggregate of it.
   suffices h : update.signatureSlot = block.message.slot ∧
       update.syncAggregate = block.message.body.syncAggregate signatureAltair by

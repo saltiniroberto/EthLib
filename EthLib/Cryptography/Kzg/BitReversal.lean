@@ -21,6 +21,11 @@ def reverseBitsAux (x r : Nat) : Nat → Nat
 
 `order` must be a positive power of two. -/
 def reverseBits (n order : Nat) : Nat :=
+  -- `order` must be a power of two; that check is left to the callers.
+  --
+  -- The lowest `b - 1` bits of `n` are reversed, where `b` is the bit length of `order`.
+  --
+  -- That count `b - 1` is `log2 order`.
   reverseBitsAux n 0 order.log2
 
 /-- With `r` on top of `bits` reversed bits, the result stays below `(r + 1) * 2^bits`. -/
@@ -50,6 +55,7 @@ Here `rev` reverses the bits of an index below the size.
 
 The permutation is an involution when the size is a power of two. -/
 def bitReversalPermutation {α : Type _} (seq : Array α) : Array α :=
+  -- Entry `i` of the output is entry `rev(i)` of the input, for every `i` below the size.
   Array.ofFn (n := seq.size) fun i =>
     seq[reverseBits i.val seq.size]'(reverseBits_lt _ (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
 

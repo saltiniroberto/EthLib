@@ -1,6 +1,6 @@
 module
 
-public import EthLib.Base.Exports.Proofs.PyValue
+public import EthLib.Base.Exports.PyValue
 public import EthLib.Networking.ReqResp.Encoding
 
 /-!
@@ -21,24 +21,27 @@ public section
 
 namespace EthLib.Networking.ReqResp.Exports
 
-open EthLib.Exports (Result PyValue pyExport)
+open EthLib.Exports (ExportError Result PyValue pyExport toResult)
 
 
 /-- A message for a rejection, phrased for someone reading a Python traceback. -/
 def message : ReqRespError → String
-  | .varint _ => "length prefix is not a valid varint"
+  | .varint e => s!"length prefix is not a valid varint: {reprStr e}"
   | .lengthOutOfBounds declared bound => s!"declared length {declared} is above {bound}"
   | .lengthBelowMinimum declared minimum => s!"declared length {declared} is below {minimum}"
   | .arith _ => "bound on the compressed size is 2^64 or more"
   | .compressedTooLong size bound => s!"{size} compressed bytes, more than {bound}"
-  | .frame _ => "payload is not a valid Snappy framed stream"
+  | .frame e => s!"payload is not a valid Snappy framed stream: {reprStr e}"
   | .lengthMismatch declared size => s!"payload has {size} bytes, not the declared {declared}"
   | .missingCode => "response chunk has no response code"
-  | .contextTruncated => "response chunk ends inside its context bytes"
+  | .contextTruncated needed available =>
+    s!"response chunk has {available} context bytes, not the {needed} of the method"
+  | .trailingBytes count => s!"{count} bytes follow the last chunk of the payload"
 
-/-- Run a fallible computation, with its error as a code and a message. -/
-def runReqResp {α : Type} (act : Except ReqRespError α) : Result α :=
-  act.mapError fun e => (e.code, message e)
+/-- A rejection reaches Python with its code, and its message names the fault. -/
+instance : ExportError ReqRespError where
+  code := ReqRespError.code
+  message := message
 
 /-! ## Sizes -/
 
@@ -53,18 +56,18 @@ def constMaxErrorMessageSize (_ : Unit) : UInt64 := MAX_ERROR_MESSAGE_SIZE
 /-- The bound on the compressed size of `n` bytes. -/
 @[export eth_reqresp_max_compressed_len]
 def maxCompressedLenExport (n : UInt64) : Result UInt64 :=
-  runReqResp ((maxCompressedLen n).mapError .arith)
+  toResult none ((maxCompressedLen n).mapError ReqRespError.arith)
 
 /-- The SSZ bytes of a request or response payload. -/
 @[export eth_reqresp_decode_payload]
 def decodePayloadExport (typeMin typeBound : UInt64) (bs : ByteArray) : Result ByteArray :=
-  runReqResp (decodePayload typeMin typeBound bs)
+  toResult none (decodePayload typeMin typeBound bs)
 
 /-- The code, the context bytes and the payload of one response chunk. -/
 def decodeResponseChunkOf (args : UInt64 × UInt64 × UInt64 × ByteArray) :
     Result (UInt8 × ByteArray × ByteArray) := do
   let (contextBytes, typeMin, typeBound, bs) := args
-  let chunk ← runReqResp (decodeResponseChunk contextBytes.toNat typeMin typeBound bs)
+  let chunk ← toResult none (decodeResponseChunk contextBytes.toNat typeMin typeBound bs)
   return (chunk.code.toByte, chunk.context, chunk.payload)
 
 /-- The code, the context bytes and the payload of one response chunk.

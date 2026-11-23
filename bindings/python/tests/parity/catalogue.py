@@ -8,7 +8,7 @@ from pathlib import Path
 
 import archives
 
-EXECUTION = "execution-specs/tests@v21.0.2/fixtures"
+EXECUTION = "execution-specs/tests@v21.0.3/fixtures"
 # The devnet pre-releases of execution-spec-tests, by the suite name of their report.
 DEVNETS = {
     "tests-heze-devnet": "execution-specs/tests-heze-devnet@v3.0.0/fixtures",
@@ -18,6 +18,8 @@ CONSENSUS = {
     "mainnet": "consensus-specs/v1.7.0-beta.4/mainnet",
     "minimal": "consensus-specs/v1.7.0-beta.4/minimal",
 }
+# The fork choice compliance tests of the same release, at the minimal preset only.
+COMPLIANCE = "consensus-specs/v1.7.0-beta.4/comptests"
 
 # The source of ethereum/legacytests at its pinned commit, and the directory that holds its files.
 LEGACY = "legacytests@1f581b8c/source"
@@ -84,15 +86,17 @@ LEGACY_OUT_OF_SCOPE = {
     "ArrowGlacierToParisAtDiffC0000",
 }
 
-# The formats of execution-spec-tests that the parity covers.
-# The format blockchain_test_sync checks a client's sync, which no specification defines.
-FORMATS = (
-    "state_test",
-    "blockchain_test",
-    "blockchain_test_engine",
-    "blockchain_test_engine_x",
-    "transaction_test",
-)
+# The formats of execution-spec-tests that the parity leaves out, each with its reason.
+# Every other format is in scope: the runners run it, or their plan names what brings it.
+EXCLUDED_FORMATS = {
+    "blockchain_test_sync": "it checks the sync of a client, which no specification defines",
+}
+
+
+def in_scope(format_name: str) -> bool:
+    """Whether the fixtures of a format become cases: every format that is not left out."""
+    return format_name not in EXCLUDED_FORMATS
+
 
 # The networks of execution-spec-tests from Frontier to Amsterdam.
 # Each transition comes after the fork that it leaves.
@@ -197,7 +201,7 @@ def _read_index(root: Path) -> list[dict]:
 
 
 def execution_cases() -> list[Case]:
-    """Every fixture of the formats in scope, from the index of the release."""
+    """Every fixture of the formats and networks in scope, from the index of the release."""
     return [
         Case(
             "execution-spec-tests",
@@ -208,7 +212,7 @@ def execution_cases() -> list[Case]:
             "fixtures/" + entry["json_path"],
         )
         for entry in execution_index()
-        if entry["format"] in FORMATS and entry["fork"] in EXECUTION_FORKS
+        if in_scope(entry["format"]) and entry["fork"] in EXECUTION_FORKS
     ]
 
 
@@ -222,7 +226,7 @@ def devnet_cases(suite: str) -> list[Case]:
     name = DEVNETS[suite]
     pinned = archives.fetch_archives.load(archives.REPO)[EXECUTION]
     devnet = archives.fetch_archives.load(archives.REPO)[name]
-    scope = json.dumps([FORMATS, EXECUTION_FORKS, BOGOTA_NETWORKS]).encode()
+    scope = json.dumps([sorted(EXCLUDED_FORMATS), EXECUTION_FORKS, BOGOTA_NETWORKS]).encode()
     key = hashlib.sha256(pinned.sha256.encode() + devnet.sha256.encode() + scope).hexdigest()
     listing = archives.CACHE / f"{devnet.sha256}.new-cases-{key[:16]}.json"
     # Both indexes are unpacked before the lock, since unpacking takes the same lock.
@@ -236,7 +240,7 @@ def devnet_cases(suite: str) -> list[Case]:
             entries = [
                 (entry["fork"], entry["format"], entry["id"], "fixtures/" + entry["json_path"])
                 for entry in _read_index(roots[1])
-                if entry["format"] in FORMATS
+                if in_scope(entry["format"])
                 and entry["fork"] in EXECUTION_FORKS + BOGOTA_NETWORKS
                 and (entry["id"], entry["format"], entry["fork"]) not in known
             ]
@@ -249,25 +253,31 @@ def devnet_cases(suite: str) -> list[Case]:
 
 def consensus_cases() -> list[Case]:
     """Every case directory of both presets, at the forks from Phase 0 to Heze."""
-    cases = set()
-    for preset, name in CONSENSUS.items():
-        archive = archives.fetch_archives.load(archives.REPO)[name]
-        for member in archives.fetch_archives.members(archive, archives.CACHE):
-            # tests/<preset>/<fork>/<runner>/<handler>/<suite>/<case>/<file>
-            parts = member.split("/")
-            if len(parts) == 8 and parts[1] == preset and parts[2] in CONSENSUS_FORKS:
-                path = "/".join(parts[:7])
-                cases.add(
-                    Case(
-                        "consensus-spec-tests",
-                        preset,
-                        parts[2],
-                        f"{parts[3]}/{parts[4]}",
-                        path,
-                        path,
-                    )
-                )
+    cases = [
+        case
+        for preset, name in CONSENSUS.items()
+        for case in _consensus_layout("consensus-spec-tests", name, preset)
+    ]
     return sorted(cases, key=lambda case: case.path)
+
+
+def compliance_cases() -> list[Case]:
+    """Every fork choice compliance case, at the forks from Phase 0 to Heze."""
+    cases = _consensus_layout("fork-choice-compliance", COMPLIANCE, "minimal")
+    return sorted(cases, key=lambda case: case.path)
+
+
+def _consensus_layout(suite: str, name: str, preset: str) -> set[Case]:
+    """Every case directory of one preset in an archive of consensus-specs."""
+    cases = set()
+    archive = archives.fetch_archives.load(archives.REPO)[name]
+    for member in archives.fetch_archives.members(archive, archives.CACHE):
+        # tests/<preset>/<fork>/<runner>/<handler>/<suite>/<case>/<file>
+        parts = member.split("/")
+        if len(parts) == 8 and parts[1] == preset and parts[2] in CONSENSUS_FORKS:
+            path = "/".join(parts[:7])
+            cases.add(Case(suite, preset, parts[2], f"{parts[3]}/{parts[4]}", path, path))
+    return cases
 
 
 def legacy_networks(root: Path) -> set[str]:

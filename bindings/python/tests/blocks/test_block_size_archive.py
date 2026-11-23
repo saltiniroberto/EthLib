@@ -7,7 +7,7 @@ import pytest
 from ethlib.execution import blocks
 from raising import raises
 
-ARCHIVE = "execution-specs/tests@v21.0.2/fixtures"
+ARCHIVE = "execution-specs/tests@v21.0.3/fixtures"
 
 _DIRECTORY = "fixtures/blockchain_tests/for_osaka/osaka/eip7934_block_rlp_limit/max_block_rlp_size"
 SOURCES = [
@@ -41,7 +41,7 @@ def test_block_size(archive, source) -> None:
             elif exception.split("|") == [TOO_LARGE]:
                 with raises(
                     blocks.BlockError,
-                    "block invalid: EthLib.Execution.Blocks.BlockError.blockTooLarge 8388609",
+                    "block invalid: blockTooLarge (size := 8388609)",
                 ) as error:
                     blocks.validate_size("fusaka", data)
                 assert error.value.code == 214

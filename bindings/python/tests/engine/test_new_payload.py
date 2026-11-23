@@ -9,7 +9,7 @@ import pytest
 from ethlib import engine
 from raising import raises
 
-from .cases import check, config
+from .cases import FORK_OF_NETWORK, check, config
 
 _FILE = Path(__file__).resolve().parents[4] / "tests" / "engine" / "new_payload.json"
 CASES = json.loads(_FILE.read_text())
@@ -38,20 +38,24 @@ def test_counts() -> None:
     assert kinds == {"valid": 93, "error": 75, "invalid": 80, "execution": 2}
 
 
+def _unsupported(network: str) -> str:
+    """The message of a payload of the fork of this network that the version does not take."""
+    fork = FORK_OF_NETWORK[network]
+    return f'engine error: EthLib.Engine.EngineError.unsupportedFork (some "{fork}")'
+
+
 def test_wrong_version() -> None:
     """A version of the method rejects a payload of a fork that it does not take."""
     case = next(c for c in CASES if c["network"] == "Prague" and c["validationError"] is None)
-    with raises(
-        engine.EngineError, "engine error: EthLib.Engine.EngineError.unsupportedFork"
-    ) as error:
+    with raises(engine.EngineError, _unsupported("Prague")) as error:
         engine.new_payload(config("Prague"), "engine_newPayloadV3", case["params"][:3])
     assert error.value.code == 38005
 
 
 def test_unknown_method() -> None:
     """A method that is not a version of engine_newPayload has code 0."""
-    with raises(engine.EngineError, "no method engine_newPayloadV6") as error:
-        engine.new_payload(config("Paris"), "engine_newPayloadV6", [])
+    with raises(engine.EngineError, "no method engine_newPayloadV7") as error:
+        engine.new_payload(config("Paris"), "engine_newPayloadV7", [])
     assert error.value.code == 0
 
 
@@ -88,18 +92,14 @@ def test_v5_before_amsterdam() -> None:
     """Version 5 rejects a payload of a fork before Amsterdam as an unsupported fork."""
     params = _prague_v4()
     payload = dict(params[0], blockAccessList="0xc0", slotNumber="0x0")
-    with raises(
-        engine.EngineError, "engine error: EthLib.Engine.EngineError.unsupportedFork"
-    ) as error:
+    with raises(engine.EngineError, _unsupported("Prague")) as error:
         engine.new_payload(config("Prague"), "engine_newPayloadV5", [payload, *params[1:]])
     assert error.value.code == 38005
 
 
 def test_v4_at_amsterdam() -> None:
     """Version 4 rejects a payload of Amsterdam as an unsupported fork."""
-    with raises(
-        engine.EngineError, "engine error: EthLib.Engine.EngineError.unsupportedFork"
-    ) as error:
+    with raises(engine.EngineError, _unsupported("Amsterdam")) as error:
         engine.new_payload(config("Amsterdam"), "engine_newPayloadV4", _prague_v4())
     assert error.value.code == 38005
 
@@ -177,5 +177,84 @@ def test_typed_transaction_wrapped_in_rlp_string(method: str) -> None:
         "status": "INVALID",
         "latestValidHash": None,
         "validationError": f"401: transaction {index} does not decode: "
-        f"EthLib.Execution.Transactions.TransactionError.unsupportedType {first}",
+        f"EthLib.Execution.Transactions.TransactionError.unsupportedType (type := {first})",
     }
+
+
+def _amsterdam_v5() -> list:
+    """The parameters of a valid payload of the network Amsterdam, for engine_newPayloadV5."""
+    case = next(c for c in CASES if c["network"] == "Amsterdam" and c["validationError"] is None)
+    return case["params"]
+
+
+# Bogota, the execution side of Hegota, from time 0 on top of the forks of Amsterdam.
+BOGOTA = config("Amsterdam") | {
+    "activations": [*config("Amsterdam")["activations"], ["hegota", "time", 0]]
+}
+# A typed transaction and the byte 0x00, which decodes as no transaction and is still taken.
+INCLUSION_LIST = ["0x02f8", "0x00"]
+
+
+def test_v6_at_bogota() -> None:
+    """Version 6 takes a Bogota payload and its inclusion list, and answers a status of version 2.
+
+    Without the parent's state the payload is syncing, so its inclusion list verdict is `null`.
+    """
+    status = engine.new_payload(BOGOTA, "engine_newPayloadV6", [*_amsterdam_v5(), INCLUSION_LIST])
+    assert status == {
+        "status": "SYNCING",
+        "latestValidHash": None,
+        "validationError": None,
+        "inclusionListSatisfied": None,
+    }
+
+
+def test_v6_before_bogota() -> None:
+    """Version 6 rejects a payload of Amsterdam as an unsupported fork."""
+    with raises(engine.EngineError, _unsupported("Amsterdam")) as error:
+        engine.new_payload(
+            config("Amsterdam"), "engine_newPayloadV6", [*_amsterdam_v5(), INCLUSION_LIST]
+        )
+    assert error.value.code == 38005
+
+
+def test_v5_at_bogota() -> None:
+    """Version 5 rejects a payload of Bogota as an unsupported fork, by the update of Bogota."""
+    with raises(
+        engine.EngineError,
+        'engine error: EthLib.Engine.EngineError.unsupportedFork (some "hegota")',
+    ) as error:
+        engine.new_payload(BOGOTA, "engine_newPayloadV5", _amsterdam_v5())
+    assert error.value.code == 38005
+
+
+@pytest.mark.parametrize(
+    ("inclusion_list", "reason"),
+    [
+        pytest.param(None, "params: not 5 values", id="null"),
+        pytest.param("0x00", "inclusionListTransactions: not an array", id="not-an-array"),
+        pytest.param([1], "inclusionListTransaction: not a string", id="not-bytes"),
+    ],
+)
+def test_v6_malformed_inclusion_list(inclusion_list: object, reason: str) -> None:
+    """An inclusion list that is not an array of byte strings is an invalid parameter."""
+    message = f'engine error: EthLib.Engine.EngineError.invalidParams "{reason}"'
+    with raises(engine.EngineError, message) as error:
+        engine.new_payload(BOGOTA, "engine_newPayloadV6", [*_amsterdam_v5(), inclusion_list])
+    assert error.value.code == 32602
+
+
+def test_v6_without_inclusion_list() -> None:
+    """Version 6 takes five parameters, so the four of version 5 are an invalid parameter."""
+    with raises(
+        engine.EngineError,
+        'engine error: EthLib.Engine.EngineError.invalidParams "params: not 5 values"',
+    ) as error:
+        engine.new_payload(BOGOTA, "engine_newPayloadV6", _amsterdam_v5())
+    assert error.value.code == 32602
+
+
+def test_v6_rewrite() -> None:
+    """Version 6 parameters are written back as read, the inclusion list last."""
+    params = [*_amsterdam_v5(), [*INCLUSION_LIST, "0x"]]
+    assert engine.rewrite_params("engine_newPayloadV6", params) == params

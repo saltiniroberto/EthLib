@@ -23,6 +23,8 @@ variable {F G : Type} [BaseField F] [BaseField G]
 
 namespace Fp2
 
+open Cryptography.Fp2 (c0 c1 beq isZero conjugate inverse)
+
 /-- The map of base fields, applied to both coordinates. -/
 def map (f : Hom F G) (a : Fp2 F) : Fp2 G := ⟨f a.c0, f a.c1⟩
 
@@ -33,7 +35,7 @@ theorem map_zero (f : Hom F G) : map f zero = zero := by
   simp only [map, zero, f.map_zero]
 
 theorem map_one (f : Hom F G) : map f one = one := by
-  simp only [map, one, f.map_zero, f.map_one]
+  simp only [map, one, Cryptography.Fp2.one, f.map_zero, f.map_one]
 
 theorem map_i (f : Hom F G) : map f i = i := by
   simp only [map, i, f.map_zero, f.map_one]
@@ -70,6 +72,28 @@ theorem map_mulByOnePlusI (f : Hom F G) (a : Fp2 F) :
 theorem map_conjugate (f : Hom F G) (a : Fp2 F) : map f a.conjugate = (map f a).conjugate := by
   simp only [map, conjugate, f.map_neg]
 
+/-- The square root commutes with a map of base fields. -/
+theorem map_sqrt (f : Hom F G) (a : Fp2 F) :
+    Cryptography.Fp2.sqrt (map f a) = (Cryptography.Fp2.sqrt a).map (map f) := by
+  obtain ⟨a0, a1⟩ := a
+  unfold Cryptography.Fp2.sqrt
+  simp only [map, f.map_isZero, ← f.map_mul, ← f.map_add, ← f.map_ofNat,
+    ← f.map_inverse, f.map_sqrt]
+  cases BaseField.isZero a1
+  · simp only [Bool.false_eq_true, ↓reduceIte]
+    cases BaseField.sqrt (a0 * a0 + a1 * a1) with
+    | none => rfl
+    | some s =>
+      simp only [Option.map, ← f.map_add, ← f.map_mul, ← f.map_inverse, f.map_sqrtCandidate,
+        f.map_beq]
+      split <;> simp only [map, f.map_mul, f.map_inverse, f.map_ofNat]
+  · simp only [↓reduceIte, f.map_sqrtCandidate, ← f.map_mul, f.map_beq]
+    split <;> simp only [Option.map, map, f.map_zero]
+
+/-- The sign `sgn0` is kept by a map of base fields. -/
+theorem map_sgn0 (f : Hom F G) (x : Fp2 F) : (map f x).sgn0 = x.sgn0 := by
+  simp only [Cryptography.Fp2.sgn0, map, f.map_sgn0, f.map_isZero]
+
 theorem map_inverse (f : Hom F G) (a : Fp2 F) : map f a.inverse = (map f a).inverse := by
   simp only [map, inverse, f.map_mul, f.map_neg, f.map_inverse, f.map_add]
 
@@ -81,12 +105,25 @@ theorem map_powNat (f : Hom F G) (a : Fp2 F) (e : Nat) :
     map f (powNat a e) = powNat (map f a) e := by
   induction e using Nat.strongRecOn generalizing a with
   | _ e ih =>
-    rw [powNat.eq_1 a e, powNat.eq_1 (map f a) e]
+    rw [Cryptography.Fp2.powNat.eq_1 a e, Cryptography.Fp2.powNat.eq_1 (map f a) e]
     split
     · exact map_one f
     · have h := ih (e / 2) (by omega) (a * a)
       rw [map_mul] at h
       split <;> simp only [map_mul, h]
+
+/-- The map of base fields on both coordinates respects the field operations of the extension. -/
+def hom (f : Hom F G) : FieldOps.Hom (Fp2 F) (Fp2 G) where
+  toFun := map f
+  map_add := map_add f
+  map_sub := map_sub f
+  map_mul := map_mul f
+  map_neg := map_neg f
+  map_zero := map_zero f
+  map_one := map_one f
+  map_beq := map_beq f
+  map_isZero := map_isZero f
+  map_inverse := map_inverse f
 
 end Fp2
 

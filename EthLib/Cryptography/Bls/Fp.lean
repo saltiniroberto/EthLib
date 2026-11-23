@@ -114,11 +114,6 @@ Proofs use its lemmas, never its unfolding, which runs a Montgomery reduction. -
 @[inline] def zero : Fp := Montgomery.zero
 @[inline] def one  : Fp := Montgomery.one
 
-@[inline] def add (a b : Fp) : Fp := a + b
-@[inline] def sub (a b : Fp) : Fp := a - b
-@[inline] def neg (a : Fp)   : Fp := -a
-@[inline] def mul (a b : Fp) : Fp := a * b
-
 @[inline] def beq (a b : Fp) : Bool := a == b
 @[inline] def isZero (a : Fp) : Bool := a == zero
 
@@ -154,7 +149,9 @@ The power runs four bits of the exponent at a time.
 
 It fails when `a` is not a square. -/
 def sqrt (a : Fp) : Except BlsError Fp :=
+  -- RFC 9380, Appendix I.1, step 1: the root is `x^c1`, with `c1 = (q + 1) / 4`.
   let cand := sqrtCandidate a
+  -- The RFC guarantees the square only for a square `x`, so a power whose square is not `x` fails.
   if (cand * cand).beq a then .ok cand else .error .notASquare
 
 /-- The operations that the extensions and curves of BLS12-381 read from `Fp`. -/
@@ -184,11 +181,5 @@ def fromBytesBE (b : ByteArray) : Except BlsError Fp :=
 @[inline] def toBytesBE (a : Fp) : ByteArray := Montgomery.toBytesBE a
 
 end Fp
-
-/-- A square root in a base field, or the error of `Fp.sqrt` when the element is not a square. -/
-def sqrtOrError {F : Type} [BaseField F] (a : F) : Except BlsError F :=
-  match BaseField.sqrt a with
-  | some s => .ok s
-  | none => .error .notASquare
 
 end EthLib.Cryptography.Bls

@@ -7,7 +7,7 @@ The outcome of validating one gossip message.
 
 Gossipsub v1.1 lets the application accept, reject or ignore each message.
 
-Its section "Extended Validators" says so, in [libp2p/specs `98c5aa9`][gossipsub].
+Its section Extended Validators says so, in [libp2p/specs `4facaf9`][gossipsub].
 
 An accepted message is delivered and forwarded.
 
@@ -19,7 +19,7 @@ Each consensus topic states its rules as conditions that ignore or reject a mess
 
 A message that meets no such condition is accepted.
 
-[gossipsub]: https://github.com/libp2p/specs/blob/98c5aa9421703fc31b0833ad8860a55db15be063/pubsub/gossipsub/gossipsub-v1.1.md#extended-validators
+[gossipsub]: https://github.com/libp2p/specs/blob/4facaf9876da1eb7d6e066982010c81495ebb965/pubsub/gossipsub/gossipsub-v1.1.md#extended-validators
 -/
 
 @[expose] public section
@@ -48,7 +48,9 @@ def isAccept : ValidationResult → Bool
 The first outcome that ignores or rejects is the result. -/
 def andThen (first : ValidationResult) (next : Unit → ValidationResult) : ValidationResult :=
   match first with
+  -- An accepted message goes on to the next checks.
   | accept => next ()
+  -- A reject or an ignore stops them, and is the outcome.
   | other => other
 
 /-- Run the next checks, which may fail, only after an accepted outcome.
@@ -64,10 +66,12 @@ end ValidationResult
 
 /-- Ignore the message for the reason unless the condition holds. -/
 def ignoreUnless (condition : Bool) (reason : String) : ValidationResult :=
+  -- Extended Validators: an ignored message is neither delivered nor forwarded, with no penalty.
   if condition then .accept else .ignore reason
 
 /-- Reject the message for the reason unless the condition holds. -/
 def rejectUnless (condition : Bool) (reason : String) : ValidationResult :=
+  -- Extended Validators: a rejected message is invalid, and triggers the penalty of its sender.
   if condition then .accept else .reject reason
 
 end EthLib.Networking.Gossip

@@ -1,12 +1,11 @@
 module
 
 public import EthLib.Base.Exports
-public import EthLib.Base.Exports.Proofs.PyValue
+public import EthLib.Base.Exports.PyValue
 public import Lean.Data.Json
 public import EthLib.Base.Hex
 public import EthLib.Serialization.Ssz.Codec.Json
-public import EthLib.Consensus.Config
-public import EthLib.Consensus.Preset
+public import EthLib.Consensus.BeaconApi.Config
 public import EthLib.Networking.ReqResp.Encoding
 
 /-!
@@ -29,7 +28,8 @@ public section
 
 namespace EthLib.Consensus.Exports
 
-open EthLib.Exports (Result PyValue forkUpTo pyExport)
+open EthLib.Exports (Result PyValue UnreadArgument forkUpTo pyExport rejectArgument
+  toResult)
 
 open Lean Base
 
@@ -62,7 +62,6 @@ It stays local to this file, as the form of a 64-bit integer does. -/
 local instance (priority := high) : ToJson U256 where
   toJson n := toJson n.toNat
 
-deriving instance ToJson for Preset
 deriving instance ToJson for BlobScheduleEntry
 deriving instance ToJson for GasLimitScheduleEntry
 deriving instance ToJson for Networking.Gossip.SubnetParameters
@@ -74,8 +73,7 @@ instance {n : Nat} : FromJson (Vector UInt8 n) where
   fromJson? json := do
     let text ← json.getStr?
     let bytes ← (Serialization.Ssz.ofHex text).mapError fun e => s!"{text}: {reprStr e}"
-    if h : bytes.size = n then return ⟨bytes, h⟩
-    else throw s!"{text} does not hold {n} bytes"
+    Base.exactBytes n ⟨bytes⟩ fun _ => s!"{text} does not hold {n} bytes"
 
 /-- A 256-bit integer, from a number or from decimal digits. -/
 instance : FromJson U256 where
@@ -92,30 +90,39 @@ deriving instance FromJson for GasLimitScheduleEntry
 deriving instance FromJson for Networking.Gossip.SubnetParameters
 deriving instance FromJson for Config
 
+/-- A value of the spec map of the Beacon API, with each number as a JSON number. -/
+def specValuePy : BeaconApi.SpecValue → Json
+  | .int value => toJson value
+  | .bytes value => hexString value
+  | .text value => .str value
+  | .list items => .arr (items.map specValuePy).toArray
+  | .entry fields => Json.mkObj (fields.map fun (name, value) => (name, toJson value))
+
+/-- The values of a preset or a configuration, each under its name, with numbers as numbers.
+
+They are the values of the spec map of the Beacon API, which names them all once. -/
+def entriesJson (entries : List (String × BeaconApi.SpecValue)) : Json :=
+  Json.mkObj (entries.map fun (name, value) => (name, specValuePy value))
+
 /-- The preset of a name, with the values that it derives from its fields. -/
-def presetJson (preset : Preset) : Json :=
-  (toJson preset).mergeObj <| Json.mkObj [
-    ("UPDATE_TIMEOUT", toJson preset.UPDATE_TIMEOUT),
-    ("FIELD_ELEMENTS_PER_EXT_BLOB", toJson preset.FIELD_ELEMENTS_PER_EXT_BLOB),
-    ("CELLS_PER_EXT_BLOB", toJson preset.CELLS_PER_EXT_BLOB),
-    ("NUMBER_OF_COLUMNS", toJson preset.NUMBER_OF_COLUMNS)]
+def presetJson (preset : Preset) : Json := entriesJson (BeaconApi.presetEntries preset)
 
 /-- The text of a name, or an error that a Python traceback shows. -/
 def nameOf (bytes : ByteArray) : Result String := do
-  let some name := String.fromUTF8? bytes | throw (0, "name is not UTF-8")
+  let some name := String.fromUTF8? bytes | rejectArgument none "name is not UTF-8"
   return name
 
 /-- The preset of a name. -/
 def presetOf : String → Result Preset
   | "mainnet" => return .mainnet
   | "minimal" => return .minimal
-  | name => throw (0, s!"no preset is named {name}")
+  | name => rejectArgument none s!"no preset is named {name}"
 
 /-- The configuration of a name. -/
 def configOf : String → Result Config
   | "mainnet" => return .mainnet
   | "minimal" => return .minimal
-  | name => throw (0, s!"no configuration is named {name}")
+  | name => rejectArgument none s!"no configuration is named {name}"
 
 /-- The configuration of a name, with some of its values replaced.
 
@@ -125,9 +132,11 @@ An empty replacement keeps the configuration of the name. -/
 def configWith (name replacements : ByteArray) : Result Config := do
   let config ← configOf (← nameOf name)
   if replacements.isEmpty then return config
-  let some text := String.fromUTF8? replacements | throw (0, "configuration is not UTF-8")
-  let replaced ← (Json.parse text).mapError fun e => (0, s!"configuration: {e}")
-  (fromJson? ((toJson config).mergeObj replaced)).mapError fun e => (0, s!"configuration: {e}")
+  let some text := String.fromUTF8? replacements | rejectArgument none "configuration is not UTF-8"
+  let replaced ← toResult none ((Json.parse text).mapError fun e =>
+    UnreadArgument.mk s!"configuration: {e}")
+  toResult none ((fromJson? ((toJson config).mergeObj replaced)).mapError fun e =>
+    UnreadArgument.mk s!"configuration: {e}")
 
 /-- The configuration of a name, with some of its values replaced.
 
@@ -143,26 +152,25 @@ def configWithValue (name : String) (replacements : Option PyValue) : Result Con
   match replacements with
   | none | some (.dict #[]) => return config
   | some (.dict entries) =>
-    (fromJson? ((toJson config).mergeObj (PyValue.dict entries).toJson)).mapError fun e =>
-      (0, s!"configuration: {e}")
-  | some _ => throw (0, "configuration: expected a dict")
+    toResult none
+      ((fromJson? ((toJson config).mergeObj (PyValue.dict entries).toJson)).mapError fun e =>
+        UnreadArgument.mk s!"configuration: {e}")
+  | some _ => rejectArgument none "configuration: expected a dict"
 
 /-- The fork of a name, for the forks from Phase 0 to Hegotá, whose beacon chain is Heze.
 
 The configuration has no epoch for BPO3 to BPO5, so they fail. -/
 def forkOf (name : ByteArray) : Result Fork := do
   let fork ← forkUpTo .hegota name
-  if .bpo3 ≤ fork ∧ fork ≤ .bpo5 then throw (0, s!"fork {fork.name} not yet specified")
+  if .bpo3 ≤ fork ∧ fork ≤ .bpo5 then rejectArgument none s!"fork {fork.name} not yet specified"
   if .phase0 ≤ fork then return fork
-  else throw (0, s!"{fork.name} is not a fork of the beacon chain")
+  else rejectArgument none s!"{fork.name} is not a fork of the beacon chain"
 
 /-- The JSON text of a value, as UTF-8 bytes. -/
 def jsonBytes (value : Json) : ByteArray := value.compress.toUTF8
 
 /-- The configuration of a name, with the payload cap that every network shares. -/
-def configJson (config : Config) : Json :=
-  (toJson config).mergeObj <| Json.mkObj [
-    ("MAX_PAYLOAD_SIZE", toJson Networking.ReqResp.MAX_PAYLOAD_SIZE)]
+def configJson (config : Config) : Json := entriesJson (BeaconApi.configEntries config)
 
 /-- The preset of a name, as a `dict`. -/
 def presetValue (name : String) : Result PyValue := do
