@@ -38,6 +38,7 @@ refinement = [
   "EthLib.Consensus.Proofs.ForkChoice.Supporters",
   "EthLib.Consensus.Proofs.ForkChoice.VoteDelivery",
   # The justification and finality of the state transition against Casper FFG and the stake.
+  "EthLib.Consensus.Proofs.Transition.FfgChainLists",
   "EthLib.Consensus.Proofs.Transition.FfgFinality",
   "EthLib.Consensus.Proofs.Transition.FfgFinalityChain",
   "EthLib.Consensus.Proofs.Transition.FfgFinalityMonotonicity",
@@ -46,6 +47,8 @@ refinement = [
   "EthLib.Consensus.Proofs.Transition.FfgSlackActive",
   "EthLib.Consensus.Proofs.Transition.FfgSlackChain",
   "EthLib.Consensus.Proofs.Transition.FfgStake",
+  "EthLib.Consensus.Proofs.Transition.FfgTwoChainLists",
+  "EthLib.Consensus.Proofs.Transition.FfgTwoChains",
   "EthLib.Consensus.Proofs.Transition.FfgVotes",
   "EthLib.Consensus.Proofs.Transition.InactivityLeakStake",
   "EthLib.Consensus.Proofs.Transition.WeakSubjectivitySafety",
