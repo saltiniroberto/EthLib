@@ -1,7 +1,7 @@
 module
 
 public import EthLib.Execution.ErrorFormat
-public import EthLib.Base.BigEndian
+public import EthLib.Base.ByteOrder
 public import EthLib.Cryptography.Kzg.Core
 public import EthLib.Cryptography.Kzg.VersionedHash
 
@@ -16,10 +16,6 @@ The call data names the blob by the versioned hash of its commitment.
 
 Source: Point evaluation precompile, in [EIP-4844][eip-4844].
 
-EIP-4844 leaves the order of decoding open.
-
-The proof check decodes the commitment, `z`, `y` and the proof, in that order.
-
 [eip-4844]: https://eips.ethereum.org/EIPS/eip-4844#point-evaluation-precompile
 -/
 
@@ -27,10 +23,10 @@ The proof check decodes the commitment, `z`, `y` and the proof, in that order.
 
 namespace EthLib.Execution.Evm.Precompiles.PointEvaluation
 
-open EthLib.Base (Bytes32 natToBytes packBytes readBytes)
+open EthLib.Base (Bytes32 ByteOrder.toBE packBytes readBytes)
 open EthLib.Cryptography.Bls (Fr)
-open EthLib.Cryptography.Kzg (Bytes48 TrustedSetup kzgCommitmentToVersionedHash validateKzgG1Point
-  verifyKzgProofWith)
+open EthLib.Cryptography.Kzg (Bytes48 TrustedSetup VersionedHash kzgCommitmentToVersionedHash
+  validateKzgG1Point verifyKzgProofWith)
 open EthLib.Cryptography.Kzg.Constants (FIELD_ELEMENTS_PER_BLOB)
 
 /-- The size of the call data: a versioned hash, two field elements and two compressed G1 points. -/
@@ -46,7 +42,7 @@ inductive PointEvaluationError where
   /-- The gas given was below the price. -/
   | outOfGas (cost gas : Nat)
   /-- The versioned hash `actual` of the call is not `expected`, the one of the commitment. -/
-  | versionedHashMismatch (expected actual : Bytes32)
+  | versionedHashMismatch (expected actual : VersionedHash)
   /-- The commitment `commitment` is not a valid compressed G1 point in the subgroup. -/
   | invalidCommitment (commitment : Bytes48)
   /-- `z` or `y`, of value `value`, is not below the BLS12-381 group order. -/
@@ -71,7 +67,7 @@ def PointEvaluationError.reprPrec : PointEvaluationError → Nat → Std.Format
   | .outOfGas cost gas, p =>
     pointEvaluationErrorFormat "outOfGas" [namedArg "cost" cost, namedArg "gas" gas] p
   | .versionedHashMismatch expected actual, p => pointEvaluationErrorFormat "versionedHashMismatch"
-      [namedArg "expected" expected, namedArg "actual" actual] p
+      [namedArg "expected" expected.bytes, namedArg "actual" actual.bytes] p
   | .invalidCommitment commitment, p =>
     pointEvaluationErrorFormat "invalidCommitment" [namedArg "commitment" commitment] p
   | .invalidFieldElement value, p =>
@@ -106,14 +102,18 @@ It decodes the inputs and `[tau]_2`, then runs the KZG check with `[tau]_2` alon
 The check holds when the quotient `(p(X) - y) / (X - z)` is a polynomial. -/
 def verifyKzgProof (commitment : Bytes48) (z y : Bytes32) (proof : Bytes48) :
     Except PointEvaluationError Bool := do
+  -- EIP-4844 leaves the order of decoding open.
+  --
+  -- This check decodes the commitment, `z`, `y` and the proof, in that order.
+  --
   -- The commitment, a compressed G1 point that must decode and lie in the subgroup.
   let commitmentPoint ←
     (validateKzgG1Point commitment).mapError fun _ => .invalidCommitment commitment
   -- EIP-4844: `z` and `y` are canonical field elements, strictly below `BLS_MODULUS`.
   let zField ← (Fr.fromBytesBE z).mapError fun _ =>
-    .invalidFieldElement (EthLib.Base.bytesToNat z.toList)
+    .invalidFieldElement (EthLib.Base.ByteOrder.ofBE z.toList)
   let yField ← (Fr.fromBytesBE y).mapError fun _ =>
-    .invalidFieldElement (EthLib.Base.bytesToNat y.toList)
+    .invalidFieldElement (EthLib.Base.ByteOrder.ofBE y.toList)
   -- The proof, a compressed G1 point that must decode and lie in the subgroup.
   let proofPoint ← (validateKzgG1Point proof).mapError fun _ => .invalidProof proof
   -- `[tau]_2`, point 1 of the G2 monomial setup, the only point of the setup that the check reads.
@@ -126,7 +126,8 @@ def verifyKzgProof (commitment : Bytes48) (z y : Bytes32) (proof : Bytes48) :
 They are the number of field elements in a blob, then the order of the scalar field. -/
 def output : ByteArray :=
   -- EIP-4844: `FIELD_ELEMENTS_PER_BLOB`, then `BLS_MODULUS`, each as a 32-byte big-endian word.
-  ⟨(natToBytes 32 FIELD_ELEMENTS_PER_BLOB ++ natToBytes 32 Fr.modulus).toArray⟩
+  ⟨((ByteOrder.toBE 32 FIELD_ELEMENTS_PER_BLOB).toList
+    ++ (ByteOrder.toBE 32 Fr.modulus).toList).toArray⟩
 
 /-- The call: it checks the length, charges the gas, then checks the hash and the proof.
 
@@ -142,14 +143,15 @@ def pointEvaluation (data : ByteArray) (gas : Nat) : Except PointEvaluationError
     -- The versioned hash is bytes 0 to 31, `z` bytes 32 to 63 and `y` bytes 64 to 95.
     --
     -- The commitment is bytes 96 to 143, and the proof bytes 144 to 191.
-    let versionedHash := readBytes data 0 32 (by simp [fits, INPUT_BYTES])
+    let versionedHash : VersionedHash := ⟨readBytes data 0 32 (by simp [fits, INPUT_BYTES])⟩
     let z := readBytes data 32 32 (by simp [fits, INPUT_BYTES])
     let y := readBytes data 64 32 (by simp [fits, INPUT_BYTES])
     let commitment := readBytes data 96 48 (by simp [fits, INPUT_BYTES])
     let proof := readBytes data 144 48 (by simp [fits, INPUT_BYTES])
     -- The versioned hash of the commitment equals the given versioned hash.
-    if kzgCommitmentToVersionedHash commitment ≠ versionedHash then
-      throw (.versionedHashMismatch (kzgCommitmentToVersionedHash commitment) versionedHash)
+    let expected := kzgCommitmentToVersionedHash ⟨commitment⟩
+    if expected ≠ versionedHash then
+      throw (.versionedHashMismatch expected versionedHash)
     -- The proof shows that the polynomial of the commitment takes the value `y` at `z`.
     if !(← verifyKzgProof commitment z y proof) then
       throw .proofRejected

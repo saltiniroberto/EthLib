@@ -10,14 +10,6 @@ With enshrined proposer-builder separation, a block and its execution payload ar
 The fork choice then votes on nodes: a block with its payload pending, empty or full.
 
 This follows EIP-7732, section "Fork-Choice changes".
-
-A pending node has as children the block without its payload, and the block with it.
-
-A block hangs under the empty or the full node of its parent, as the block itself says.
-
-Suppose every block builds on a full parent, and no vote names an empty node.
-
-Then the rule over nodes picks the head of the rule over blocks, with its payload.
 -/
 
 @[expose] public section
@@ -43,7 +35,9 @@ An empty or a full node hangs under the pending node of its block.
 
 A pending node hangs under the parent block, with the status that the block builds on. -/
 def statusParent : β × Status → β × Status
+  -- A pending node has as children the block without its payload, and the block with it.
   | (r, some _) => (r, none)
+  -- A block hangs under the empty or the full node of its parent, as the block itself says.
   | (r, none) => if r = T.genesis then (r, none) else (T.parent r, some (full r))
 
 /-- The height of a node: two levels per block, the pending node below the other two. -/
@@ -231,19 +225,20 @@ theorem weight_empty (hfull : ∀ r, r ≠ T.genesis → full r = true)
 
 /-- The rule over nodes agrees with the rule over blocks when every payload is present.
 
-The views hold the same pending nodes as blocks, and the full node of each block.
-
-Every block builds on a full parent, no vote names an empty node, and votes name the same blocks.
-
-Take a block, and the head that the rule over blocks reaches from it.
-
-From the pending node of that block, the rule over nodes reaches the full node of that head. -/
+The rule over nodes then picks the head of the rule over blocks, with its payload. -/
 theorem ghost_payloadTree {root : β → ρ} (hroot : Set.InjOn root {r | r ≠ T.genesis})
+    -- Every block builds on a full parent.
     (hfull : ∀ r, r ≠ T.genesis → full r = true)
+    -- The views hold the same pending nodes as blocks, and the full node of each block.
     (hpending : ∀ r, (r, none) ∈ N.blocks ↔ r ∈ G.blocks)
     (hpayload : ∀ r ∈ G.blocks, (r, some true) ∈ N.blocks)
+    -- No vote names an empty node.
     (hvote : ∀ v r, N.latest v ≠ some (r, some false))
+    -- Votes name the same blocks.
+    --
+    -- Take a block, and the head that the rule over blocks reaches from it.
     (hlatest : ∀ v, G.latest v = (N.latest v).map Prod.fst) {b : β} (hb : b ∈ G.blocks) :
+    -- From the pending node of that block, the rule over nodes reaches the full node of that head.
     ghost V w N (nodeKey root) (b, none) = (ghost V w G root b, some true) := by
   -- The full node of a block is the heaviest child of its pending node.
   have pend : ∀ r ∈ G.blocks, ghost V w N (nodeKey root) (r, none) =
@@ -318,6 +313,80 @@ theorem ghost_payloadTree {root : β → ρ} (hroot : Set.InjOn root {r | r ≠ 
     rintro ⟨⟨n, x⟩, hn⟩
     obtain rfl := kids_fst b n x hn
     exact h ⟨_, (kids b n).mp hn⟩
+
+/-- Lemma 2 of [arXiv 2405.00549v4][fcr], Appendix A.1, on the tree of payload-status nodes.
+
+The model has no time, so the paper's conditions on GST and on the slot of `b` have no part here.
+
+The rule compares weights only: the tiebreaker of EIP-7732 for the previous slot is left out.
+
+[fcr]: https://arxiv.org/abs/2405.00549v4 -/
+theorem ancestor_ghost_payloadTree_of_honest_support {key : β × Status → ρ} {a b : β}
+    -- Take any set `J` of validators; the paper takes the honest ones.
+    (J : Set ν) [DecidablePred (· ∈ J)]
+    -- Each block comes with a bound; only the blocks of the chain use it.
+    (Φ : β → ℕ)
+    -- The pending node of `b` is in the view, and `a` is `b` or one of its ancestors.
+    (hb : (b, none) ∈ N.blocks) (hab : T.Ancestor a b)
+    -- Take each block `c` from just above `a` up to and including `b`.
+    --
+    -- Assume that the bound caps its pending node with any other child of the node it builds on.
+    (fits : ∀ c, T.Ancestor a c → T.Ancestor c b → c ≠ a →
+      ∀ c' ∈ children N (T.parent c, some (full c)), c' ≠ (c, none) →
+        weight V w N (c, none) + weight V w N c' ≤ Φ c)
+    -- Assume also that it caps that node with the other status of its parent, if in the view.
+    (cross : ∀ c, T.Ancestor a c → T.Ancestor c b → c ≠ a →
+      (T.parent c, some !(full c)) ∈ N.blocks →
+      weight V w N (c, none) + weight V w N (T.parent c, some !(full c)) ≤ Φ c)
+    -- Assume that the supporters of that pending node in `J` hold more than half of the bound.
+    (honest : ∀ c, T.Ancestor a c → T.Ancestor c b → c ≠ a →
+      Φ c < 2 * stake w {v ∈ supporters V N (c, none) | v ∈ J}) :
+    -- Then the walk ends at the pending node of `b` or below it, at any status.
+    (T.payloadTree full).Ancestor (b, none) (ghost V w N key (a, none)) := by
+  -- The supporters of a pending node in `J` are some of its supporters.
+  have lower : ∀ c, stake w {v ∈ supporters V N (c, none) | v ∈ J} ≤ weight V w N (c, none) :=
+    fun _ => stake_mono (Finset.filter_subset _ _)
+  refine ancestor_ghost_of_heavier V w N key hb (payloadTree_ancestor_none_of hab)
+    fun n hn hnb hna n' hn' hne => ?_
+  obtain ⟨r, _ | x⟩ := n
+  · -- A pending node of the chain beats every other child of the node it builds on.
+    have hr : r ≠ a := fun e => hna (by rw [e])
+    have above := payloadTree_ancestor_fst hn
+    have upto := payloadTree_ancestor_fst hnb
+    have hg := Ancestor.ne_genesis above hr
+    rw [payloadTree_parent_none hg] at hn'
+    have := fits r above upto hr n' hn' hne
+    have := honest r above upto hr
+    have := lower r
+    omega
+  · -- An empty or full node of the chain leads to the pending node of the next block of the chain.
+    --
+    -- It needs no hypothesis of its own: it uses those of that next block.
+    obtain ⟨d, hd, hdb⟩ := hnb.exists_child (by simp)
+    obtain ⟨q, _ | y⟩ := d
+    swap
+    · exact absurd (payloadTree_isChild_some.mp hd) (by simp)
+    obtain ⟨-, rfl, hfull⟩ := payloadTree_isChild_none.mp hd
+    obtain rfl : x = full q := Option.some.inj hfull
+    -- Its one rival is the other payload status of the same block.
+    obtain ⟨hmem, hchild⟩ := mem_children.mp hn'
+    obtain ⟨r', _ | y'⟩ := n'
+    · exact absurd hchild not_payloadTree_isChild_none_none
+    obtain rfl := (Prod.mk.inj (payloadTree_isChild_some.mp hchild)).1
+    obtain rfl : y' = !(full q) := Bool.eq_not_of_ne fun e => hne (by rw [e])
+    -- The next block is above `a` and at most `b`.
+    have hqa : q ≠ a := by
+      rintro rfl
+      exact absurd (hn.antisymm hd.ancestor) (by simp)
+    have above : T.Ancestor a q :=
+      (payloadTree_ancestor_fst hn).trans ⟨1, rfl⟩
+    have upto := payloadTree_ancestor_fst hdb
+    have := cross q above upto hqa hmem
+    have := honest q above upto hqa
+    have := lower q
+    -- The node weighs at least as much as the pending child built on it.
+    have := weight_mono (V := V) (w := w) (G := N) hd.ancestor
+    omega
 
 /-- The view of nodes in which every block of a view of blocks has its payload.
 

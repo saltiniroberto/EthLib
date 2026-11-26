@@ -99,8 +99,10 @@ namespace DepositMerkleTree
 /-- The SSZ parent of two nodes, as a 32-byte root. -/
 def hashPair (left right : Root) : Root :=
   -- The width holds by unfolding: the SSZ parent is the bytes of a SHA-256 digest.
-  ⟨combine left.toArray right.toArray,
-    (Cryptography.Hash.Sha256.hash32 ⟨left.toArray ++ right.toArray⟩).size_toArray⟩
+  ⟨(combine ⟨left.toArray⟩ ⟨right.toArray⟩).data, by
+    rw [show combine ⟨left.toArray⟩ ⟨right.toArray⟩
+      = Cryptography.Hash.Sha256.hash (⟨left.toArray⟩ ++ ⟨right.toArray⟩) from rfl]
+    exact (Cryptography.Hash.Sha256.hash32 _).size_toArray⟩
 
 /-- The SSZ root of the all-zero subtree of a height, read from the SSZ table. -/
 def zeroNode (height : Nat) : Root :=
@@ -110,8 +112,10 @@ def zeroNode (height : Nat) : Root :=
 /-- A root with a count mixed in, as SSZ mixes the length into a list root. -/
 def mixInCount (root : Root) (count : Nat) : Root :=
   -- The width holds by unfolding: the mix-in is the bytes of a SHA-256 digest.
-  ⟨mixIn root.toArray (lengthWord count),
-    (Cryptography.Hash.Sha256.hash32 ⟨root.toArray ++ lengthWord count⟩).size_toArray⟩
+  ⟨(mixIn ⟨root.toArray⟩ (lengthWord count)).data, by
+    rw [show mixIn ⟨root.toArray⟩ (lengthWord count)
+      = Cryptography.Hash.Sha256.hash (⟨root.toArray⟩ ++ lengthWord count) from rfl]
+    exact (Cryptography.Hash.Sha256.hash32 _).size_toArray⟩
 
 end DepositMerkleTree
 
@@ -467,7 +471,7 @@ def getProof (tree : DepositTree) (index : Nat) :
   if index < finalized then throw (.proofOfFinalized index finalized)
   if tree.mixInLength ≤ index then throw (.proofBeyondCount index tree.mixInLength)
   match tree.tree.generateProof index DEPOSIT_CONTRACT_TREE_DEPTH.toNat with
-  | some (leaf, branch) => return (leaf, branch.push (uintToBytes 32 tree.mixInLength))
+  | some (leaf, branch) => return (leaf, branch.push (ByteOrder.toLE 32 tree.mixInLength))
   -- A tree that the operations build always holds a leaf at an index below its count.
   | none => throw (.proofBeyondCount index tree.mixInLength)
 

@@ -102,28 +102,26 @@ def replayRewards {fork : Fork} (pre : BalanceReplay preset fork) :
     let pre ← ordinary.foldlM (fun pre p => replayDeltas .penalties (#[], p.2) pre) pre
     replayDeltas .inactivity (#[], inactivity.2) pre
 
-/-- One stage of the epoch replay, over the stages that run before the payments.
-
-Justification, inactivity, registry updates and the eth1 reset change no balance and record nothing.
-
-The rewards and the slashings record their protocol-computed limits.
-
-Pending deposits and pending consolidations record their consumed amounts.
-
-A stage that is absent at the fork, or that runs after the payments, leaves the pair unchanged. -/
+/-- One stage of the epoch replay, over the stages that run before the payments. -/
 def epochReplayAction {fork : Fork} (stage : EpochStage) (pre : BalanceReplay preset fork) :
     Except TransitionError (BalanceReplay preset fork) :=
   match stage with
+  -- Justification and inactivity change no balance and record nothing.
   | .justification => carryBalance processJustificationAndFinalization pre
   | .inactivity =>
     if altair : .altair ≤ fork then carryBalance (processInactivityUpdates config · altair) pre
     else pure pre
+  -- The rewards record their protocol-computed limit.
   | .rewards => replayRewards (config := config) pre
+  -- Registry updates change no balance and record nothing.
   | .registry => carryBalance (processRegistryUpdates config) pre
+  -- The slashings record their protocol-computed limit.
   | .slashings =>
     recordBalance .slashings (fun s => return (0, ← delayedSlashingLimit s)) processSlashings pre
+  -- The eth1 reset changes no balance and records nothing.
   | .eth1Reset =>
     if before : fork < .hegota then carryBalance (processEth1DataReset before) pre else pure pre
+  -- Pending deposits and pending consolidations record their consumed amounts.
   | .pendingDeposits =>
     if electra : .pectra ≤ fork then do
       let deposited ← processPendingDeposits config checks pre.1 electra
@@ -137,6 +135,7 @@ def epochReplayAction {fork : Fork} (stage : EpochStage) (pre : BalanceReplay pr
       return (consolidated, pre.2 ++
         [⟨.consolidations, ⟨fork, pre.1⟩, ⟨fork, consolidated⟩, moved, moved⟩])
     else pure pre
+  -- A stage that is absent at the fork, or that runs after the payments, leaves the pair unchanged.
   | _ => pure pre
 
 /-- The replay ends after the last balance-changing epoch pass, before effective-balance updates.
@@ -481,6 +480,26 @@ private theorem delayedSlashingLimit_result {fork : Fork} {s t : BeaconState pre
   simp only [delayedSlashingLimit, bind_ok_iff, liftAccessor_ok, totalOk, sumOk,
     Except.ok.injEq, pure, Except.pure]
   exact ⟨_, total, rfl, sum, rfl, rfl⟩
+
+/-- The six stages of an epoch before the pending deposits, with two values that they compute.
+
+These are the events of the replay of the rewards, and the limit of the slashings. -/
+structure ReplayedPrefix (config : Config) (checks : SignatureChecks) {fork : Fork}
+    (s reset : BeaconState preset fork) extends EpochPrefix config checks s reset where
+  /-- The events of the replay of the rewards. -/
+  recorded : List (BalanceEvent preset)
+  /-- The limit of the slashings. -/
+  limit : Nat
+  replay : replayRewards (config := config) (scored, []) = .ok (rewarded, recorded)
+  limitOk : delayedSlashingLimit registered = .ok limit
+
+/-- The six stages of an epoch before the pending deposits replay their rewards and slashings. -/
+theorem _root_.EthLib.Consensus.EpochPrefix.replayed {fork : Fork}
+    {s reset : BeaconState preset fork} (epoch : EpochPrefix config checks s reset) :
+    Nonempty (ReplayedPrefix config checks s reset) :=
+  have ⟨recorded, replay⟩ := replayRewards_result _ _ [] epoch.rewardedOk
+  have ⟨limit, limitOk⟩ := delayedSlashingLimit_result epoch.slashedOk
+  ⟨{ epoch with recorded, limit, replay, limitOk }⟩
 
 /-- A successful replay is a trace of the replay over the stages before the payments. -/
 theorem epochBalanceReplay_trace {fork : Fork} {s : BeaconState preset fork}
@@ -855,10 +874,10 @@ def upgradeBalanceReplay (s : ForkedBeaconState preset) :
       else return rest
     else return rest
   else return []
-termination_by Fork.hegota.ctorIdx + 1 - s.fork.ctorIdx
+termination_by Fork.last.ctorIdx + 1 - s.fork.ctorIdx
 decreasing_by
   have later : s.fork.ctorIdx < next.val.fork.ctorIdx := next.property
-  have last : next.val.fork.ctorIdx ≤ Fork.hegota.ctorIdx := by cases next.val.fork <;> decide
+  have bounded : next.val.fork.ctorIdx ≤ Fork.last.ctorIdx := by cases next.val.fork <;> decide
   omega
 
 def _root_.EthLib.Consensus.Step.balanceEvents {x y : ForkedBeaconState preset}
@@ -1733,15 +1752,7 @@ theorem upgradeBalanceReplay_bounded {s t : ForkedBeaconState preset}
     rw [upgradeBalanceReplay]
     simp [due, pure, Except.pure]
 
-/-- The balance events of a slot, before Gloas: its epoch passes, then its fork upgrades.
-
-The epoch passes run only at the last slot of an epoch, on the state after the slot processing.
-
-They end at the input of the effective-balance updates, which holds the balances after the slot.
-
-The updates give the validators after the slot.
-
-At any other slot the slot keeps the balances, and the events are those of the upgrades. -/
+/-- The balance events of a slot, before Gloas: its epoch passes, then its fork upgrades. -/
 theorem _root_.EthLib.Consensus.Step.balanceEvents_slot {x y : ForkedBeaconState preset}
     (ok : advanceSlotAcross config checks x = .ok y) (early : y.fork < .glamsterdam)
     {events : List (BalanceEvent preset)} (replayed : (Step.slot ok).balanceEvents = .ok events) :
@@ -1751,9 +1762,20 @@ theorem _root_.EthLib.Consensus.Step.balanceEvents_slot {x y : ForkedBeaconState
       processSlot x.state = .ok cached ∧
       upgradeBalanceReplay (config := config) (checks := checks) ⟨x.fork, advanced⟩ =
         .ok crossings ∧
+      -- At a slot that is not the last of its epoch, the slot keeps the balances.
+      --
+      -- The events are then those of the upgrades.
       ((advanced.balances = cached.balances ∧ events = crossings) ∨
+        -- The epoch passes run only at the last slot of an epoch.
+        --
+        -- They run on the state after the slot processing.
         ∃ middle updated recorded,
           epochBalanceReplay (config := config) (checks := checks) cached = .ok (middle, recorded) ∧
+          -- They end at the input of the effective-balance updates.
+          --
+          -- That input holds the balances after the slot.
+          --
+          -- The updates give the validators after the slot.
           processEffectiveBalanceUpdates middle = .ok updated ∧
           advanced.validators = updated.validators ∧ advanced.balances = middle.balances ∧
           events = recorded ++ crossings ∧ ∃ next : Slot,
@@ -2316,22 +2338,19 @@ private theorem BalanceChain.plain :
     refine ⟨nofun, by simpa using chain.1, by simpa using last, ?_⟩
     exact .cons_cons (fun i => (head e' (by simp) i).symm) linked
 
-/-- The events of a step in order, around the state at which effective balances update.
-
-The events of a block run from its start to its end.
-
-A slot runs its epoch events up to the state after the slot, then those of its upgrades.
-
-Each event starts at the balances where the one before it ends, from the start of its part.
-
-The last event of a part ends at the balances of the end of that part. -/
+/-- The events of a step in order, around the state at which effective balances update. -/
 theorem _root_.EthLib.Consensus.Step.balanceChain {x y : ForkedBeaconState preset}
     (step : Step config checks x y) (early : y.fork < .glamsterdam)
     {events : List (BalanceEvent preset)} (replayed : step.balanceEvents = .ok events) :
+    -- The events of a block run from its start to its end.
+    --
+    -- A slot runs its epoch events up to the state after the slot, then those of its upgrades.
     ∃ p first second, (step.balancePath = [x, y] ∧ p = x ∨ step.balancePath = [x, p, y]) ∧
       events = first ++ second ∧
       (first = [] → ∀ i, actualBalanceAt p i = actualBalanceAt x i) ∧
+      -- Each event starts at the balances where the one before it ends, from the start of its part.
       (∀ e ∈ first.head?, ∀ i, actualBalanceAt e.before i = actualBalanceAt x i) ∧
+      -- The last event of a part ends at the balances of the end of that part.
       (∀ e ∈ first.getLast?, ∀ i, actualBalanceAt e.after i = actualBalanceAt p i) ∧
       first.IsChain (fun e e' => ∀ i, actualBalanceAt e.after i = actualBalanceAt e'.before i) ∧
       (second = [] → ∀ i, actualBalanceAt y i = actualBalanceAt p i) ∧
@@ -3738,8 +3757,7 @@ theorem _root_.EthLib.Consensus.Run.unassigned_assignment_resources
     (shared : Run config checks g x)
     (genesis : Genesis (config := config) (checks := checks) g)
     (head : Run config checks x u)
-    (activation : preset.MAX_EFFECTIVE_BALANCE ≤ preset.MIN_ACTIVATION_BALANCE)
-    (compounding : preset.MIN_ACTIVATION_BALANCE ≤ preset.MAX_EFFECTIVE_BALANCE_ELECTRA)
+    (caps : CapOrder preset)
     (aligned : MaxEffectiveBalancesAligned preset)
     (electra : .pectra ≤ x.fork) (early : u.fork < .glamsterdam) :
     let candidate := fun i : Nat =>
@@ -3765,12 +3783,12 @@ theorem _root_.EthLib.Consensus.Run.unassigned_assignment_resources
       (x.state.depositBalanceToConsume electra).toNat +
       config.MAX_PER_EPOCH_ACTIVATION_EXIT_CHURN_LIMIT.toNat *
         ((getCurrentEpoch u.state).toNat - (getCurrentEpoch x.state).toNat + 1) := by
-  apply shared.unassigned_assignment_resources_of_pending_law genesis head activation
-    compounding aligned electra early
+  apply shared.unassigned_assignment_resources_of_pending_law genesis head caps aligned electra
+    early
   · intro f a b e before ok matched
     simpa only [actualBalanceAt] using funding_pending_capacity e before ok matched
   · intro f a b engine block before ok
-    exact depositCarry_processBlock before ok
+    exact depositCarry_processBlock ok
 
 /-- Unspent deposit capacity retained across post-Electra operations. -/
 def fundingCarry (x : ForkedBeaconState preset) : Nat :=
@@ -3959,33 +3977,22 @@ private theorem funding_epoch_early {fork : Fork} {s : BeaconState preset fork}
   exact funding_no_deposit_credit
     (epochBalanceReplay_bounded matched (Nat.lt_trans early (by decide)) ok) noDeposits
 
-/-- Before Gloas, the stages before the payments and the events of their replay.
+/-- The stages before the payments, and the events of their replay.
 
 The replay records the rewards and the slashings.
 
 From Electra it then records the pending deposits and the pending consolidations.
 
 The slashings event carries the limit the replay computes before the slashings. -/
-theorem funding_epoch_site_limit {fork : Fork} {s t : BeaconState preset fork}
+theorem funding_epoch_site {fork : Fork} {s t : BeaconState preset fork}
     (ok : epochBeforePayments config checks s = .ok t)
     {events : List (BalanceEvent preset)}
     (replayed : epochBalanceReplay (config := config) (checks := checks) s = .ok (t, events)) :
-    ∃ (justified scored rewarded registered slashed reset deposited : BeaconState preset fork)
-      (rewardEvents : List (BalanceEvent preset)) (limit : Nat),
-      EpochTrace (EpochStage.action config checks)
-        [.justification, .inactivity, .rewards, .registry, .slashings, .eth1Reset] s reset ∧
-      EpochStage.Edge config checks .justification s justified ∧
-      EpochStage.Edge config checks .inactivity justified scored ∧
-      processRewardsAndPenalties config scored = .ok rewarded ∧
-      processRegistryUpdates config rewarded = .ok registered ∧
-      processSlashings registered = .ok slashed ∧
-      delayedSlashingLimit registered = .ok limit ∧
-      EpochStage.Edge config checks .eth1Reset slashed reset ∧
+    ∃ (reset deposited : BeaconState preset fork) (epoch : ReplayedPrefix config checks s reset),
       EpochStage.Edge config checks .pendingDeposits reset deposited ∧
       EpochStage.Edge config checks .pendingConsolidations deposited t ∧
-      replayRewards (config := config) (scored, []) = .ok (rewarded, rewardEvents) ∧
-      events = rewardEvents ++
-        [⟨.slashings, ⟨fork, registered⟩, ⟨fork, slashed⟩, 0, limit⟩] ++
+      events = epoch.recorded ++
+        [⟨.slashings, ⟨fork, epoch.registered⟩, ⟨fork, epoch.slashed⟩, 0, epoch.limit⟩] ++
         if electra : .pectra ≤ fork then
           [⟨.deposits, ⟨fork, reset⟩, ⟨fork, deposited⟩,
             consumedDeposits reset deposited electra, 0⟩,
@@ -3995,47 +4002,30 @@ theorem funding_epoch_site_limit {fork : Fork} {s t : BeaconState preset fork}
         else [] := by
   have trace :=
     EpochTrace.run_ok_iff.mp ((epochBeforePayments_eq_run config checks s).symm.trans ok)
-  unfold EpochStage.prefixStages at trace
-  cases trace; rename_i justified justifiedOk trace
-  cases trace; rename_i scored scoredOk trace
-  cases trace; rename_i rewarded rewardedOk trace
-  cases trace; rename_i registered registeredOk trace
-  cases trace; rename_i slashed slashedOk trace
-  cases trace; rename_i reset resetOk trace
-  cases trace; rename_i deposited depositedOk trace
-  cases trace; rename_i consolidatedOk trace
-  cases trace
-  have early : EpochTrace (EpochStage.action config checks)
-      [.justification, .inactivity, .rewards, .registry, .slashings, .eth1Reset] s reset :=
-    .cons justifiedOk <| .cons scoredOk <| .cons rewardedOk <| .cons registeredOk <|
-      .cons slashedOk <| .cons resetOk .nil
-  replace justifiedOk := EpochStage.action_cases.mp justifiedOk
-  replace scoredOk := EpochStage.action_cases.mp scoredOk
-  replace rewardedOk := EpochStage.action_cases.mp rewardedOk
-  replace registeredOk := EpochStage.action_cases.mp registeredOk
-  replace slashedOk := EpochStage.action_cases.mp slashedOk
-  replace resetOk := EpochStage.action_cases.mp resetOk
+  change EpochTrace _ ([.justification, .inactivity, .rewards, .registry, .slashings,
+    .eth1Reset] ++ [.pendingDeposits, .pendingConsolidations]) s t at trace
+  obtain ⟨reset, head, tail⟩ := EpochTrace.append_iff.mp trace
+  obtain ⟨stages⟩ := EpochPrefix.of_trace head
+  obtain ⟨epoch⟩ := stages.replayed
+  cases tail; rename_i deposited depositedOk tail
+  cases tail; rename_i consolidatedOk tail
+  cases tail
   replace depositedOk := EpochStage.action_cases.mp depositedOk
   replace consolidatedOk := EpochStage.action_cases.mp consolidatedOk
-  simp only [EpochStage.Edge] at rewardedOk registeredOk slashedOk
-  obtain ⟨rewardEvents, rewardReplay⟩ := replayRewards_result scored rewarded [] rewardedOk
-  obtain ⟨limit, limitOk⟩ := delayedSlashingLimit_result slashedOk
-  refine ⟨justified, scored, rewarded, registered, slashed, reset, deposited, rewardEvents, limit,
-    early, justifiedOk, scoredOk, rewardedOk, registeredOk, slashedOk, limitOk, resetOk,
-    depositedOk, consolidatedOk, rewardReplay, ?_⟩
+  refine ⟨reset, deposited, epoch, depositedOk, consolidatedOk, ?_⟩
   have slashReplay : epochReplayAction (config := config) (checks := checks) .slashings
-      (registered, rewardEvents) = .ok
-        (slashed, rewardEvents ++
-          [⟨.slashings, ⟨fork, registered⟩, ⟨fork, slashed⟩, 0, limit⟩]) := by
-    simp [epochReplayAction, recordBalance, limitOk, slashedOk, bind, Except.bind, pure,
-      Except.pure]
+      (epoch.registered, epoch.recorded) = .ok
+        (epoch.slashed, epoch.recorded ++
+          [⟨.slashings, ⟨fork, epoch.registered⟩, ⟨fork, epoch.slashed⟩, 0, epoch.limit⟩]) := by
+    simp [epochReplayAction, recordBalance, epoch.limitOk, epoch.slashedOk, bind, Except.bind,
+      pure, Except.pure]
   simp only [epochBalanceReplay, EpochTrace.run, EpochStage.prefixStages, List.foldlM_cons,
-    List.foldlM_nil, epochReplayAction_carried (by simp) justifiedOk,
-    epochReplayAction_carried (by simp) scoredOk,
-    show epochReplayAction (config := config) (checks := checks) .rewards (scored, []) =
-      .ok (rewarded, rewardEvents) from rewardReplay,
-    epochReplayAction_carried (k := .registry) (by simp) registeredOk, slashReplay,
-    epochReplayAction_carried (by simp) resetOk, bind, Except.bind] at replayed
+    List.foldlM_nil, epochReplayAction_carried (by simp) epoch.justifiedOk,
+    epochReplayAction_carried (by simp) epoch.scoredOk,
+    show epochReplayAction (config := config) (checks := checks) .rewards (epoch.scored, []) =
+      .ok (epoch.rewarded, epoch.recorded) from epoch.replay,
+    epochReplayAction_carried (k := .registry) (by simp) epoch.registeredOk, slashReplay,
+    epochReplayAction_carried (by simp) epoch.resetOk, bind, Except.bind] at replayed
   simp only [EpochStage.Edge] at depositedOk consolidatedOk
   by_cases electra : .pectra ≤ fork
   · simp only [electra, ↓reduceDIte] at depositedOk consolidatedOk ⊢
@@ -4049,76 +4039,31 @@ theorem funding_epoch_site_limit {fork : Fork} {s t : BeaconState preset fork}
       Prod.mk.injEq] at replayed
     simp [← replayed.2]
 
-/-- Before Gloas, the stages before the payments and the events of their replay.
-
-The replay records the rewards and the slashings.
-
-From Electra it then records the pending deposits and the pending consolidations. -/
-theorem funding_epoch_site {fork : Fork} {s t : BeaconState preset fork}
-    (ok : epochBeforePayments config checks s = .ok t)
-    {events : List (BalanceEvent preset)}
-    (replayed : epochBalanceReplay (config := config) (checks := checks) s = .ok (t, events)) :
-    ∃ (justified scored rewarded registered slashed reset deposited : BeaconState preset fork)
-      (rewardEvents : List (BalanceEvent preset)) (limit : Nat),
-      EpochTrace (EpochStage.action config checks)
-        [.justification, .inactivity, .rewards, .registry, .slashings, .eth1Reset] s reset ∧
-      EpochStage.Edge config checks .justification s justified ∧
-      EpochStage.Edge config checks .inactivity justified scored ∧
-      processRewardsAndPenalties config scored = .ok rewarded ∧
-      processRegistryUpdates config rewarded = .ok registered ∧
-      processSlashings registered = .ok slashed ∧
-      EpochStage.Edge config checks .eth1Reset slashed reset ∧
-      EpochStage.Edge config checks .pendingDeposits reset deposited ∧
-      EpochStage.Edge config checks .pendingConsolidations deposited t ∧
-      replayRewards (config := config) (scored, []) = .ok (rewarded, rewardEvents) ∧
-      events = rewardEvents ++
-        [⟨.slashings, ⟨fork, registered⟩, ⟨fork, slashed⟩, 0, limit⟩] ++
-        if electra : .pectra ≤ fork then
-          [⟨.deposits, ⟨fork, reset⟩, ⟨fork, deposited⟩,
-            consumedDeposits reset deposited electra, 0⟩,
-          ⟨.consolidations, ⟨fork, deposited⟩, ⟨fork, t⟩,
-            consumedConsolidations deposited t electra,
-            consumedConsolidations deposited t electra⟩]
-        else [] := by
-  obtain ⟨justified, scored, rewarded, registered, slashed, reset, deposited, rewardEvents, limit,
-    early, justifiedOk, scoredOk, rewardedOk, registeredOk, slashedOk, _, resetOk, depositedOk,
-    consolidatedOk, rewardReplay, shape⟩ := funding_epoch_site_limit ok replayed
-  exact ⟨justified, scored, rewarded, registered, slashed, reset, deposited, rewardEvents, limit,
-    early, justifiedOk, scoredOk, rewardedOk, registeredOk, slashedOk, resetOk, depositedOk,
-    consolidatedOk, rewardReplay, shape⟩
-
 /-- From Electra, the six stages before the pending deposits keep the deposit carry.
 
 After the justification they are mutator frames, so the reset keeps the balances matched. -/
-theorem funding_epoch_prefix {fork : Fork}
-    {s justified scored rewarded registered slashed reset : BeaconState preset fork}
+theorem funding_epoch_prefix {fork : Fork} {s reset : BeaconState preset fork}
     (electra : .pectra ≤ fork) (early : fork < .glamsterdam)
-    (trace : EpochTrace (EpochStage.action config checks)
-      [.justification, .inactivity, .rewards, .registry, .slashings, .eth1Reset] s reset)
-    (justifiedOk : EpochStage.Edge config checks .justification s justified)
-    (scoredOk : EpochStage.Edge config checks .inactivity justified scored)
-    (rewardedOk : processRewardsAndPenalties config scored = .ok rewarded)
-    (registeredOk : processRegistryUpdates config rewarded = .ok registered)
-    (slashedOk : processSlashings registered = .ok slashed)
-    (resetOk : EpochStage.Edge config checks .eth1Reset slashed reset)
-    (matched : BalancesMatch s) :
-    reset.depositBalanceToConsume = s.depositBalanceToConsume ∧ MutatorFrame justified reset ∧
-      BalancesMatch reset := by
+    (epoch : EpochPrefix config checks s reset) (matched : BalancesMatch s) :
+    reset.depositBalanceToConsume = s.depositBalanceToConsume ∧
+      MutatorFrame epoch.justified reset ∧ BalancesMatch reset := by
   have altair : .altair ≤ fork := Nat.le_trans (by decide) electra
   have before : fork < .hegota := Nat.lt_trans early (by decide)
   have carry : reset.depositBalanceToConsume = s.depositBalanceToConsume :=
-    trace.transport (fun a b => b.depositBalanceToConsume = a.depositBalanceToConsume)
+    epoch.trace.transport (fun a b => b.depositBalanceToConsume = a.depositBalanceToConsume)
       (fun _ => rfl) (by intro _ _ _ one two; exact two.trans one)
       (fun _ member _ _ computed => (EpochStage.action_cases.mp computed).depositCarry
         (by simp only [List.mem_cons, List.not_mem_nil, or_false] at member
             rcases member with rfl | rfl | rfl | rfl | rfl | rfl <;> exact nofun))
+  have scoredOk := epoch.scoredOk
+  have resetOk := epoch.resetOk
   simp only [EpochStage.Edge, altair, before, ↓reduceDIte] at scoredOk resetOk
   have frame := (frame_processInactivityUpdates scoredOk).trans <|
-    (frame_processRewardsAndPenalties rewardedOk).trans <|
-    (frame_processRegistryUpdates registeredOk).trans <|
-    (frame_processSlashings slashedOk).trans (frame_processEth1DataReset resetOk)
-  exact ⟨carry, frame, frame.balancesMatch <|
-    balancesMatch_of_sameSizes (sameSizes_processJustificationAndFinalization justifiedOk) matched⟩
+    (frame_processRewardsAndPenalties epoch.rewardedOk).trans <|
+    (frame_processRegistryUpdates epoch.registeredOk).trans <|
+    (frame_processSlashings epoch.slashedOk).trans (frame_processEth1DataReset resetOk)
+  exact ⟨carry, frame, frame.balancesMatch <| balancesMatch_of_sameSizes
+    (sameSizes_processJustificationAndFinalization epoch.justifiedOk) matched⟩
 
 /-- Up to the payments, an epoch's deposit credits plus its final carry stay within a bound.
 
@@ -4139,17 +4084,15 @@ private theorem funding_epoch_capacity_le {fork : Fork} {s t : BeaconState prese
       depositChurnLimit config reset = .ok churn → churn.toNat ≤ cap) :
     (events.map funding_deposit_credit).sum + (t.depositBalanceToConsume electra).toNat ≤
       (s.depositBalanceToConsume electra).toNat + cap := by
-  obtain ⟨justified, scored, rewarded, registered, slashed, reset, deposited, rewardEvents, limit,
-    trace, justifiedOk, scoredOk, rewardedOk, registeredOk, slashedOk, resetOk, depositedOk,
-    consolidatedOk, rewardReplay, equal⟩ := funding_epoch_site ok replayed
-  obtain ⟨carry, -, resetMatch⟩ := funding_epoch_prefix electra early trace justifiedOk scoredOk
-    rewardedOk registeredOk slashedOk resetOk matched
+  obtain ⟨reset, deposited, epoch, depositedOk, consolidatedOk, equal⟩ :=
+    funding_epoch_site ok replayed
+  obtain ⟨carry, -, resetMatch⟩ := funding_epoch_prefix electra early epoch.toEpochPrefix matched
   simp only [EpochStage.Edge, electra, ↓reduceDIte] at depositedOk consolidatedOk
-  have rewardsZero := funding_rewards_events (by simp [funding_no_deposits]) rewardReplay
-  have rewardsBound := replayRewards_bounded (by simp [EventsBounded]) rewardReplay
+  have rewardsZero := funding_rewards_events (by simp [funding_no_deposits]) epoch.replay
+  have rewardsBound := replayRewards_bounded (by simp [EventsBounded]) epoch.replay
   have rewardsSum := funding_no_deposit_credit rewardsBound rewardsZero
   have bound := funding_pending_capacity_le electra depositedOk resetMatch cap
-    (fun churn churnOk => capOk reset churn trace churnOk)
+    (fun churn churnOk => capOk reset churn epoch.trace churnOk)
   rw [equal]
   simp only [List.map_append, List.sum_append, rewardsSum, List.map_cons, List.map_nil,
     List.sum_cons, List.sum_nil, funding_deposit_credit, electra, ↓reduceDIte, reduceCtorEq,
@@ -4181,17 +4124,18 @@ private theorem funding_epoch_result {fork : Fork} {s t : BeaconState preset for
 
 /-- A step spends at most the carry plus a rate per epoch it enters.
 
-The only step that changes the carry processes the epoch of its input.
-
-Its pending deposits read their churn after the six stages before them.
-
-That state has the validators and the slot of that input.
-
-`capOk` bounds that churn by the rate of the input's epoch. -/
+The only step that changes the carry processes the epoch of its input. -/
 private theorem funding_step_capacity_rate {x y : ForkedBeaconState preset}
     (step : Step config checks x y) (matched : BalancesMatch x.state)
     (early : y.fork < .glamsterdam) {events : List (BalanceEvent preset)}
     (replayed : step.balanceEvents = .ok events) (rate : Nat → Nat)
+    -- The pending deposits of the epoch that the step processes read their churn.
+    --
+    -- They read it after the six stages before them.
+    --
+    -- That state has the validators and the slot of that input.
+    --
+    -- This hypothesis bounds that churn by the rate of the input's epoch.
     (capOk : ∀ (cached reset : BeaconState preset x.fork) churn,
       cached.validators = x.state.validators → cached.slot = x.state.slot →
       EpochTrace (EpochStage.action config checks)
@@ -4211,7 +4155,7 @@ private theorem funding_step_capacity_rate {x y : ForkedBeaconState preset}
       bind, Except.bind, pure, Except.pure, Except.ok.injEq] at replayed
     subst events
     rw [zero]
-    have kept := depositCarry_processBlock before processed
+    have kept := depositCarry_processBlock processed
     simp only [fundingCarry, kept]
     omega
   | slot ok =>
@@ -4408,15 +4352,7 @@ theorem funding_window_of_steps {x y : ForkedBeaconState preset}
 
 /-- Take the deposit carry at the end of a branch plus its deposit credits.
 
-It is at most the carry at its start plus a rate for each epoch the branch processes.
-
-`capOk` bounds the churn that the pending deposits of an epoch read by the rate of that epoch.
-
-They read it after the six stages before them.
-
-That state has the validators and the slot of the epoch's input `a`.
-
-The branch reaches `a` by `epoch a ≤ high + 1`. -/
+It is at most the carry at its start plus a rate for each epoch the branch processes. -/
 theorem funding_deposit_run_rate {g x y : ForkedBeaconState preset}
     (shared : Run config checks g x) (tail : Run config checks x y)
     (genesis : Genesis (config := config) (checks := checks) g)
@@ -4424,6 +4360,13 @@ theorem funding_deposit_run_rate {g x y : ForkedBeaconState preset}
     (high : Nat) (endEpoch : (getCurrentEpoch y.state).toNat ≤ high + 1)
     (events : List (BalanceEvent preset)) (replayed : tail.balanceEvents high = .ok events)
     (rate : Nat → Nat)
+    -- This bounds the churn that the pending deposits of an epoch read by the rate of that epoch.
+    --
+    -- They read it after the six stages before them.
+    --
+    -- That state has the validators and the slot of the epoch's input `a`.
+    --
+    -- The branch reaches `a` by `epoch a ≤ high + 1`.
     (capOk : ∀ {a : ForkedBeaconState preset}, Run config checks x a →
       a.fork < .glamsterdam → (getCurrentEpoch a.state).toNat ≤ high + 1 →
       ∀ (cached reset : BeaconState preset a.fork) churn,

@@ -25,7 +25,9 @@ variable {preset : Preset} {fork : Fork} {config : Config} {checks : SignatureCh
 
 The caller's window reserve and the receiver's exit bound read one reserve value.
 
-The alternatives are a block collision of honest stores and historical direct-safety evidence. -/
+The alternatives are a block collision of honest stores and historical direct-safety evidence.
+
+From Gloas, honest registries must stay within the limit through `time`. -/
 public theorem Execution.isAncestor_getHead_of_historical_anchor_with [DecidablePred (· ∈ J)]
     {Δ : ℕ}
     (sync : e.Synchronous Δ) (slots : 0 < config.SLOT_DURATION_MS)
@@ -33,7 +35,7 @@ public theorem Execution.isAncestor_getHead_of_historical_anchor_with [Decidable
     (minLookahead : 1 ≤ preset.MIN_SEED_LOOKAHEAD.toNat)
     (maxLookahead : 1 ≤ preset.MAX_SEED_LOOKAHEAD.toNat)
     (ring : preset.MIN_SEED_LOOKAHEAD.toNat + 3 < preset.EPOCHS_PER_HISTORICAL_VECTOR.toNat)
-    (preGloas : fork < .glamsterdam) {time : ℕ} (admitted : BlocksAdmitted e 0 Δ time)
+    {time : ℕ} (admitted : BlocksAdmitted e 0 Δ time)
     (half : 2 * config.CONFIRMATION_BYZANTINE_THRESHOLD.toNat ≤ 100)
     (votes : ValidatedDutyVotes (e := e) time) (fits : DelayFits fork config genesisTimeMs Δ)
     (prompt : Prompt e time) (windows : AssignmentWindowAgreement (e := e) time)
@@ -129,11 +131,12 @@ public theorem Execution.isAncestor_getHead_of_historical_anchor_with [Decidable
     (tree : ((e.world k).state w).getFilteredNodeTree config = .ok nodes)
     (route : ((e.world k).state w).isAncestor
         ⟨((e.world k).state w).justifiedCheckpoint.root, .pending⟩ ⟨root, .pending⟩ = .ok true ∨
-      (⟨root, .pending⟩ : ForkChoiceNode) ∈ nodes) :
+      (⟨root, .pending⟩ : ForkChoiceNode) ∈ nodes)
+    (registries : .glamsterdam ≤ fork → HonestRegistriesWithinLimit (e := e) time) :
     (((e.world k).state w).isAncestor receiverHead ⟨root, .pending⟩ = .ok true ∨
       HonestCollision (e := e) time) ∨ HistoricalDirectSafetyEvidence (e := e) pre time := by
   have sourceResult := e.source_surplus_or_historical_evidence_with sync slots positive
-    minLookahead maxLookahead ring preGloas admitted half votes fits prompt windows anchored sound
+    minLookahead maxLookahead ring admitted half votes fits prompt windows anchored sound
     anchorSlot anchorBoundary start caller callerUpToDate headNode slotOk beginOk timeEq blockOk
     parentOk sourceOk boostOk firstOk lastOk beforeOk maximumOk parentParticipantsOk registry
     aligned increment supportOk discountOk adversaryOk margin callerTime sourceReads reserve
@@ -141,12 +144,13 @@ public theorem Execution.isAncestor_getHead_of_historical_anchor_with [Decidable
     rootCovers headDescends historicalBelow callerEpochOk historicalEpochOk near epochStartOk
     epochStartTimeOk historyCovers receiver atTime upToDate known finality receiverHeadOk
     receiverParent stateOk currentOk receiverEpochOk receiverNear receiverLastOk windowOk
-    participantsOk exit absent
+    participantsOk exit absent registries
   have applyHead (headRoute) := ancestor_head_of_window_margin anchored start membership
-    receiver (by rw [atTime]) (UInt64.le_of_eq anchorSlot) preGloas absent receiverHeadOk stateOk
+    receiver (by rw [atTime]) (UInt64.le_of_eq anchorSlot) absent receiverHeadOk stateOk
     tree known caller callerTime (by rw [atTime]; exact callerTime) drift
     (Store.block_ok_iff.mp parentOk) currentOk receiverEpochOk receiverNear firstOk receiverLastOk
     windowOk participantsOk beforeOk headRoute scoreOk
+    (fun gloas w hw k hk => (registries gloas w hw k hk).2)
   rcases sourceResult with justified | surplus | collision | evidence
   · exact .inl (applyHead (.inl justified))
   · rcases route with justified | viable
@@ -156,18 +160,6 @@ public theorem Execution.isAncestor_getHead_of_historical_anchor_with [Decidable
   · exact .inr evidence
 
 /-- A guarded historical margin gives head ancestry, a block collision or direct-safety evidence.
-
-The receiver's head descends from the block at the receiver's time.
-
-The voters below the parent lie in the head's window by the window-membership premise.
-
-This extends the coverage of earlier honest heads, assumed from the call up to that time.
-
-The direct-safety evidence is relative to the anchor, and its drift counts from the anchor.
-
-With enough churn since the anchor, it holds with no accountable key.
-
-The stake ceiling of `2 * 10^17` Gwei is `2 * 10^8` ETH, above mainnet's active stake.
 
 The proof needs only a ceiling below `2^64` Gwei, so that the checked total cannot overflow. -/
 public theorem Execution.isAncestor_getHead_of_historical_anchor [DecidablePred (· ∈ J)] {Δ : ℕ}
@@ -181,6 +173,7 @@ public theorem Execution.isAncestor_getHead_of_historical_anchor [DecidablePred 
     (votes : ValidatedDutyVotes (e := e) time) (fits : DelayFits fork config genesisTimeMs Δ)
     (prompt : Prompt e time) (windows : AssignmentWindowAgreement (e := e) time)
     {n : ℕ} {block : BeaconBlock preset fork}
+    -- The voters below the parent lie in the head's window by the window-membership premise.
     (membership : VotersInHeadWindow (e := e) block.parentRoot (e.world n).time time)
     {anchor : Store preset fork}
     (anchored : getForkchoiceStore config anchorState anchorBlock = .ok anchor)
@@ -226,12 +219,14 @@ public theorem Execution.isAncestor_getHead_of_historical_anchor [DecidablePred 
     (bounded : HonestStoreEpochsBounded (e := e) horizon time)
     (roots : HeldBlockStateRootsNonzero (e := e) time)
     (unslashed : HonestCountedStatesUnslashed (e := e) time)
+    -- The stake ceiling of `2 * 10^17` Gwei is `2 * 10^8` ETH, above mainnet's active stake.
     (ceiling : CheckpointStakeCeiling (e := e) (2 * 10 ^ 17) time)
     (parameters : DirectSafety.Parameters preset) {g : ForkedBeaconState preset}
     (genesis : Genesis config checks g) (pre : Run config checks g ⟨fork, anchorState⟩)
     (heldEarly : HeldStatesBeforeUpgrade (e := e) time)
     (enough : HeldRunStakeFloor (e := e) pre horizon time)
     (terminal : HeldTerminalStakeFloor (e := e) horizon time)
+    -- The result extends the coverage of earlier honest heads, assumed from the call to that time.
     (rootCovers : HonestHeadsCover (e := e) root (e.world n).time time)
     (headDescends : ((e.world n).state u).isAncestor ⟨head, .pending⟩ ⟨root, .pending⟩ = .ok true)
     {historical : Root} {callerEpoch historicalEpoch : Epoch} {epochStart : Slot}
@@ -273,12 +268,17 @@ public theorem Execution.isAncestor_getHead_of_historical_anchor [DecidablePred 
     (route : ((e.world k).state w).isAncestor
         ⟨((e.world k).state w).justifiedCheckpoint.root, .pending⟩ ⟨root, .pending⟩ = .ok true ∨
       (⟨root, .pending⟩ : ForkChoiceNode) ∈ nodes) :
+    -- The receiver's head descends from the block at the receiver's time.
+    --
+    -- The direct-safety evidence is relative to the anchor, and its drift counts from the anchor.
+    --
+    -- With enough churn since the anchor, it holds with no accountable key.
     (((e.world k).state w).isAncestor receiverHead ⟨root, .pending⟩ = .ok true ∨
       ∃ a ∈ J, ∃ b ∈ J, ∃ i j, (e.world i).time ≤ time ∧ (e.world j).time ≤ time ∧
         ∃ r evidence, Store.findBlockCollision ((e.world i).state a) ((e.world j).state b) [r] =
           some evidence) ∨ HistoricalDirectSafetyEvidence (e := e) pre time := by
   exact e.isAncestor_getHead_of_historical_anchor_with sync slots positive minLookahead
-    maxLookahead ring preGloas admitted half votes fits prompt windows membership anchored sound
+    maxLookahead ring admitted half votes fits prompt windows membership anchored sound
     anchorSlot anchorBoundary start caller callerUpToDate headNode slotOk beginOk timeEq blockOk
     parentOk sourceOk boostOk firstOk lastOk beforeOk maximumOk parentParticipantsOk registry
     aligned increment supportOk discountOk adversaryOk margin callerTime sourceReads drift reserve
@@ -287,5 +287,6 @@ public theorem Execution.isAncestor_getHead_of_historical_anchor [DecidablePred 
     epochStartTimeOk historyCovers receiver atTime upToDate known finality receiverHeadOk
     receiverParent stateOk currentOk receiverEpochOk receiverNear receiverLastOk windowOk scoreOk
     participantsOk exit absent tree route
+    (fun gloas => absurd gloas (Nat.not_le_of_lt preGloas))
 
 end EthLib.Consensus.Models.Network

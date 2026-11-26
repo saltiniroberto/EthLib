@@ -8,13 +8,7 @@ public import Mathlib.Data.List.Induction
 
 Properties of the exchange rules of discv4.
 
-- A node sends Neighbors or an ENRResponse only to an address that is proven at that time.
-- A proof comes only from a Pong with the hash of the node's most recent Ping to that address.
-- So along any run, such an answer follows a matching Pong from the address in the last 12 hours.
-- An expired packet changes nothing and gets no answer.
-- A Pong with another hash changes nothing.
-- The Pong for a Ping carries its hash, so it proves the endpoint to the node that sent the Ping.
-- Receiving a packet changes only what the node remembers of its sender.
+Along a run, a node answers with Neighbors or an ENRResponse only after a matching Pong.
 -/
 
 @[expose] public section
@@ -34,6 +28,31 @@ theorem type_of_mem_neighborsPackets {expiration : Nat} :
       · rfl
       · exact type_of_mem_neighborsPackets (nodes.drop MAX_NEIGHBORS) rest
 termination_by nodes => nodes.length
+decreasing_by simp_all only [List.length_drop, MAX_NEIGHBORS]; omega
+
+/-- The Neighbors packets carry the nodes in order, at most twelve to a packet, with the expiration.
+
+Packet `i`, counting from 0, carries the nodes from position `12 * i`, at most twelve of them.
+
+There are `(n + 11) / 12` packets for `n` nodes, and one packet with no nodes for none. -/
+theorem neighborsPackets_eq (expiration : Nat) (nodes : List Node) :
+    neighborsPackets expiration nodes =
+      (List.range (max 1 ((nodes.length + 11) / 12))).map
+        fun i => .neighbors ((nodes.drop (12 * i)).take 12) expiration := by
+  unfold neighborsPackets
+  split
+  · rename_i short
+    simp only [MAX_NEIGHBORS] at short
+    rw [show max 1 ((nodes.length + 11) / 12) = 1 by omega]
+    simp [List.take_of_length_le short]
+  · rename_i long
+    simp only [MAX_NEIGHBORS] at long ⊢
+    rw [neighborsPackets_eq expiration (nodes.drop 12),
+      show max 1 ((nodes.length + 11) / 12) = max 1 (((nodes.drop 12).length + 11) / 12) + 1 by
+        simp only [List.length_drop]; omega,
+      List.range_succ_eq_map]
+    simp [List.drop_drop, Nat.mul_succ, Nat.add_comm]
+termination_by nodes.length
 decreasing_by simp_all only [List.length_drop, MAX_NEIGHBORS]; omega
 
 /-- A node sends Neighbors or an ENRResponse only to an address that is proven at that time.

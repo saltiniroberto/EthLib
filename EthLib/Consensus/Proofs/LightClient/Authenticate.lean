@@ -10,29 +10,9 @@ public import EthLib.Consensus.Proofs.SignatureChecks
 
 An update carries a header that the sync committee signed, the attested header.
 
-Its finality branch proves a finalized root against the state root of that header.
-
-At the genesis slot, the finality check holds the finalized header to the empty header.
-
-Its committee branch proves the next sync committee against the same state root.
-
-A branch binds its leaf: take any value whose root is that state root.
-
-Then the proved root is the root of the value's node at the index of the branch.
-
-Otherwise the two climbs to the state root hash two different messages to one SHA-256 output.
-
-In the state of the attested block, the two nodes are its finalized root and its next committee.
-
-A new store trusts a block.
-
-Its committee, which the bootstrap proves, is the current committee of the state of that block.
+Its branches prove a finalized root and a next committee against the state root of that header.
 
 The signature needs an assumption: an aggregate verifies only if every signer signed the message.
-
-The assumption covers only the one aggregate check that the client makes on the update.
-
-Under it, every member whose bit is set signed the signing root of the attested header.
 
 No signature scheme meets it with certainty.
 
@@ -56,15 +36,14 @@ theorem isValidNormalizedMerkleBranch_value {α : Type} [SszType α] [LawfulSszT
     {leaf node root : Bytes32} {branch : List Bytes32} {gindex : Nat} (named : 2 ≤ gindex)
     (valid : isValidNormalizedMerkleBranch leaf branch gindex root = .ok true) (value : α)
     (rooted : SszType.hashTreeRoot value = .ok root)
-    (read : nodeRoot (SszType.desc α) (SszType.toValue value) gindex = .ok node.toArray) :
+    (read : nodeRoot (SszType.desc α) (SszType.toValue value) gindex = .ok ⟨node.toArray⟩) :
     leaf = node ∨ ∃ honest a b, computeMerkleProof value gindex = .ok honest ∧
-      findBranchCollision gindex 0 leaf.toArray node.toArray
-          ((branch.drop (branch.length - Nat.log2 gindex)).map Vector.toArray)
-          ((honest.drop (honest.length - Nat.log2 gindex)).map Vector.toArray) =
+      findBranchCollision gindex 0 ⟨leaf.toArray⟩ ⟨node.toArray⟩
+          ((branch.drop (branch.length - Nat.log2 gindex)).map fun node => ⟨node.toArray⟩)
+          ((honest.drop (honest.length - Nat.log2 gindex)).map fun node => ⟨node.toArray⟩) =
         some (a, b) ∧
       a.size = 64 ∧ b.size = 64 ∧ a ≠ b ∧
-      Cryptography.Hash.Sha256.hash (ByteArray.mk a) =
-        Cryptography.Hash.Sha256.hash (ByteArray.mk b) := by
+      Cryptography.Hash.Sha256.hash a = Cryptography.Hash.Sha256.hash b := by
   obtain ⟨valueRoot, honest, valueRooted, built, honestValid⟩ :=
     computeMerkleProof_isValidNormalizedMerkleBranch value named read
   obtain rfl : valueRoot = root := Except.ok.inj (valueRooted.symm.trans rooted)
@@ -85,7 +64,7 @@ theorem validateFinality_proves {config : Config} {update : LightClientUpdate pr
     (finality : update.isFinalityUpdate = true) :
     ∃ gindex leaf, finalizedRootGindexAtSlot (preset := preset) (fork := fork) config
         update.attestedHeader.beacon.slot = .ok gindex ∧
-      (update.finalizedHeader.beacon.slot = GENESIS_SLOT ∧ leaf = zeroBytes32 ∨
+      (update.finalizedHeader.beacon.slot = GENESIS_SLOT ∧ leaf = ZERO_HASH ∨
         update.finalizedHeader.beacon.slot ≠ GENESIS_SLOT ∧
           SszType.hashTreeRoot update.finalizedHeader.beacon = .ok leaf) ∧
       isValidNormalizedMerkleBranch leaf update.finalityBranch.toList gindex
@@ -219,28 +198,27 @@ theorem initializeLightClientStore_proves {config : Config} {trustedBlockRoot : 
   exact ⟨LightClientError.liftRoot_ok.mp headerRooted, rfl, gindex, leaf, indexed,
     LightClientError.liftRoot_ok.mp leafRooted, LightClientError.liftRoot_ok.mp checked⟩
 
-/-- What an accepted update proves, before any assumption on the signature.
-
-At least the minimum of bits of the aggregate are set.
-
-The signature check accepts the keys of those members on the signing root of the attested header.
-
-The finality check passes, and so does the branch of a next committee that the update carries.
-
-An update without a committee branch carries the zero committee. -/
+/-- What an accepted update proves, before any assumption on the signature. -/
 theorem validateLightClientUpdate_proves {config : Config} {checks : SignatureChecks}
     {store : LightClientStore preset fork} {update : LightClientUpdate preset fork}
     {currentSlot : Slot} {genesisValidatorsRoot : Root}
     (accepted : validateLightClientUpdate config checks store update currentSlot
       genesisValidatorsRoot = .ok ()) :
+    -- At least the minimum of bits of the aggregate are set.
     preset.MIN_SYNC_COMMITTEE_PARTICIPANTS.toNat ≤ update.syncAggregate.participants ∧
+      -- The finality check passes.
       validateFinality config update = .ok () ∧
+      -- So does the branch of a next committee that the update carries.
       (update.isSyncCommitteeUpdate = true →
         validateNextSyncCommitteeBranch config update = .ok ()) ∧
+      -- An update without a committee branch carries the zero committee.
       (update.isSyncCommitteeUpdate = false →
         update.nextSyncCommittee = SyncCommittee.empty preset) ∧
       ∃ signingRoot, syncCommitteeSigningRoot config update genesisValidatorsRoot =
           .ok signingRoot ∧
+        -- The signature check accepts the keys of the members whose bits are set.
+        --
+        -- It accepts them on the signing root of the attested header.
         checks.fastAggregateVerify
           ((store.signatureCommittee update).participantKeys update.syncAggregate)
           (packBytes signingRoot) update.syncAggregate.syncCommitteeSignature =
@@ -251,36 +229,33 @@ theorem validateLightClientUpdate_proves {config : Config} {checks : SignatureCh
 
 /-- The finalized root of an accepted update is a node of the attested state.
 
-Take any value whose root is the attested state root, such as the beacon state of that block.
-
-Its node at the index of the finality branch is the leaf that the update proves.
-
-Otherwise the search over the two climbs names a SHA-256 collision.
-
-The leaf is the root of the finalized beacon header, or zero at the genesis slot. -/
+Otherwise the search over the two climbs names a SHA-256 collision. -/
 theorem validateLightClientUpdate_finalized {config : Config} {checks : SignatureChecks}
     {store : LightClientStore preset fork} {update : LightClientUpdate preset fork}
     {currentSlot : Slot} {genesisValidatorsRoot : Root}
     (accepted : validateLightClientUpdate config checks store update currentSlot
       genesisValidatorsRoot = .ok ())
     (finality : update.isFinalityUpdate = true) {α : Type} [SszType α] [LawfulSszType α]
+    -- Take any value whose root is the attested state root, such as the beacon state of that block.
     (state : α) (rooted : SszType.hashTreeRoot state = .ok update.attestedHeader.beacon.stateRoot) :
     ∃ gindex leaf, finalizedRootGindexAtSlot (preset := preset) (fork := fork) config
         update.attestedHeader.beacon.slot = .ok gindex ∧
-      (update.finalizedHeader.beacon.slot = GENESIS_SLOT ∧ leaf = zeroBytes32 ∨
+      -- The leaf is the root of the finalized beacon header, or zero at the genesis slot.
+      (update.finalizedHeader.beacon.slot = GENESIS_SLOT ∧ leaf = ZERO_HASH ∨
         update.finalizedHeader.beacon.slot ≠ GENESIS_SLOT ∧
           SszType.hashTreeRoot update.finalizedHeader.beacon = .ok leaf) ∧
       ∀ node : Bytes32,
-        nodeRoot (SszType.desc α) (SszType.toValue state) gindex = .ok node.toArray →
+        nodeRoot (SszType.desc α) (SszType.toValue state) gindex = .ok ⟨node.toArray⟩ →
+      -- The node of the value at the index of the finality branch is the proved leaf.
       leaf = node ∨ ∃ honest a b, computeMerkleProof state gindex = .ok honest ∧
-        findBranchCollision gindex 0 leaf.toArray node.toArray
+        findBranchCollision gindex 0 ⟨leaf.toArray⟩ ⟨node.toArray⟩
             ((update.finalityBranch.toList.drop
-              (update.finalityBranch.toList.length - Nat.log2 gindex)).map Vector.toArray)
-            ((honest.drop (honest.length - Nat.log2 gindex)).map Vector.toArray) =
+              (update.finalityBranch.toList.length - Nat.log2 gindex)).map
+                fun node => ⟨node.toArray⟩)
+            ((honest.drop (honest.length - Nat.log2 gindex)).map fun node => ⟨node.toArray⟩) =
           some (a, b) ∧
         a.size = 64 ∧ b.size = 64 ∧ a ≠ b ∧
-        Cryptography.Hash.Sha256.hash (ByteArray.mk a) =
-          Cryptography.Hash.Sha256.hash (ByteArray.mk b) := by
+        Cryptography.Hash.Sha256.hash a = Cryptography.Hash.Sha256.hash b := by
   obtain ⟨gindex, leaf, indexed, named, valid⟩ :=
     validateFinality_proves (validateLightClientUpdate_proves accepted).2.1 finality
   exact ⟨gindex, leaf, indexed, named, fun node read =>
@@ -289,34 +264,31 @@ theorem validateLightClientUpdate_finalized {config : Config} {checks : Signatur
 
 /-- The next committee root of an accepted update is a node of the attested state.
 
-This holds for an update that carries a committee branch.
-
-Take any value whose root is the attested state root, such as the beacon state of that block.
-
-Its node at the index of the committee branch is the root of the committee of the update.
-
 Otherwise the search over the two climbs names a SHA-256 collision. -/
 theorem validateLightClientUpdate_nextSyncCommittee {config : Config}
     {checks : SignatureChecks} {store : LightClientStore preset fork}
     {update : LightClientUpdate preset fork} {currentSlot : Slot} {genesisValidatorsRoot : Root}
     (accepted : validateLightClientUpdate config checks store update currentSlot
       genesisValidatorsRoot = .ok ())
+    -- This holds for an update that carries a committee branch.
     (committee : update.isSyncCommitteeUpdate = true) {α : Type} [SszType α] [LawfulSszType α]
+    -- Take any value whose root is the attested state root, such as the beacon state of that block.
     (state : α) (rooted : SszType.hashTreeRoot state = .ok update.attestedHeader.beacon.stateRoot) :
     ∃ gindex leaf, nextSyncCommitteeGindexAtSlot (preset := preset) (fork := fork) config
         update.attestedHeader.beacon.slot = .ok gindex ∧
       SszType.hashTreeRoot update.nextSyncCommittee = .ok leaf ∧
       ∀ node : Bytes32,
-        nodeRoot (SszType.desc α) (SszType.toValue state) gindex = .ok node.toArray →
+        nodeRoot (SszType.desc α) (SszType.toValue state) gindex = .ok ⟨node.toArray⟩ →
+      -- The node of the value at the index of the committee branch is the update's committee root.
       leaf = node ∨ ∃ honest a b, computeMerkleProof state gindex = .ok honest ∧
-        findBranchCollision gindex 0 leaf.toArray node.toArray
+        findBranchCollision gindex 0 ⟨leaf.toArray⟩ ⟨node.toArray⟩
             ((update.nextSyncCommitteeBranch.toList.drop
-              (update.nextSyncCommitteeBranch.toList.length - Nat.log2 gindex)).map Vector.toArray)
-            ((honest.drop (honest.length - Nat.log2 gindex)).map Vector.toArray) =
+              (update.nextSyncCommitteeBranch.toList.length - Nat.log2 gindex)).map
+                fun node => ⟨node.toArray⟩)
+            ((honest.drop (honest.length - Nat.log2 gindex)).map fun node => ⟨node.toArray⟩) =
           some (a, b) ∧
         a.size = 64 ∧ b.size = 64 ∧ a ≠ b ∧
-        Cryptography.Hash.Sha256.hash (ByteArray.mk a) =
-          Cryptography.Hash.Sha256.hash (ByteArray.mk b) := by
+        Cryptography.Hash.Sha256.hash a = Cryptography.Hash.Sha256.hash b := by
   obtain ⟨gindex, leaf, indexed, committeeRoot, valid⟩ :=
     validateNextSyncCommitteeBranch_proves
       ((validateLightClientUpdate_proves accepted).2.2.1 committee)
@@ -326,20 +298,17 @@ theorem validateLightClientUpdate_nextSyncCommittee {config : Config}
 
 /-- The client reads each light client node at the index of the fork that the schedule gives.
 
-Take a slot whose fork in the schedule is from Altair, and a store of that fork or later.
-
-The finalized root and the two committees then sit at the indices of the fork of the slot.
-
-So from Electra the client reads the deeper indices of Electra, and from Gloas those of Gloas.
-
-The schedule must start Electra no later than Fulu, and Gloas no later than Heze.
-
 This gives the index hypothesis of the theorems below for a state of the fork of the slot. -/
 theorem stateForkAtSlot_gindices {config : Config} {slot : Slot} {stateFork : Fork}
+    -- Take a slot whose fork in the schedule is from Altair, and a store of that fork or later.
     (altair : .altair ≤ stateFork) (later : stateFork ≤ fork)
     (scheduled : config.forkAtEpoch (computeEpochAtSlot preset slot) = stateFork)
+    -- The schedule must start Electra no later than Fulu, and Gloas no later than Heze.
     (electraFulu : config.ELECTRA_FORK_EPOCH ≤ config.FULU_FORK_EPOCH)
     (gloasHeze : config.GLOAS_FORK_EPOCH ≤ config.HEZE_FORK_EPOCH) :
+    -- The finalized root and the two committees then sit at the indices of the fork of the slot.
+    --
+    -- So from Electra the client reads the deeper Electra indices, and from Gloas those of Gloas.
     finalizedRootGindexAtSlot (preset := preset) (fork := fork) config slot =
         .ok (finalizedRootGindex stateFork) ∧
       currentSyncCommitteeGindexAtSlot (preset := preset) (fork := fork) config slot =
@@ -371,39 +340,36 @@ theorem stateForkAtSlot_gindices {config : Config} {slot : Slot} {stateFork : Fo
 
 /-- The finalized root of an accepted update is the finalized root of the attested beacon state.
 
-Take a beacon state of a fork from Altair whose root is the attested state root.
-
-At the attested slot, the client must read the finalized root at the index of that fork.
-
-The proved root is the root of the finalized beacon header, or zero at the genesis slot.
-
-It is the root in the finalized checkpoint of the state, or the search names a SHA-256 collision. -/
+Otherwise the search names a SHA-256 collision. -/
 theorem validateLightClientUpdate_finalizedCheckpoint {config : Config}
     {checks : SignatureChecks} {store : LightClientStore preset fork}
     {update : LightClientUpdate preset fork} {currentSlot : Slot} {genesisValidatorsRoot : Root}
     (accepted : validateLightClientUpdate config checks store update currentSlot
       genesisValidatorsRoot = .ok ())
     (finality : update.isFinalityUpdate = true) {stateFork : Fork}
+    -- Take a beacon state of a fork from Altair whose root is the attested state root.
     [LawfulSszType (BeaconState preset stateFork)] (altair : .altair ≤ stateFork)
     (state : BeaconState preset stateFork)
     (rooted : SszType.hashTreeRoot state = .ok update.attestedHeader.beacon.stateRoot)
+    -- At the attested slot, the client must read the finalized root at the index of that fork.
     (layout : finalizedRootGindexAtSlot (preset := preset) (fork := fork) config
       update.attestedHeader.beacon.slot = .ok (finalizedRootGindex stateFork)) :
     ∃ leaf node,
-      (update.finalizedHeader.beacon.slot = GENESIS_SLOT ∧ leaf = zeroBytes32 ∨
+      -- The proved root is the root of the finalized beacon header, or zero at the genesis slot.
+      (update.finalizedHeader.beacon.slot = GENESIS_SLOT ∧ leaf = ZERO_HASH ∨
         update.finalizedHeader.beacon.slot ≠ GENESIS_SLOT ∧
           SszType.hashTreeRoot update.finalizedHeader.beacon = .ok leaf) ∧
+      -- It is the root in the finalized checkpoint of the state.
       SszType.hashTreeRoot state.finalizedCheckpoint.root = .ok node ∧
       (leaf = node ∨ ∃ honest a b,
         computeMerkleProof state (finalizedRootGindex stateFork) = .ok honest ∧
-        findBranchCollision (finalizedRootGindex stateFork) 0 leaf.toArray node.toArray
+        findBranchCollision (finalizedRootGindex stateFork) 0 ⟨leaf.toArray⟩ ⟨node.toArray⟩
             ((update.finalityBranch.toList.drop (update.finalityBranch.toList.length -
-              Nat.log2 (finalizedRootGindex stateFork))).map Vector.toArray)
+              Nat.log2 (finalizedRootGindex stateFork))).map fun node => ⟨node.toArray⟩)
             ((honest.drop (honest.length - Nat.log2 (finalizedRootGindex stateFork))).map
-              Vector.toArray) = some (a, b) ∧
+              fun node => ⟨node.toArray⟩) = some (a, b) ∧
         a.size = 64 ∧ b.size = 64 ∧ a ≠ b ∧
-        Cryptography.Hash.Sha256.hash (ByteArray.mk a) =
-          Cryptography.Hash.Sha256.hash (ByteArray.mk b)) := by
+        Cryptography.Hash.Sha256.hash a = Cryptography.Hash.Sha256.hash b) := by
   obtain ⟨gindex, leaf, indexed, named, bound⟩ :=
     validateLightClientUpdate_finalized accepted finality state rooted
   rw [layout, Except.ok.injEq] at indexed
@@ -414,39 +380,34 @@ theorem validateLightClientUpdate_finalizedCheckpoint {config : Config}
 
 /-- The committee of an accepted update is the next sync committee of the attested beacon state.
 
-This holds for an update that carries a committee branch.
-
-Take a beacon state of a fork from Altair whose root is the attested state root.
-
-At the attested slot, the client must read the committee at the index of that fork.
-
-The root of the committee of the update is the root of the next committee of the state.
-
 Otherwise the search names a SHA-256 collision. -/
 theorem validateLightClientUpdate_nextSyncCommittee_state {config : Config}
     {checks : SignatureChecks} {store : LightClientStore preset fork}
     {update : LightClientUpdate preset fork} {currentSlot : Slot} {genesisValidatorsRoot : Root}
     (accepted : validateLightClientUpdate config checks store update currentSlot
       genesisValidatorsRoot = .ok ())
+    -- This holds for an update that carries a committee branch.
     (committee : update.isSyncCommitteeUpdate = true) {stateFork : Fork}
     [LawfulSszType (BeaconState preset stateFork)] [NeZero preset.SYNC_COMMITTEE_SIZE.toNat]
+    -- Take a beacon state of a fork from Altair whose root is the attested state root.
     (altair : .altair ≤ stateFork) (state : BeaconState preset stateFork)
     (rooted : SszType.hashTreeRoot state = .ok update.attestedHeader.beacon.stateRoot)
+    -- At the attested slot, the client must read the committee at the index of that fork.
     (layout : nextSyncCommitteeGindexAtSlot (preset := preset) (fork := fork) config
       update.attestedHeader.beacon.slot = .ok (nextSyncCommitteeGindex stateFork)) :
     ∃ leaf node, SszType.hashTreeRoot update.nextSyncCommittee = .ok leaf ∧
       SszType.hashTreeRoot (state.nextSyncCommittee altair) = .ok node ∧
+      -- The root of the committee of the update is the root of the next committee of the state.
       (leaf = node ∨ ∃ honest a b,
         computeMerkleProof state (nextSyncCommitteeGindex stateFork) = .ok honest ∧
-        findBranchCollision (nextSyncCommitteeGindex stateFork) 0 leaf.toArray node.toArray
+        findBranchCollision (nextSyncCommitteeGindex stateFork) 0 ⟨leaf.toArray⟩ ⟨node.toArray⟩
             ((update.nextSyncCommitteeBranch.toList.drop
               (update.nextSyncCommitteeBranch.toList.length -
-                Nat.log2 (nextSyncCommitteeGindex stateFork))).map Vector.toArray)
+                Nat.log2 (nextSyncCommitteeGindex stateFork))).map fun node => ⟨node.toArray⟩)
             ((honest.drop (honest.length - Nat.log2 (nextSyncCommitteeGindex stateFork))).map
-              Vector.toArray) = some (a, b) ∧
+              fun node => ⟨node.toArray⟩) = some (a, b) ∧
         a.size = 64 ∧ b.size = 64 ∧ a ≠ b ∧
-        Cryptography.Hash.Sha256.hash (ByteArray.mk a) =
-          Cryptography.Hash.Sha256.hash (ByteArray.mk b)) := by
+        Cryptography.Hash.Sha256.hash a = Cryptography.Hash.Sha256.hash b) := by
   obtain ⟨gindex, leaf, indexed, committeeRooted, bound⟩ :=
     validateLightClientUpdate_nextSyncCommittee accepted committee state rooted
   rw [layout, Except.ok.injEq] at indexed
@@ -457,38 +418,34 @@ theorem validateLightClientUpdate_nextSyncCommittee_state {config : Config}
 
 /-- The committee of a new store is the current sync committee of the trusted beacon state.
 
-Take a beacon state of a fork from Altair whose root is the state root of the bootstrap header.
-
-At the slot of that header, the client must read the committee at the index of that fork.
-
-The root of the committee of the store is the root of the current committee of the state.
-
-The branch of the bootstrap proves it.
-
 Otherwise the search names a SHA-256 collision. -/
 theorem initializeLightClientStore_currentSyncCommittee {config : Config}
     {trustedBlockRoot : Root} {bootstrap : LightClientBootstrap preset fork}
     {store : LightClientStore preset fork}
     (computed : initializeLightClientStore config trustedBlockRoot bootstrap = .ok store)
     {stateFork : Fork} [LawfulSszType (BeaconState preset stateFork)]
+    -- Take a beacon state of a fork from Altair whose root is the bootstrap header's state root.
     [NeZero preset.SYNC_COMMITTEE_SIZE.toNat] (altair : .altair ≤ stateFork)
     (state : BeaconState preset stateFork)
     (rooted : SszType.hashTreeRoot state = .ok bootstrap.header.beacon.stateRoot)
+    -- At the slot of that header, the client must read the committee at the index of that fork.
     (layout : currentSyncCommitteeGindexAtSlot (preset := preset) (fork := fork) config
       bootstrap.header.beacon.slot = .ok (currentSyncCommitteeGindex stateFork)) :
     ∃ leaf node, SszType.hashTreeRoot store.currentSyncCommittee = .ok leaf ∧
       SszType.hashTreeRoot (state.currentSyncCommittee altair) = .ok node ∧
+      -- The root of the committee of the store is the root of the current committee of the state.
+      --
+      -- The branch of the bootstrap proves it.
       (leaf = node ∨ ∃ honest a b,
         computeMerkleProof state (currentSyncCommitteeGindex stateFork) = .ok honest ∧
-        findBranchCollision (currentSyncCommitteeGindex stateFork) 0 leaf.toArray node.toArray
+        findBranchCollision (currentSyncCommitteeGindex stateFork) 0 ⟨leaf.toArray⟩ ⟨node.toArray⟩
             ((bootstrap.currentSyncCommitteeBranch.toList.drop
               (bootstrap.currentSyncCommitteeBranch.toList.length -
-                Nat.log2 (currentSyncCommitteeGindex stateFork))).map Vector.toArray)
+                Nat.log2 (currentSyncCommitteeGindex stateFork))).map fun node => ⟨node.toArray⟩)
             ((honest.drop (honest.length - Nat.log2 (currentSyncCommitteeGindex stateFork))).map
-              Vector.toArray) = some (a, b) ∧
+              fun node => ⟨node.toArray⟩) = some (a, b) ∧
         a.size = 64 ∧ b.size = 64 ∧ a ≠ b ∧
-        Cryptography.Hash.Sha256.hash (ByteArray.mk a) =
-          Cryptography.Hash.Sha256.hash (ByteArray.mk b)) := by
+        Cryptography.Hash.Sha256.hash a = Cryptography.Hash.Sha256.hash b) := by
   obtain ⟨_, kept, gindex, leaf, indexed, leafRooted, valid⟩ :=
     initializeLightClientStore_proves computed
   rw [kept]
@@ -567,6 +524,7 @@ theorem validateLightClientUpdate_signed {config : Config} {checks : SignatureCh
         .ok signingRoot ∧
       preset.MIN_SYNC_COMMITTEE_PARTICIPANTS.toNat ≤
         ((store.signatureCommittee update).participantKeys update.syncAggregate).size ∧
+      -- Every member whose bit is set signed the signing root of the attested header.
       ∀ key ∈ (store.signatureCommittee update).participantKeys update.syncAggregate,
         signed key (packBytes signingRoot) := by
   obtain ⟨participants, -, -, -, signingRoot, rooted, verified⟩ :=
@@ -576,13 +534,8 @@ theorem validateLightClientUpdate_signed {config : Config} {checks : SignatureCh
 
 /-- An accepted update was signed by a member outside any set that holds fewer committee seats.
 
-Take a set of keys, such as those that may sign anything.
-
-Suppose it holds fewer seats of the signing committee than there are signers.
-
 Under the assumption on the aggregate call of the update, a signer outside the set signed the root.
-
-That root is the signing root of the attested header. -/
+-/
 theorem validateLightClientUpdate_signed_outside {config : Config} {checks : SignatureChecks}
     {store : LightClientStore preset fork} {update : LightClientUpdate preset fork}
     {currentSlot : Slot} {genesisValidatorsRoot : Root}
@@ -591,9 +544,12 @@ theorem validateLightClientUpdate_signed_outside {config : Config} {checks : Sig
     {signed : Cryptography.Bls.BLSPubkey → ByteArray → Prop}
     (sound : checks.AggregateSoundOn
       (updateSignatureCall config store update genesisValidatorsRoot) signed)
+    -- Take a set of keys, such as those that may sign anything.
     (excluded : Cryptography.Bls.BLSPubkey → Bool)
+    -- Suppose it holds fewer seats of the signing committee than there are signers.
     (few : (store.signatureCommittee update).pubkeys.toList.countP excluded <
       update.syncAggregate.participants) :
+    -- The signed root is the signing root of the attested header.
     ∃ signingRoot, syncCommitteeSigningRoot config update genesisValidatorsRoot =
         .ok signingRoot ∧
       ∃ key ∈ (store.signatureCommittee update).participantKeys update.syncAggregate,

@@ -5,7 +5,7 @@ public import EthLib.Execution.Proofs.Rpc.Account
 public import EthLib.Execution.Proofs.Rpc.Base
 public import EthLib.Execution.Proofs.Rpc.View
 public import EthLib.Execution.Proofs.State.AccountProofOfState
-import EthLib.Base.Proofs.BigEndian
+import EthLib.Base.Proofs.ByteOrder
 import ToMathlib.Data.ByteArray
 import EthLib.Base.Proofs.Toolchain.JsonBasic
 
@@ -14,19 +14,11 @@ import EthLib.Base.Proofs.Toolchain.JsonBasic
 
 The answer agrees with the account queries at the same block.
 
-Its balance and nonce are those of the balance and nonce queries.
-
-It echoes the address and the keys, and the words of an account are those of the storage query.
-
-An address with no account gets zero hashes, and each slot the word zero and no proof node.
-
 At a canonical block of a valid view, the answer passes the check.
 
 The check is against the state root of the header.
 
 The reader of answers reads back what the writer writes, for a nonce below `2^64`.
-
-Each key written as a number must also be below `16^63`.
 -/
 
 public section
@@ -62,18 +54,16 @@ private theorem toDigits_length_le {k : Nat} (hk : 0 < k) (n : Nat) (hn : n < 16
 
 /-- The reader of slots reads back the key that the writer writes as a quantity. -/
 theorem bytesMax32_quantityJson (what : String) (key : Bytes32) :
-    bytesMax32 what (quantityJson (bytesToNat key.toList)) = .ok key := by
-  have hv := natToBytes_bytesToNat key.toList
-  simp only [Vector.length_toList] at hv
-  have hlt : bytesToNat key.toList < 16 ^ 64 := by
-    have := bytesToNat_natToBytes 32 (bytesToNat key.toList)
-    rw [hv] at this
-    have h2 := Nat.mod_lt (bytesToNat key.toList) (by decide : 0 < 256 ^ 32)
-    rw [← this] at h2
+    bytesMax32 what (quantityJson (ByteOrder.ofBE key.toList)) = .ok key := by
+  have hv : (ByteOrder.toBE 32 (ByteOrder.ofBE key.toList)).toList = key.toList :=
+    ByteOrder.toList_toBE_ofBE_of_length (by simp)
+  have hlt : ByteOrder.ofBE key.toList < 16 ^ 64 := by
+    have h2 := ByteOrder.ofBE_lt key.toList
+    rw [Vector.length_toList] at h2
     exact lt_of_lt_of_eq h2 (by decide)
-  obtain ⟨hall, hval, -⟩ := toDigits_hex (bytesToNat key.toList)
+  obtain ⟨hall, hval, -⟩ := toDigits_hex (ByteOrder.ofBE key.toList)
   simp only [digitValue] at hval
-  have hascii : ∀ c ∈ Nat.toDigits 16 (bytesToNat key.toList), c.val ≤ 0x7F := by
+  have hascii : ∀ c ∈ Nat.toDigits 16 (ByteOrder.ofBE key.toList), c.val ≤ 0x7F := by
     intro c hc
     obtain ⟨d, hd, rfl⟩ := hall c hc
     exact (hexValue_digitChar d hd).2
@@ -82,11 +72,11 @@ theorem bytesMax32_quantityJson (what : String) (key : Bytes32) :
   rw [hexDigits_ascii _ _ hascii]
   simp only [bind, Except.bind]
   have hsize : (List.map (fun c => c.val.toUInt8)
-      (Nat.toDigits 16 (bytesToNat key.toList))).toByteArray.size ≤ 64 := by simpa using hlen
+      (Nat.toDigits 16 (ByteOrder.ofBE key.toList))).toByteArray.size ≤ 64 := by simpa using hlen
   rw [ite_eq_right (by omega), forIn_eq_forIn_toList]
   have hdata : (List.map (fun c => c.val.toUInt8)
-      (Nat.toDigits 16 (bytesToNat key.toList))).toByteArray.data.toList =
-      List.map (fun c => c.val.toUInt8) (Nat.toDigits 16 (bytesToNat key.toList)) := by simp
+      (Nat.toDigits 16 (ByteOrder.ofBE key.toList))).toByteArray.data.toList =
+      List.map (fun c => c.val.toUInt8) (Nat.toDigits 16 (ByteOrder.ofBE key.toList)) := by simp
   rw [hdata, forIn_hex, hval]
   · simp only [pure, Except.pure, Except.ok.injEq]
     exact Vector.toList_inj.mp hv
@@ -110,7 +100,7 @@ private theorem hexDigits_quantityJson (what : String) (n : Nat) :
 
 A key written as a number must be below `16^63`, so that it has at most 63 hex digits. -/
 theorem answerKey_storageKeyJson (what : String) {key : StorageKey}
-    (h : key.asBytes = true ∨ bytesToNat key.slot.toList < 16 ^ 63) :
+    (h : key.asBytes = true ∨ ByteOrder.ofBE key.slot.toList < 16 ^ 63) :
     answerKey what (storageKeyJson key) = .ok key := by
   obtain ⟨slot, asBytes⟩ := key
   unfold answerKey storageKeyJson
@@ -125,8 +115,8 @@ theorem answerKey_storageKeyJson (what : String) {key : StorageKey}
     -- Written as a number below `16^63`, the key has at most 63 digits, and reads as a quantity.
     simp only [Bool.false_eq_true, false_or, ↓reduceIte] at h ⊢
     have hlen := toDigits_length_le (by decide : 0 < 63) _ h
-    have hbits : bytesToNat slot.toList < 2 ^ 256 := Nat.lt_of_lt_of_le h (by decide)
-    have hsize : ¬(((Nat.toDigits 16 (bytesToNat slot.toList)).map
+    have hbits : ByteOrder.ofBE slot.toList < 2 ^ 256 := Nat.lt_of_lt_of_le h (by decide)
+    have hsize : ¬(((Nat.toDigits 16 (ByteOrder.ofBE slot.toList)).map
         fun c => c.val.toUInt8).toByteArray.size = 64) := by
       simp only [List.size_toByteArray, List.length_map]
       omega
@@ -162,7 +152,7 @@ private theorem proofNodes_proofNodesJson (what : String) (nodes : List ByteArra
 
 /-- The reader of one slot of an answer reads back what the writer writes. -/
 private theorem storageProofOfJson_storageProofJson {s : StorageProof}
-    (hkey : s.key.asBytes = true ∨ bytesToNat s.key.slot.toList < 16 ^ 63) :
+    (hkey : s.key.asBytes = true ∨ ByteOrder.ofBE s.key.slot.toList < 16 ^ 63) :
     storageProofOfJson (storageProofJson s) = .ok s := by
   obtain ⟨fs, hfs, hl⟩ := lookup_fields_mkObj "slot" (pairs := [
     ("key", storageKeyJson s.key), ("value", quantityJson s.value.toNat),
@@ -185,7 +175,7 @@ private theorem storageProofOfJson_storageProofJson {s : StorageProof}
 
 /-- The reader of the slots of an answer reads back the slots that the writer writes. -/
 private theorem array_storageProofOfJson (what : String) {l : List StorageProof}
-    (hkeys : ∀ s ∈ l, s.key.asBytes = true ∨ bytesToNat s.key.slot.toList < 16 ^ 63) :
+    (hkeys : ∀ s ∈ l, s.key.asBytes = true ∨ ByteOrder.ofBE s.key.slot.toList < 16 ^ 63) :
     array what storageProofOfJson (listJson storageProofJson l) = .ok l := by
   rw [array_listJson]
   induction l with
@@ -201,7 +191,7 @@ private theorem array_storageProofOfJson (what : String) {l : List StorageProof}
 Each key written as a number must also be below `16^63`. -/
 theorem accountProofOfJson_accountProofJson {p : AccountProof} (hnonce : p.nonce < 2 ^ 64)
     (hkeys : ∀ s ∈ p.storageProof,
-      s.key.asBytes = true ∨ bytesToNat s.key.slot.toList < 16 ^ 63) :
+      s.key.asBytes = true ∨ ByteOrder.ofBE s.key.slot.toList < 16 ^ 63) :
     accountProofOfJson (accountProofJson p) = .ok p := by
   obtain ⟨fs, hfs, hl⟩ := lookup_fields_mkObj "answer" (pairs := [
     ("address", dataJson p.address.toList), ("accountProof", proofNodesJson p.accountProof),
@@ -299,20 +289,18 @@ private theorem accountProof_eq_ok {v : ChainView} {a : Address} {keys : List St
   | error e => rw [hx] at hf; cases hf
   | ok x => rw [hx] at hf; exact congrArg Except.ok (Except.ok.inj hf)
 
-/-- When the proof query answers, it agrees with the account queries of the same block.
-
-Its balance and nonce are the answers of the balance and nonce queries.
-
-It echoes the address and the keys, in order.
-
-The block resolves, and when its state has the account, the words come from the storage query.
-
-They are the answers of the one-key storage query, in order. -/
+/-- When the proof query answers, it agrees with the account queries of the same block. -/
 theorem accountProof_agree {v : ChainView} {a : Address} {keys : List StorageKey}
     {p : BlockParam} {answer : AccountProof} (h : v.accountProof a keys p = .ok answer) :
+    -- Its balance and nonce are the answers of the balance and nonce queries.
     v.balance a p = .ok answer.balance ∧ v.nonce a p = .ok answer.nonce ∧
+      -- It echoes the address and the keys, in order.
       answer.address = a ∧ answer.storageProof.map (·.key) = keys ∧
+      -- The block resolves.
+      --
+      -- When its state has the account, the words come from the storage query.
       ∃ r, v.resolve p = .ok (some r) ∧ (r.state.accounts[a]?.isSome = true →
+        -- They are the answers of the one-key storage query, in order.
         keys.mapM (fun key => v.storageAt a key.slot p) =
           .ok (answer.storageProof.map (·.value))) := by
   obtain ⟨r, hr, hp⟩ := accountProof_eq_ok h

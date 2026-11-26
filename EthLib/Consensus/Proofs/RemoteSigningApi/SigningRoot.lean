@@ -16,24 +16,6 @@ public import EthLib.Base.Proofs.Except
 The domain that the fork info of a request gives is the domain of a state with that fork info.
 
 So under the fork info of a state, a request has the root that its duty signs in that state.
-
-The header of a block has the root of the block.
-
-So a signer that sees only the header signs the root of the proposer's block.
-
-A registration and a deposit get the root that their checks verify.
-
-A voluntary exit gets the root that its check verifies, under a hypothesis on its fork version.
-
-A bid, a payload attestation and a Builder API authentication get the roots of their duties.
-
-An envelope does too when the epoch of its payload's slot takes the fork version of the state.
-
-Proposer preferences do when the fork info gives the configured version of the proposal epoch.
-
-The domain of each request starts with the domain type of its kind.
-
-Only three pairs of kinds share a domain type.
 -/
 
 @[expose] public section
@@ -268,24 +250,30 @@ theorem voluntaryExitDomain_of_requestSigningRoot {body : VoluntaryExit}
 
 /-! ## The kinds that Gloas adds -/
 
-/-- The root of a bid is the root of the builder's bid signature, in the epoch of its slot. -/
-theorem getExecutionPayloadBidSignature_eq_of_requestSigningRoot
-    {state : BeaconState preset .glamsterdam} {body : ExecutionPayloadBid preset .glamsterdam}
-    (forked : signing.forkInfo = .ofState state)
+/-- The root of a bid is the root of the builder's bid signature, on the chain of a state.
+
+The builder signs at the fork version that the schedule gives the epoch of the bid.
+
+So the fork info must give that version at that epoch, on the chain of the state. -/
+theorem getExecutionPayloadBidSignature_eq_of_requestSigningRoot {signerFork : Fork}
+    {state : BeaconState preset signerFork} {body : ExecutionPayloadBid preset .glamsterdam}
+    (chain : signing.forkInfo.genesisValidatorsRoot = state.genesisValidatorsRoot)
+    (version : signing.forkInfo.fork.versionAt (computeEpochAtSlot preset body.slot) =
+      config.computeForkVersion (computeEpochAtSlot preset body.slot))
     (rooted : requestSigningRoot config (.executionPayloadBid signing body) = .ok root) :
     getExecutionPayloadBidSignature config state body key =
       (Signatures.sign key (packBytes root)).mapError .bls := by
   unfold requestSigningRoot at rooted
   obtain ⟨domain, domained, rooted⟩ := bind_ok_iff.mp rooted
-  simp only [requestDomain, SigningRequest.type, RequestType.domainType, forked] at domained
+  simp only [requestDomain, SigningRequest.type, RequestType.domainType, forkInfoDomain, version,
+    chain] at domained
   simp only at rooted
-  have built : builderSigningRoot config state body (some (computeEpochAtSlot preset body.slot)) =
-      .ok root := by
-    simp [builderSigningRoot, liftAccessor, liftSsz, getDomain_eq_forkInfoDomain, domained,
-      rooted, bind, Except.bind, Except.mapError]
+  have built : executionPayloadBidSigningRoot config state body = .ok root := by
+    simp [executionPayloadBidSigningRoot, domained, rooted, bind, Except.bind]
   -- Rewrite the root before the signing call, so the kernel never evaluates the call.
   unfold getExecutionPayloadBidSignature
-  rw [built, mapError_ok_bind]
+  rw [built]
+  exact mapError_ok_bind _ _ _
 
 /-- The root of an envelope is the root of the builder's envelope signature.
 
@@ -313,10 +301,10 @@ theorem getExecutionPayloadEnvelopeSignature_eq_of_requestSigningRoot
       (some (computeEpochAtSlot preset state.slot)) = .ok domain := by
     rw [getDomain_eq_forkInfoDomain]
     simp [forkInfoDomain, ForkInfo.ofState, Except.mapError, domained]
-  have built : builderSigningRoot config state body (some (computeEpochAtSlot preset state.slot)) =
-      .ok root := by
-    simp [builderSigningRoot, liftAccessor, liftSsz, current, rooted, bind, Except.bind,
-      Except.mapError]
+  have built : builderSigningRoot config state body = .ok root := by
+    simp [builderSigningRoot, liftAccessor, liftSsz,
+      show getDomain config state DOMAIN_BEACON_BUILDER = .ok domain from current, rooted, bind,
+      Except.bind, Except.mapError]
   -- Rewrite the root before the signing call, so the kernel never evaluates the call.
   unfold getExecutionPayloadEnvelopeSignature
   rw [built, mapError_ok_bind]

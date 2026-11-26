@@ -3,6 +3,7 @@ module
 public import EthLib.Base.Hash32
 public import EthLib.Execution.Trie.HexPrefix
 public import EthLib.Serialization.Rlp.Encode
+public import Std.Data.TreeMap.Basic
 
 /-!
 # `Trie.Root`
@@ -15,31 +16,6 @@ Source: `TRIE` in Appendix D of the Yellow Paper, Shanghai version, in `Paper.te
 <https://github.com/ethereum/yellowpaper/blob/efc5f9a1f356cba376c978eedb63cb0363c2aa85/Paper.tex>.
 
 Every fork since Frontier uses this trie.
-
-The trie reads each key as a path of nibbles, and it has three kinds of node:
-
-- A leaf holds the rest of one key's path and that key's value.
-- An extension holds a run of nibbles that every path below it shares, then one child.
-- A branch holds 16 children, one for each next nibble.
-  It also holds the value of a key whose path ends there.
-
-A parent holds a child by its RLP structure when the child's encoding has fewer than 32 bytes.
-
-Otherwise the parent holds the hash of the child's encoding.
-
-The root is always the hash of the root node's encoding.
-
-So the empty map has a fixed root, the hash of `0x80`.
-
-`0x80` is the RLP encoding of the empty byte string.
-
-Ethereum hashes with Keccak-256.
-
-The hash is an argument here, and it may answer inside a monad.
-
-The specification is the identity monad with a plain hash.
-
-So a random-oracle model can run the same definitions with a hash that queries an oracle.
 -/
 
 @[expose] public section
@@ -49,7 +25,9 @@ namespace EthLib.Execution.Trie
 open EthLib.Base
 open EthLib.Serialization.Rlp
 
-/-- A leaf, an extension or a branch, with its children already encoded. -/
+/-- A leaf, an extension or a branch, with its children already encoded.
+
+The trie reads each key as a path of nibbles, and these are its three kinds of node. -/
 inductive InternalNode where
   /-- A leaf: the nibbles of the key that the nodes above leave, and its value. -/
   | leaf (restOfKey : List Nibble) (value : ByteArray)
@@ -135,17 +113,16 @@ def commonPrefixLength : List Nibble → List Nibble → Nat
 
 `obj` lists the full path of each key with its value.
 
-The first `level` nibbles of every path are already consumed.
-
-- With no key, there is no node.
-- With one key, the node is a leaf.
-- When every path shares a run of nibbles after `level`, the node is an extension.
-- Otherwise the node is a branch, with one child for each next nibble. -/
+The first `level` nibbles of every path are already consumed. -/
 def patricializeStepM {m : Type → Type} [Monad m] (hash : ByteArray → m Hash32)
     (recurse : List (List Nibble × ByteArray) → Nat → ExceptT RlpError m (Option InternalNode)) :
     List (List Nibble × ByteArray) → Nat → ExceptT RlpError m (Option InternalNode)
+  -- With no key, there is no node.
+  --
   -- No key: no node, held by a parent as `n(∅, i) = ()`, and so `TRIE(∅) = KEC(RLP(()))`.
   | [], _ => pure none
+  -- With one key, the node is a leaf.
+  --
   -- `||𝔍|| = 1`: a leaf with the rest of the one path, and its value.
   | [(key, value)], level => pure (some (.leaf (key.drop level) value))
   | obj@((arbitraryKey, _) :: _ :: _), level => do
@@ -154,11 +131,13 @@ def patricializeStepM {m : Type → Type} [Monad m] (hash : ByteArray → m Hash
     let prefixLength :=
       obj.foldl (fun length (key, _) => min length (commonPrefixLength substring (key.drop level)))
         substring.length
+    -- When every path shares a run of nibbles after `level`, the node is an extension.
+    --
     -- `i ≠ j`, since `j - i > 0`: an extension consumes the run, and holds `n(𝔍, j)`.
     if 0 < prefixLength then
       let subnode ← encodeInternalNodeM hash (← recurse obj (level + prefixLength))
       return some (.extension (substring.take prefixLength) subnode)
-    -- Otherwise a branch.
+    -- Otherwise the node is a branch, with one child for each next nibble.
     else
       -- `v = I_1` for the key with `||I_0|| = i`, or `()` when no key ends here.
       let value :=
@@ -179,19 +158,18 @@ def patricializeStep (hash : ByteArray → Hash32)
 
 /-- The node composition, with a budget of `fuel` levels of nested calls.
 
-# Why fuel
-
-The kernel cannot unfold well-founded recursion, so it could not evaluate a concrete root.
-
-This definition recurses on a budget instead.
-
-When the budget runs out, a nested call gives no node.
-
-Each level of nested calls on two keys or more consumes more nibbles of the paths.
-
-So a budget of one more than the longest path never runs out, as the proofs show. -/
+When the budget runs out, a nested call gives no node. -/
 def patricializeAuxM {m : Type → Type} [Monad m] (hash : ByteArray → m Hash32) :
     Nat → List (List Nibble × ByteArray) → Nat → ExceptT RlpError m (Option InternalNode)
+  -- Why fuel: the kernel cannot unfold well-founded recursion.
+  --
+  -- So it could not evaluate a concrete root.
+  --
+  -- This definition recurses on a budget instead.
+  --
+  -- Each level of nested calls on two keys or more consumes more nibbles of the paths.
+  --
+  -- So a budget of one more than the longest path never runs out, as the proofs show.
   | 0 => patricializeStepM hash fun _ _ => pure none
   | fuel + 1 => patricializeStepM hash (patricializeAuxM hash fuel)
 
@@ -219,27 +197,59 @@ def patricialize (hash : ByteArray → Hash32) (obj : List (List Nibble × ByteA
 
 It records whether each key is hashed before it becomes a path.
 
-It lists the keys and their values, in the order they were first set. -/
+It lists the keys and their values, in the order they were last added. -/
 structure Trie where
   /-- Whether each key is hashed before it becomes a path. -/
   secured : Bool
-  /-- The keys and their values, in the order they were first set. -/
+  /-- The keys and their values, in the order they were last added. -/
   data : List (ByteArray × ByteArray)
 
 /-- Whether two byte strings are equal, compared byte by byte in place. -/
 def sameBytes (a b : ByteArray) : Bool :=
   a.data == b.data
 
-/-- Set `key` to `value`, or remove `key` when `value` is the empty byte string.
+/-- Set one pair in a log of keys and a table from each key to its place in the log and its value.
+-/
+def setPairStep (state : Array ByteArray × Std.TreeMap ByteArray (Nat × ByteArray))
+    (pair : ByteArray × ByteArray) : Array ByteArray × Std.TreeMap ByteArray (Nat × ByteArray) :=
+  let (log, table) := state
+  let (key, value) := pair
+  -- An empty value removes its key.
+  if value.size = 0 then (log, table.erase key)
+  else match table[key]? with
+    -- A key already set keeps its place, with the new value.
+    | some (place, _) => (log, table.insert key (place, value))
+    -- A new key goes last.
+    --
+    -- Its place is read before the push, so the push updates the log in place.
+    | none =>
+      let place := log.size
+      (log.push key, table.insert key (place, value))
 
-A key already present keeps its place, and a new key goes last. -/
-def trieSet (trie : Trie) (key value : ByteArray) : Trie :=
-  if value.size = 0 then
-    { trie with data := trie.data.filter fun (k, _) => !sameBytes k key }
-  else if trie.data.any fun (k, _) => sameBytes k key then
-    { trie with data := trie.data.map fun (k, v) => if sameBytes k key then (k, value) else (k, v) }
-  else
-    { trie with data := trie.data ++ [(key, value)] }
+/-- The keys of a log with their values in a table, at the places that the table gives them. -/
+def logEntries (log : Array ByteArray) (table : Std.TreeMap ByteArray (Nat × ByteArray)) :
+    List (ByteArray × ByteArray) :=
+  -- A place of the log holds its key's value when the table still puts the key there.
+  --
+  -- A key removed and set again is in the log twice, and only its last place holds its value.
+  log.toList.zipIdx.filterMap fun (key, place) =>
+    match table[key]? with
+    | some (p, value) => if p = place then some (key, value) else none
+    | none => none
+
+/-- The entries of a trie that sets the pairs in order from no entries. -/
+def setPairs (pairs : List (ByteArray × ByteArray)) : List (ByteArray × ByteArray) :=
+  -- An empty value removes its key, a key already set keeps its place, and a new key goes last.
+  --
+  -- So a key set again after its removal goes last.
+  --
+  -- The table is a search tree of the keys, in byte order.
+  --
+  -- So each pair costs a count of comparisons logarithmic in the count of keys.
+  --
+  -- A search of the entries would walk them all.
+  let (log, table) := pairs.foldl setPairStep (#[], ∅)
+  logEntries log table
 
 /-- The value of `key`, or the empty byte string when `key` is not set. -/
 def trieGet (trie : Trie) (key : ByteArray) : ByteArray :=
@@ -275,7 +285,11 @@ def prepareData (hash : ByteArray → Hash32) (data : List (ByteArray × ByteArr
     Except TrieError (List (List Nibble × ByteArray)) :=
   (prepareDataM (m := Id) hash data secured).run
 
-/-- `TRIE` of the Yellow Paper: the hash of the encoding of the root node, whatever its size. -/
+/-- `TRIE` of the Yellow Paper: the hash of the encoding of the root node, whatever its size.
+
+The hash is an argument, and it may answer inside a monad.
+
+So a random-oracle model can run the same definitions with a hash that queries an oracle. -/
 def rootM {m : Type → Type} [Monad m] (hash : ByteArray → m Hash32) (trie : Trie) :
     ExceptT TrieError m Hash32 := do
   -- `y(𝔍)`: each key as a path of nibbles, after `KEC` in a secured trie.
@@ -283,10 +297,16 @@ def rootM {m : Type → Type} [Monad m] (hash : ByteArray → m Hash32) (trie : 
   -- `c(𝔍, 0)`.
   let rootNode ← (patricializeM hash obj 0).adapt .rlp
   -- `TRIE(𝔍) = KEC(RLP(c(𝔍, 0)))`, whatever the size of the encoding.
+  --
+  -- So the empty map has a fixed root, the hash of `0x80`.
+  --
+  -- `0x80` is the RLP encoding of the empty byte string.
   let encoded ← ((encode (unencoded rootNode)).mapError .rlp : Except TrieError ByteArray)
   ExceptT.lift (hash encoded)
 
-/-- `TRIE` of the Yellow Paper, with a plain hash: Keccak-256 in Ethereum. -/
+/-- `TRIE` of the Yellow Paper, with a plain hash: Keccak-256 in Ethereum.
+
+The specification is the monadic form in the identity monad, with a plain hash. -/
 def root (hash : ByteArray → Hash32) (trie : Trie) : Except TrieError Hash32 :=
   (rootM (m := Id) hash trie).run
 

@@ -8,8 +8,6 @@ public import EthLib.Serialization.Ssz.Typed.Class
 
 Booleans, the unsigned integers and fixed byte vectors, as their Lean types.
 
-An integer type holds exactly the range of its SSZ type, so no value is truncated.
-
 Each type roots as its untyped value, by the SSZ rule of a basic type or a byte vector.
 
 The rules are stated in EthLib's own terms, one step per comment.
@@ -21,43 +19,33 @@ namespace EthLib.Serialization.Ssz
 
 namespace SszType
 
-/--
-An unsigned integer of a byte width, read back as a typed value.
-
-A number outside the width names no value, so it is refused rather than wrapped.
--/
+/-- An unsigned integer of a byte width, read back as a typed value. -/
 def ofUint {α : Type} (width : Nat) (make : Nat → α) : Value → Except Err α
   -- uintN, with `N = 8 * width`, holds the integers `0 <= n < 2^N`, and no other.
+  --
+  -- An integer type holds exactly the range of its SSZ type, so no value is truncated.
+  --
+  -- A number outside the width names no value, so it is refused rather than wrapped.
   | .uint n =>
     if uintFits width n then .ok (make n) else .error (.uintRange (2 ^ (8 * width)) n)
   | _ => .error .typeMismatch
 
-/--
-An unsigned integer of a byte width, read straight from its bytes.
-
-The bytes must be exactly the width, as the untyped decoder asks.
--/
+/-- An unsigned integer of a byte width, read straight from its bytes. -/
 def decodeUint {α : Type} (width : Nat) (make : Nat → α) (data : ByteArray) : Except Err α :=
   -- uintN: exactly `N / 8` bytes, read little-endian as the sum of `b_i * 256^i`.
+  --
+  -- The bytes must be exactly the width, as the untyped decoder asks.
   if data.size != width then .error (.scope width data.size)
-  else .ok (make (readUintBytes data 0 width))
+  else .ok (make (readUint data 0 width))
 
-/-- The bytes so far, then the `width` little-endian bytes of `n`, its lowest byte first. -/
-def pushUintBytes : (width n : Nat) → ByteArray → ByteArray
-  | 0, _, out => out
-  -- Byte `i` of the little-endian encoding is `floor(n / 256^i) mod 256`.
-  | width + 1, n, out => pushUintBytes width (n / 256) (out.push (UInt8.ofNat n))
-
-/--
-The `width` little-endian bytes of `n`, written straight into a byte array.
-
-A number past the width loses its high bytes.
-
-A typed value always fits its width, so its bytes are those of the untyped encoder.
--/
+/-- The `width` little-endian bytes of `n`, as the untyped encoder writes them. -/
 def encodeUint (width n : Nat) : Except Err ByteArray :=
-  -- uintN: `N / 8` bytes, little-endian, written into an array sized once.
-  .ok (pushUintBytes width n (ByteArray.emptyWithCapacity width))
+  -- uintN: `N / 8` bytes, little-endian.
+  --
+  -- A number past the width loses its high bytes.
+  --
+  -- A typed value always fits its width, so its bytes are those of the untyped encoder.
+  .ok (uintBytes width n)
 
 end SszType
 
@@ -132,10 +120,10 @@ It takes precedence over a vector of `uint8` elements, which encodes and roots a
 -/
 instance (priority := high) {n : Nat} : SszType (Vector UInt8 n) where
   desc := .byteVector n
-  toValue v := .bytes v.toArray
+  toValue v := .bytes ⟨v.toArray⟩
   ofValue
     -- ByteVector[N]: exactly `N` bytes.
-    | .bytes data => Base.exactArray n data (.count n)
+    | .bytes data => Base.exactBytes n data (.count n)
     | _ => .error .typeMismatch
   -- ByteVector[N] serializes to its `N` bytes as they are.
   --
@@ -144,5 +132,18 @@ instance (priority := high) {n : Nat} : SszType (Vector UInt8 n) where
   -- So a length `N >= 2^32` is refused.
   encode v :=
     if n ≥ 2 ^ (8 * bytesPerOffset) then .error (.offsetOverflow n) else .ok ⟨v.toArray⟩
+
+/-- The SSZ type of a structure around one value: the SSZ type of that value.
+
+It encodes, decodes and roots as the value inside. -/
+@[instance_reducible]
+def SszType.wrapper {α β : Type} [SszType β] (mk : β → α) (get : α → β) : SszType α where
+  desc := desc β
+  toValue a := toValue (get a)
+  ofValue value := mk <$> ofValue (α := β) value
+  -- The fast paths of the value inside are kept.
+  root a := root (get a)
+  encode a := encode (get a)
+  decode data := mk <$> decode (α := β) data
 
 end EthLib.Serialization.Ssz

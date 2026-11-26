@@ -21,13 +21,16 @@ def Rewrites (shape : Desc) : Prop :=
 
 /-- One byte on the front of a run gives one value on the front of the elements. -/
 theorem byteElements_cons (byte : UInt8) (data : Bytes) :
-    byteElements (#[byte] ++ data) = .uint byte.toNat :: byteElements data := by
-  simp [byteElements]
+    byteElements (⟨#[byte]⟩ ++ data) = .uint byte.toNat :: byteElements data := by
+  simp [byteElements, ByteArray.data_append]
 
 /-- A run of one-byte values is recovered from the bytes it wrote. -/
 theorem byteElements_byteRun : ∀ (values : List Value) (data : Bytes),
     byteRun values = .ok data → byteElements data = values
-  | [], data, wrote => by simp_all [byteRun_nil, byteElements]
+  | [], data, wrote => by
+    simp only [byteRun_nil, Except.ok.injEq] at wrote
+    subst wrote
+    rfl
   | .uint n :: rest, data, wrote => by
     -- A small value writes one byte, and that byte reads back as the same value.
     cases run : byteRun rest <;> by_cases wide : 256 ≤ n <;>
@@ -80,16 +83,6 @@ theorem zip_pairwise {α β : Type} (right : List β) :
       refine List.Pairwise.cons ?_ (zip_pairwise others rest distinct.2)
       intro pair member same
       exact distinct.1 ((show a = pair.1 from same) ▸ (List.of_mem_zip member).1)
-
-/-- A declaration that reported no repeated name has none. -/
-theorem nodup_of_firstDuplicate {α : Type} [BEq α] [LawfulBEq α] :
-    ∀ (items : List α), firstDuplicate items = none → items.Nodup
-  | [], _ => by simp
-  | item :: rest, none? => by
-    rw [firstDuplicate] at none?
-    split at none?
-    · contradiction
-    · next fresh => exact List.nodup_cons.mpr ⟨by simpa using fresh, nodup_of_firstDuplicate rest none?⟩
 
 /-- The part written under one name is read back under that name. -/
 theorem getObjVal?_zip {names : List String} {parts : List Json} (distinct : names.Nodup)
@@ -407,7 +400,7 @@ theorem valueOf_jsonOf : ∀ (shape : Desc), shape.wellFormed = .ok () → Rewri
           reduceCtorEq] at wrote
       subst wrote
       obtain ⟨undeclared, read⟩ := valueOf_struct (ih (wellFormed_container sound))
-        (nodup_of_firstDuplicate names once) counted paired each parts
+        once counted paired each parts
       rw [Base.Toolchain.Json.mkObj_eq, valueOf]
       simp only [Base.Toolchain.Json.mkObj_eq] at undeclared read
       simp only [undeclared, read, Bind.bind, Except.bind]
@@ -423,7 +416,7 @@ theorem valueOf_jsonOf : ∀ (shape : Desc), shape.wellFormed = .ok () → Rewri
           reduceCtorEq] at wrote
       subst wrote
       obtain ⟨undeclared, read⟩ := valueOf_struct (ih (wellFormed_progressiveContainer sound))
-        (nodup_of_firstDuplicate names once) counted paired each parts
+        once counted paired each parts
       rw [Base.Toolchain.Json.mkObj_eq, valueOf]
       simp only [Base.Toolchain.Json.mkObj_eq] at undeclared read
       simp only [undeclared, read, Bind.bind, Except.bind]

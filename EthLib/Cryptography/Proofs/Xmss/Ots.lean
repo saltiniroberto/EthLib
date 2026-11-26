@@ -17,8 +17,6 @@ Keccak-256 is one such function, so the theorems cover the specification as it r
 A variable `f` also keeps every proof from unfolding the hash on a concrete input.
 
 The theorems also hold for every source of derived values.
-
-With the derivations from `S`, chain starts and randomizer bases are the note's hashes of `S`.
 -/
 
 @[expose] public section
@@ -27,7 +25,7 @@ namespace EthLib.Cryptography.Xmss
 
 open EthLib.Cryptography.Xmss.Constants
 
-variable {f : Array UInt64 → Lanes4} {pp : PublicParam} {layer : Layer} {e : UInt32}
+variable {f : Array UInt64 → Lanes4} {publicParam : PublicParam} {layer : Layer} {e : UInt32}
   {i : Fin V}
   {start s₁ s₂ : Nat} {value : Digest}
 
@@ -36,9 +34,9 @@ variable {f : Array UInt64 → Lanes4} {pp : PublicParam} {layer : Layer} {e : U
 /-- The randomizer of trial `c` is the little-endian bytes of `R_0 + c` modulo `2^128`. -/
 theorem trialRandomizer_eq (base : Randomizer) (c : Nat) :
     (trialRandomizer base c).bytes =
-      uintToBytes RANDOMIZER_LEN ((bytesToUint base.bytes + c) % 2 ^ 128) := by
-  rw [Hash.Keccak.Lanes2.bytes_eq_uintToBytes, toNat_trialRandomizer,
-    Hash.Keccak.Lanes2.bytesToUint_bytes]
+      Base.ByteOrder.toLE RANDOMIZER_LEN ((Base.ByteOrder.ofLE base.bytes + c) % 2 ^ 128) := by
+  rw [Hash.Keccak.Lanes2.bytes_eq_toLE, toNat_trialRandomizer,
+    Hash.Keccak.Lanes2.ofLE_bytes]
   rfl
 
 /-- The search tests trial `c` on the digest of its randomizer `rho_c`, in any monad.
@@ -47,49 +45,114 @@ It builds `P | A_msg(l, e) | M` once, and each trial hashes those lanes followed
 
 That is the input of the digest of `rho_c`, so the trials make the same hash calls. -/
 theorem Internal.findCodeword_eq {m : Type → Type} [Monad m] (H : Array UInt64 → m Lanes4)
-    (pp : PublicParam) (layer : Layer) (e : UInt32) (msg : Array UInt64) (base : Randomizer)
+    (publicParam : PublicParam) (layer : Layer) (e : UInt32)
+      (msg : Array UInt64) (base : Randomizer)
     (c fuel : Nat) :
-    Internal.findCodeword H pp layer e msg base c fuel =
+    Internal.findCodeword H publicParam layer e msg base c fuel =
       Wots.findFirst (trialRandomizer base)
-        (fun rho => codeword? <$> messageDigest H pp layer e msg rho) c fuel := by
+        (fun rho => codeword? <$> messageDigest H publicParam layer e msg rho) c fuel := by
   simp only [Internal.findCodeword, hashTrials, messageDigest, th, thInput,
     Array.append_assoc]
 
 /-- The one-time signer with the trials of `H` is the one-time signer over `H`. -/
 theorem Internal.otsSignTrials_hashTrials {m : Type → Type} [Monad m]
-    (H : Array UInt64 → m Lanes4) (pp : PublicParam) (prf : SeedPrf m) (layer : Layer)
+    (H : Array UInt64 → m Lanes4) (publicParam : PublicParam) (prf : SeedPrf m) (layer : Layer)
     (e : UInt32) (msg : Array UInt64) :
-    Internal.otsSignTrials H pp prf layer e msg (hashTrials H) = otsSign H pp prf layer e msg :=
+    Internal.otsSignTrials H publicParam prf layer e msg
+      (hashTrials H) = otsSign H publicParam prf layer e msg :=
   rfl
 
-/-! ## Derivations from the seed -/
+/-! ## Chain starts -/
+
+/-- Chain `i` starts at half `i mod 2` of derivation `floor(i / 2)`. -/
+theorem getElem_cast_flatMap_halves (pairs : Vector Lanes4 (V / 2)) (h : V / 2 * 2 = V)
+    (i : Nat) (hi : i < V) :
+    ((pairs.flatMap fun p => #v[halfOf 0 p, halfOf 1 p]).cast h)[i] =
+      halfOf ⟨i % 2, Nat.mod_lt _ (by decide)⟩
+        (pairs[i / 2]'(by simp only [V] at *; omega)) := by
+  simp only [Vector.getElem_cast, Vector.getElem_flatMap]
+  rcases Nat.mod_two_eq_zero_or_one i with h2 | h2 <;> simp [h2]
+
+/-! ## Derivations from the seed
+
+With the derivations from `S`, chain starts and randomizer bases are the note's hashes of `S`.
+-/
 
 section SeedPrf
 
 variable {m : Type → Type} [Monad m] (H : Array UInt64 → m Lanes4) (s : Seed)
 
 /-- With the seed's derivations, the chain starts hash `P | A_prf(l, e, j) | S`. -/
-theorem chainStarts_seedPrf (pp : PublicParam) (layer : Layer) (e : UInt32) :
-    chainStarts pp (seedPrf H s) layer e = (do
-      let pairs ← ofFnInOrder (V / 2) fun j => H (thInput pp (addrPrf layer e j) s.toArray)
-      return Vector.ofFn fun i =>
-        halfOf ⟨i.val % 2, Nat.mod_lt _ (by decide)⟩
-          (pairs[i.val / 2]'(by have := i.isLt; simp only [V] at *; omega))) := by
+theorem chainStarts_seedPrf (publicParam : PublicParam) (layer : Layer) (e : UInt32) :
+    chainStarts publicParam (seedPrf H s) layer e = (do
+      let pairs ← ofFnInOrder (V / 2) fun j =>
+        H (thInput publicParam (Address.prf layer e j) s.toArray)
+      return (pairs.flatMap fun p => #v[halfOf 0 p, halfOf 1 p]).cast (by decide)) := by
   simp only [chainStarts, seedPrf_empty]
 
 /-- With the seed's derivations, the randomizer base is `Th(P, A_rnd(l, e), S | M)`. -/
-theorem randomizerBase_seedPrf (pp : PublicParam) (layer : Layer) (e : UInt32)
+theorem randomizerBase_seedPrf (publicParam : PublicParam) (layer : Layer) (e : UInt32)
     (msg : Array UInt64) :
-    randomizerBase pp (seedPrf H s) layer e msg = th H pp (addrRnd layer e) (s.toArray ++ msg) :=
+    randomizerBase publicParam (seedPrf H s) layer e msg
+      = th H publicParam (Address.rnd layer e) (s.toArray ++ msg) :=
   rfl
 
 end SeedPrf
+
+/-! ## Each call is one tweakable hash
+
+Each hash call of a one-time key is `Th(P, A, M)` at its address, with its payload. -/
+
+section Calls
+
+variable {m : Type → Type} [Monad m] (H : Array UInt64 → m Lanes4)
+
+/-- A step of chain `i` from position `mu` hashes the value, then `LE_128(i)`, at `A_chain`. -/
+theorem chainStep_eq_th (publicParam : PublicParam) (layer : Layer) (e : UInt32) (i : Fin V)
+    (mu : Fin (CHAIN_LENGTH - 1)) (value : Digest) :
+    chainStep H publicParam layer e i mu value
+      = th H publicParam (.chain layer e mu)
+          (value.toArray ++ (⟨i.val.toUInt64, 0⟩ : Lanes2).toArray) :=
+  rfl
+
+/-- A key's leaf hashes the 58 chain ends, in chain order, at `A_leaf`. -/
+theorem otsLeafHash_eq_th (publicParam : PublicParam) (layer : Layer) (e : UInt32)
+    (ends : Vector Digest V) :
+    otsLeafHash H publicParam layer e ends
+      = th H publicParam (.leaf layer e) (digestLanes ends) :=
+  rfl
+
+/-- The signed digest hashes the message, then the randomizer, at `A_msg`. -/
+theorem messageDigest_eq_th (publicParam : PublicParam) (layer : Layer) (e : UInt32)
+    (msg : Array UInt64) (rho : Randomizer) :
+    messageDigest H publicParam layer e msg rho
+      = th H publicParam (.msg layer e) (msg ++ rho.toArray) :=
+  rfl
+
+end Calls
 
 /-! ## Chains -/
 
 /-- Walking no steps leaves the value alone. -/
 @[simp] theorem chain_zero (h : start + 0 < CHAIN_LENGTH) :
-    (chain (pureHash f) pp layer e i start 0 h value).run = value := rfl
+    (chain (pureHash f) publicParam layer e i start 0 h value).run = value := rfl
+
+/-- A walk of `s + 1` steps is a walk of `s` steps, then the step from position `start + s`. -/
+theorem chain_succ {m : Type → Type} [Monad m] (H : Array UInt64 → m Lanes4) {s : Nat}
+    (h : start + (s + 1) < CHAIN_LENGTH) :
+    chain H publicParam layer e i start (s + 1) h value = (do
+      let previous ← chain H publicParam layer e i start s (by omega) value
+      chainStep H publicParam layer e i ⟨start + s, by simp only [CHAIN_LENGTH] at *; omega⟩
+        previous) :=
+  rfl
+
+/-- With a pure hash, a walk of `s + 1` steps is the step from `start`, then a walk of `s` steps. -/
+theorem chain_succ_run {s : Nat} (h : start + (s + 1) < CHAIN_LENGTH) :
+    (chain (pureHash f) publicParam layer e i start (s + 1) h value).run
+      = (chain (pureHash f) publicParam layer e i (start + 1) s (by omega)
+          (chainStep (pureHash f) publicParam layer e i
+            ⟨start, by simp only [CHAIN_LENGTH] at *; omega⟩ value).run).run :=
+  Wots.chain_succ_run _ start s _ value
 
 /-! ## An honest signature leads to the key's leaf -/
 
@@ -101,15 +164,15 @@ end SeedPrf
 
 That loop runs up to `2^32` trials. -/
 theorem otsSign_run {prf : SeedPrf Id} {msg : Array UInt64} :
-    (otsSign (pureHash f) pp prf layer e msg).run =
-      ((Internal.findCodeword (pureHash f) pp layer e msg
-          (randomizerBase pp prf layer e msg).run 0 MAX_RANDOMIZER_TRIALS).run).map
-        fun found => (found.1, Vector.ofFn fun i => (chain (pureHash f) pp layer e i 0
+    (otsSign (pureHash f) publicParam prf layer e msg).run =
+      ((Internal.findCodeword (pureHash f) publicParam layer e msg
+          (randomizerBase publicParam prf layer e msg).run 0 MAX_RANDOMIZER_TRIALS).run).map
+        fun found => (found.1, Vector.ofFn fun i => (chain (pureHash f) publicParam layer e i 0
           (found.2[i]).val (by have := (found.2[i]).isLt; omega)
-          (chainStarts pp prf layer e).run[i]).run) := by
+          (chainStarts publicParam prf layer e).run[i]).run) := by
   rw [otsSign, Internal.otsSignTrials, Id.run_bind, Id.run_bind]
-  cases (Internal.findCodeword (pureHash f) pp layer e msg
-      (randomizerBase pp prf layer e msg).run 0 MAX_RANDOMIZER_TRIALS).run with
+  cases (Internal.findCodeword (pureHash f) publicParam layer e msg
+      (randomizerBase publicParam prf layer e msg).run 0 MAX_RANDOMIZER_TRIALS).run with
   | none => rfl
   | some found =>
     obtain ⟨rho, x⟩ := found
@@ -124,9 +187,9 @@ The verifier walks each revealed value from position `x_i` to 3.
 The signer walked it from 0 to `x_i`, so together they walk the whole chain. -/
 theorem otsLeaf_otsSign {prf : SeedPrf Id} {msg : Array UInt64} {rho : Randomizer}
     {y : Vector Digest V}
-    (h : (otsSign (pureHash f) pp prf layer e msg).run = some (rho, y)) :
-    (otsLeaf (pureHash f) pp layer e msg rho y).run
-      = some (otsPublicLeaf (pureHash f) pp prf layer e).run := by
+    (h : (otsSign (pureHash f) publicParam prf layer e msg).run = some (rho, y)) :
+    (otsLeaf (pureHash f) publicParam layer e msg rho y).run
+      = some (otsPublicLeaf (pureHash f) publicParam prf layer e).run := by
   -- Name the grinding result: a randomizer and its codeword.
   rw [otsSign_run, Option.map_eq_some_iff] at h
   obtain ⟨⟨rho', x⟩, hfind, hxy⟩ := h
@@ -134,17 +197,19 @@ theorem otsLeaf_otsSign {prf : SeedPrf Id} {msg : Array UInt64} {rho : Randomize
   rw [Internal.findCodeword_eq] at hfind
   obtain ⟨-, -, -, -, hcw, -⟩ := Wots.findFirst_spec hfind
   unfold Id.run at hcw
-  replace hcw : codeword? (messageDigest (pureHash f) pp layer e msg rho').run = some x := hcw
+  replace hcw : codeword? (messageDigest
+    (pureHash f) publicParam layer e msg rho').run = some x := hcw
   -- The verifier recomputes the same codeword.
   simp only [otsLeaf, otsPublicLeaf, Id.run_bind, Id.run_pure, hcw, HashSig.ofFnInOrder_run]
-  refine congrArg (fun ends => some (otsLeafHash (pureHash f) pp layer e ends).run)
+  refine congrArg (fun ends => some (otsLeafHash (pureHash f) publicParam layer e ends).run)
     (Vector.ext fun j hj => ?_)
   simp only [Fin.getElem_fin, Vector.getElem_ofFn]
   -- Signer's steps plus verifier's steps make the whole chain.
   have hx := (x[j]'hj).isLt
-  have hsplit := Wots.chain_add (m := Id) (step := chainStep (pureHash f) pp layer e ⟨j, hj⟩)
+  have hsplit := Wots.chain_add (m := Id) (step := chainStep
+    (pureHash f) publicParam layer e ⟨j, hj⟩)
     (start := 0) (s₁ := (x[j]'hj : Nat)) (s₂ := CHAIN_LENGTH - 1 - (x[j]'hj : Nat))
-    (value := (chainStarts pp prf layer e).run[j]'hj) (Nat.zero_add _).symm
+    (value := (chainStarts publicParam prf layer e).run[j]'hj) (Nat.zero_add _).symm
     (by simp only [CHAIN_LENGTH] at *; omega) (by simp only [CHAIN_LENGTH] at *; omega)
   -- Steps revealed plus steps walked is the whole chain.
   exact hsplit.trans (Wots.chain_steps_congr (by simp only [CHAIN_LENGTH] at *; omega) _ _)
@@ -155,14 +220,16 @@ theorem otsLeaf_otsSign {prf : SeedPrf Id} {msg : Array UInt64} {rho : Randomize
 
 A known answer checks each piece on its own. -/
 theorem otsPublicLeaf_eq {prf : SeedPrf Id} {starts ends : Vector Digest V} {leaf : Digest}
-    (hstarts : (chainStarts pp prf layer e).run = starts)
+    (hstarts : (chainStarts publicParam prf layer e).run = starts)
     (hends : ∀ i : Fin V,
-      (chain (pureHash f) pp layer e i 0 (CHAIN_LENGTH - 1) (by decide) starts[i]).run = ends[i])
-    (hleaf : (otsLeafHash (pureHash f) pp layer e ends).run = leaf) :
-    (otsPublicLeaf (pureHash f) pp prf layer e).run = leaf := by
+      (chain (pureHash f) publicParam layer e i 0 (CHAIN_LENGTH - 1)
+        (by decide) starts[i]).run = ends[i])
+    (hleaf : (otsLeafHash (pureHash f) publicParam layer e ends).run = leaf) :
+    (otsPublicLeaf (pureHash f) publicParam prf layer e).run = leaf := by
   -- The walked chains are the stated ends, chain by chain.
   have hv : (Vector.ofFn fun i =>
-      (chain (pureHash f) pp layer e i 0 (CHAIN_LENGTH - 1) (by decide) starts[i]).run) = ends :=
+      (chain (pureHash f) publicParam layer e i 0 (CHAIN_LENGTH - 1)
+        (by decide) starts[i]).run) = ends :=
     Vector.ext fun i hi => by simpa using hends ⟨i, hi⟩
   simp only [otsPublicLeaf, Id.run_bind, hstarts, HashSig.ofFnInOrder_run, hv, hleaf]
 

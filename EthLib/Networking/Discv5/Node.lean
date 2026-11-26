@@ -1,6 +1,6 @@
 module
 
-public import EthLib.Base.BigEndian
+public import EthLib.Base.ByteOrder
 public import EthLib.Networking.Discv5.Handshake
 public import EthLib.Networking.Discv5.Session
 public import EthLib.Networking.Enr.V4
@@ -12,23 +12,7 @@ The session states of a discv5 node.
 
 The sources are the sections Sessions to Session Cache of [the theory text].
 
-A node keeps session keys, the WHOAREYOU challenges it sent, and the requests it sent.
-
-The keys of a session are tied to the node ID and to the IP address and UDP port of the peer.
-
-So keys from one endpoint never open a packet from another, and the peer must handshake again.
-
-The counter of a session numbers its outgoing messages, and fills the first 4 bytes of each nonce.
-
-The other 8 bytes, the ID nonce, the masking IV and the ephemeral key are inputs.
-
-A packet that cannot be read, or a step that fails, leaves the state as it is and sends nothing.
-
 The text gives no lifetime for a challenge or a session, so they last until replaced.
-
-The counter wraps after `2^32` messages, a bound that the text leaves to the node.
-
-After a wrap, two nonces repeat only if their 8 random bytes repeat too.
 
 [the theory text]: https://github.com/ethereum/devp2p/blob/277ceb399c15df86efb17d51eb58200c26879784/discv5/discv5-theory.md#sessions
 -/
@@ -48,7 +32,11 @@ structure Endpoint where
   port : UInt16
   deriving DecidableEq
 
-/-- The key of the session cache: the node ID of the peer and its endpoint. -/
+/-- The key of the session cache: the node ID of the peer and its endpoint.
+
+The keys of a session are tied to the node ID and to the IP address and UDP port of the peer.
+
+So keys from one endpoint never open a packet from another, and the peer must handshake again. -/
 structure SessionKey where
   /-- The node ID of the peer. -/
   id : NodeId
@@ -96,6 +84,8 @@ structure Request where
 
 /-- What a node keeps: its sessions and challenges by session key, and its requests by endpoint.
 
+A packet that cannot be read, or a step that fails, leaves the state as it is and sends nothing.
+
 Each list holds at most one entry per key, the most recent first. -/
 structure NodeState where
   /-- The session cache. -/
@@ -105,10 +95,6 @@ structure NodeState where
   /-- The requests that this node sent, one per endpoint. -/
   requests : List (Endpoint × Request)
   deriving DecidableEq
-
-/-- The value of a key in a list of pairs, if any. -/
-def lookupKey {κ α : Type} [DecidableEq κ] (pairs : List (κ × α)) (key : κ) : Option α :=
-  (pairs.find? (·.1 = key)).map (·.2)
 
 /-- A list of pairs with the value of a key replaced, or added. -/
 def setKey {κ α : Type} [DecidableEq κ] (pairs : List (κ × α)) (key : κ) (value : α) :
@@ -139,7 +125,9 @@ structure Local where
   /-- The plaintext of the answer to a message, if the node answers it. -/
   answer : ByteArray → Option ByteArray
 
-/-- The random values of one step. -/
+/-- The random values of one step, which the caller supplies.
+
+They are the last 8 bytes of a nonce, the ID nonce, the masking IV and the ephemeral key. -/
 structure Randoms where
   /-- The masking IV of a packet that the node sends. -/
   maskingIv : Vector UInt8 16
@@ -153,12 +141,16 @@ structure Randoms where
 /-- The nonce of the message numbered `counter`: the counter in 4 big-endian bytes, then 8 bytes.
 
 The section Session Cache strongly recommends this layout, so that the nonces of a session differ.
+
+The counter wraps after `2^32` messages, a bound that the text leaves to the node.
+
+After a wrap, two nonces repeat only if their 8 random bytes repeat too.
 -/
 def counterNonce (counter : UInt32) (tail : Vector UInt8 8) : Vector UInt8 12 :=
   -- Session Cache: the outgoing message count in the first 32 bits of the 96-bit nonce.
   --
   -- The remaining 64 bits are random; the source gives no byte order, and EthLib takes big-endian.
-  (⟨(Base.natToBytes 4 counter.toNat).toArray, by simp [Base.natToBytes_length]⟩ : Vector UInt8 4)
+  (Base.ByteOrder.toBE 4 counter.toNat : Vector UInt8 4)
     ++ tail
 
 /-- An ordinary message packet sealed in a session, and the session with its counter raised. -/
@@ -193,7 +185,7 @@ def receiveMessage (node : Local) (rand : Randoms) (state : NodeState) (key : Se
   -- Step 2: with session keys for the source node ID, node B tries to decrypt the message.
   --
   -- Session Cache: the keys are those of that node ID at that IP address and port.
-  let opened := match lookupKey state.sessions key with
+  let opened := match state.sessions.lookup key with
     | some session => (openPacket SessionError.packet SessionError.decryption
         session.incomingKey packet).toOption.map (session, ·)
     | none => none
@@ -203,14 +195,14 @@ def receiveMessage (node : Local) (rand : Randoms) (state : NodeState) (key : Se
     -- An answer from the peer of a request of this node settles that request.
     --
     -- Not in the source: any message that opens from that peer settles it, not only the response.
-    let settled := match lookupKey state.requests key.endpoint with
+    let settled := match state.requests.lookup key.endpoint with
       | some request => decide (request.id = key.id)
       | none => false
     let state := if settled then { state with requests := eraseKey state.requests key.endpoint }
       else state
     answerIn node rand state key session plaintext
   | none =>
-    match lookupKey state.challenges key with
+    match state.challenges.lookup key with
     -- Handshake Implementation Considerations: a message packet while a challenge is pending.
     --
     -- The node re-sends the challenge already in progress, instead of creating a new one.
@@ -237,7 +229,7 @@ def receiveWhoareyou (node : Local) (rand : Randoms) (state : NodeState) (endpoi
   -- So a WHOAREYOU for an earlier request is ignored, where the source re-sends that request.
   --
   -- A node with at most one request in flight per peer meets the source exactly.
-  match lookupKey state.requests endpoint, readWhoareyou node.nodeId bytes with
+  match state.requests.lookup endpoint, readWhoareyou node.nodeId bytes with
   | some request, .ok challenge =>
     -- Step 3: the `nonce` of the WHOAREYOU mirrors the `nonce` of the request packet.
     if challenge.nonce = request.nonce then
@@ -298,7 +290,7 @@ def receiveHandshake (node : Local) (rand : Randoms) (state : NodeState) (key : 
   -- With one, EthLib takes the public key from it, and does not check the record in the packet.
   --
   -- That departs from step 4: the key that B already holds decides the handshake.
-  match lookupKey state.challenges key, node.publicKeyOf key.id <|> recordKey key.id record with
+  match state.challenges.lookup key, node.publicKeyOf key.id <|> recordKey key.id record with
   | some challenge, some srcKey =>
     -- Step 4: verify `id-signature`, derive the session keys, then decrypt the message.
     match openHandshake node.staticKey challenge.challengeData node.nodeId srcKey bytes with
@@ -339,7 +331,7 @@ def step (node : Local) (rand : Randoms) (state : NodeState) (endpoint : Endpoin
 Without a session, the request is sealed under a key that the peer does not have. -/
 def sendRequest (node : Local) (rand : Randoms) (state : NodeState) (key : SessionKey)
     (unknownKey : Aes.Key .aes128) (plaintext : ByteArray) : NodeState × List ByteArray :=
-  match lookupKey state.sessions key with
+  match state.sessions.lookup key with
   -- Step 1: with session keys for node B, node A encrypts its request with those keys.
   | some session =>
     match sealInSession node rand key.id session plaintext with

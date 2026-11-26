@@ -14,54 +14,6 @@ A validator in the committee of a slot casts one vote in that slot, for the head
 
 Honest validators never sign votes that can be slashed together.
 
-Here the votes are the attestations of the fork choice.
-
-A vote signs its data for each validator that a store reads in its bits.
-
-A store reads them in the state of the target of the vote, with a valid signature.
-
-A store reachable from the anchor may read an attestation, and all of its readings count.
-
-Two stores can read different signers only when they hold two states for one checkpoint.
-
-An attester slashing signs the data of its two votes for each of their validators.
-
-Its signatures are not checked there, which only forbids slashings that every store rejects.
-
-A block signs what its attestations and attester slashings sign.
-
-An honest validator signs a vote of its own only as its duty allows.
-
-It votes at the attestation deadline of a slot of its assignment, with an up-to-date store.
-
-The vote holds the data that an honest validator builds from the head.
-
-It cannot be slashed together with a vote of the validator that its view holds.
-
-The assignment of validators to slots is a parameter, shared by honest validators.
-
-It gives each validator at most one slot in each epoch, as the committees of an epoch do.
-
-The paper shares it too once GST has passed long enough, in §2, under stabilization time.
-
-The duty to vote is a condition on an execution, and the paper asks it of every slot.
-
-So an execution with that duty never asks for a vote that slashing protection forbids.
-
-That excludes the schedules where the adversary would lead an honest validator there.
-
-The paper assumes as much in §2, under slashing and under voting time.
-
-There an honest validator votes once in each of its slots, and never commits a slashable offence.
-
-A signature of a block by its proposer is no statement here.
-
-So any validator may send a block whose votes it may carry.
-
-That strengthens the adversary, and no honest validator has to propose.
-
-Under synchrony with a delay `Δ`, each honest vote reaches every honest validator `Δ` later.
-
 [fcr]: https://arxiv.org/abs/2405.00549v4
 -/
 
@@ -98,7 +50,13 @@ variable {config checks} (anchorState : BeaconState preset fork)
 /-- The statements of an attestation: those that a store reachable from the anchor reads in it. -/
 def attestationStatements (attestation : Attestation preset fork) :
     Set (ValidatorIndex × AttestationData) :=
+  -- A vote signs its data for each validator that a store reads in its bits.
+  --
+  -- A store reachable from the anchor may read an attestation, and all of its readings count.
+  --
+  -- Two stores can read different signers only when they hold two states for one checkpoint.
   {x | ∃ store indexed, Store.Reachable config anchorState anchorBlock store ∧
+    -- A store reads those validators in the state of the target, with a valid signature.
     ReadsAttestation config checks store attestation indexed ∧ x ∈ indexedStatements indexed}
 
 variable (config checks) in
@@ -110,14 +68,23 @@ A block signs what its attestations and its attester slashings sign.
 
 The other messages carry no vote of the fork choice, and no statement here. -/
 def statements : Message preset fork → Set (ValidatorIndex × AttestationData)
+  -- A signature of a block by its proposer is no statement here.
+  --
+  -- So any validator may send a block whose votes it may carry.
+  --
+  -- That strengthens the adversary, and no honest validator has to propose.
   | .block signed =>
     {x | ∃ attestation ∈ signed.message.body.attestations.data,
         x ∈ attestationStatements (config := config) (checks := checks) anchorState anchorBlock
           attestation} ∪
       {x | ∃ slashing ∈ signed.message.body.attesterSlashings.data,
         x ∈ indexedStatements slashing.attestation1 ∪ indexedStatements slashing.attestation2}
+  -- Here the votes are the attestations of the fork choice.
   | .attestation attestation =>
     attestationStatements (config := config) (checks := checks) anchorState anchorBlock attestation
+  -- An attester slashing signs the data of its two votes for each of their validators.
+  --
+  -- Its signatures are not checked there, which only forbids slashings that every store rejects.
   | .attesterSlashing slashing =>
     indexedStatements slashing.attestation1 ∪ indexedStatements slashing.attestation2
   | _ => ∅
@@ -154,11 +121,13 @@ def IsAttestationDeadline (genesisTimeMs : UInt64) (slot : Slot) (time : ℕ) : 
 variable {config checks sources anchorState anchorBlock}
 
 variable (preset) in
-/-- An assignment of validators to the committees of slots.
+/-- An assignment of validators to the committees of slots, a parameter shared by honest validators.
 
 It gives each validator at most one slot in each epoch.
 
-The committees of an epoch split its validators that way, as §2 of the paper says. -/
+The committees of an epoch split its validators that way, as §2 of the paper says.
+
+The paper shares it too once GST has passed long enough, in §2, under stabilization time. -/
 structure Assignment where
   /-- The committee of a validator in a slot, if it has one. -/
   committee : ValidatorIndex → Slot → Option CommitteeIndex
@@ -177,21 +146,20 @@ def Assignment.single (v : ValidatorIndex) (slot : Slot) (committeeIndex : Commi
 variable (config checks sources anchorState anchorBlock)
   (assignment : Assignment preset) (genesisTimeMs : UInt64)
 
-/-- A vote that an honest validator may sign at a time, with its view and its store.
-
-The validator sits in a committee of the slot of the vote, and the time is its attestation deadline.
-
-Its store follows the time of genesis, and is up to date.
-
-The data is that of an honest vote from the store.
-
-No vote of the validator in its view is slashable together with it, in either order. -/
+/-- A vote that an honest validator may sign at a time, with its view and its store. -/
 def MaySign (validator : ValidatorIndex) (time : ℕ) (view : Set (Message preset fork))
     (store : Store preset fork) (data : AttestationData) : Prop :=
+  -- The validator sits in a committee of the slot of the vote.
   ∃ committeeIndex, assignment.committee validator data.slot = some committeeIndex ∧
+    -- The time is the attestation deadline of that slot.
     IsAttestationDeadline fork config genesisTimeMs data.slot time ∧
+    -- The store of the validator follows the time of genesis, and is up to date.
     store.genesisTimeMs = genesisTimeMs ∧ UpToDate config checks sources time view store ∧
+    -- The data is that of an honest vote from the store.
+    --
+    -- An honest validator builds that data from the head.
     HonestVoteData config checks store data.slot committeeIndex data ∧
+    -- No vote of the validator in its view is slashable together with it, in either order.
     ∀ m ∈ view, ∀ y ∈ statements config checks anchorState anchorBlock m, y.1 = validator →
       isSlashableAttestationData y.2 data = false ∧ isSlashableAttestationData data y.2 = false
 
@@ -202,6 +170,7 @@ def HonestSends (validator : ValidatorIndex) (time : ℕ) (view : Set (Message p
     (store : Store preset fork) (message : Message preset fork) : Prop :=
   ∀ x ∈ statements config checks anchorState anchorBlock message, x.1 = validator →
     (∃ m ∈ view, x ∈ statements config checks anchorState anchorBlock m) ∨
+      -- An honest validator signs a vote of its own only as its duty allows.
       MaySign config checks sources anchorState anchorBlock assignment genesisTimeMs validator
         time view store x.2
 
@@ -215,50 +184,59 @@ abbrev honestForkChoice : Protocol ValidatorIndex (Message preset fork) (Store p
 
 variable {config checks sources anchorState anchorBlock assignment genesisTimeMs}
 
-/-- A vote of an honest validator, as its duty asks, at the `n`-th event of an execution.
-
-The event sends the attestation, at the attestation deadline of the slot.
-
-The store of the validator then follows the time of genesis, and is up to date.
-
-The data of the attestation is that of an honest vote from that store, for the committee.
-
-That store reads the attestation as the vote of the validator alone, with a valid signature. -/
+/-- A vote of an honest validator, as its duty asks, at the `n`-th event of an execution. -/
 structure VoteAt {J : Set ValidatorIndex}
     (e : Execution (honestForkChoice config checks sources anchorState anchorBlock assignment
       genesisTimeMs) J) (v : ValidatorIndex) (slot : Slot) (committeeIndex : CommitteeIndex)
     (time n : ℕ) (attestation : Attestation preset fork)
     (indexed : IndexedAttestation preset fork) : Prop where
+  -- The event sends the attestation.
   sends : e.events n = .send v (.attestation attestation)
+  -- It sends it at the attestation deadline of the slot.
   atTime : (e.world n).time = time
+  -- The store of the validator then follows the time of genesis.
   genesis : ((e.world n).state v).genesisTimeMs = genesisTimeMs
+  -- That store is up to date.
   upToDate : UpToDate config checks sources time ((e.world n).view v) ((e.world n).state v)
+  -- The data of the attestation is that of an honest vote from that store, for the committee.
   honestData : HonestVoteData config checks ((e.world n).state v) slot committeeIndex
     attestation.data
+  -- That store reads the attestation, with a valid signature.
   reads : ReadsAttestation config checks ((e.world n).state v) attestation indexed
+  -- It reads the attestation as the vote of the validator alone.
   alone : indexed.attestingIndices.data.toList = [v]
 
 /-- The duty to vote, on an execution with honest validators `J`, from a time `stable` on.
 
-Take an honest validator, a slot of its assignment, and the attestation deadline of that slot.
+The duty to vote is a condition on an execution, and the paper asks it of every slot.
 
-When the execution starts by then, and `stable` is past, the validator votes, as its duty asks.
+So an execution with that duty never asks for a vote that slashing protection forbids.
 
-Before `stable`, honest stores may disagree with the assignment on the committees.
-
-From `stable` on, the store of each honest validator reads its vote at its deadline as assigned.
-
-The time is in milliseconds, like the deadlines.
-
-The paper shares committees after its stabilization time, in §2, which comes after GST.
-
-Each theorem relates that time to GST itself. -/
+That excludes the schedules where the adversary would lead an honest validator there. -/
 def Votes {J : Set ValidatorIndex} (stable : ℕ)
     (e : Execution (honestForkChoice config checks sources anchorState anchorBlock assignment
       genesisTimeMs) J) : Prop :=
+  -- Take an honest validator and a slot of its assignment.
   ∀ v ∈ J, ∀ slot committeeIndex time, assignment.committee v slot = some committeeIndex →
+    -- Take the attestation deadline of that slot, when the execution starts by then.
     IsAttestationDeadline fork config genesisTimeMs slot time → e.startTime ≤ time →
+    -- Before `stable`, honest stores may disagree with the assignment on the committees.
+    --
+    -- From `stable` on, each honest validator's store reads its vote at its deadline as assigned.
+    --
+    -- The time is in milliseconds, like the deadlines.
+    --
+    -- The paper shares committees after its stabilization time, in §2, which comes after GST.
+    --
+    -- Each theorem relates that time to GST itself.
     stable ≤ time →
+    -- When `stable` is past too, the validator votes, as its duty asks.
+    --
+    -- The paper assumes such a duty in §2, under slashing and under voting time.
+    --
+    -- There an honest validator votes once in each of its slots.
+    --
+    -- It never commits a slashable offence.
     ∃ n attestation indexed, VoteAt e v slot committeeIndex time n attestation indexed
 
 /-- The committee check succeeds whenever the store successfully reads the target state.
@@ -321,8 +299,8 @@ private theorem computeSlotAtTimeMs_inside {config : Config} {genesisTimeMs due 
 
 /-- Before Gloas, a store that holds only an anchor block at slot zero has that block as head.
 
-The clock of the store is at slot zero, and both checkpoints are the anchor. -/
-theorem getHead_anchor {config : Config} {store : Store preset fork}
+The clock of the store is in epoch zero, and both checkpoints are the anchor. -/
+theorem getHead_anchor_of_epoch {config : Config} {store : Store preset fork}
     {anchorState : BeaconState preset fork} {anchorBlock : BeaconBlock preset fork}
     {anchorRoot : Root} (before : fork < .glamsterdam)
     (blocks : store.blocks =
@@ -331,15 +309,12 @@ theorem getHead_anchor {config : Config} {store : Store preset fork}
       (∅ : Std.TreeMap Root (BeaconState preset fork)).insert anchorRoot anchorState)
     (justified : store.justifiedCheckpoint = ⟨getCurrentEpoch anchorState, anchorRoot⟩)
     (finalized : store.finalizedCheckpoint = ⟨getCurrentEpoch anchorState, anchorRoot⟩)
-    (current : store.getCurrentSlot config = .ok 0) (stateZero : anchorState.slot = 0)
+    (epoch : store.getCurrentStoreEpoch config = .ok 0) (stateZero : anchorState.slot = 0)
     (blockZero : anchorBlock.slot = 0) (parent : anchorBlock.parentRoot ≠ anchorRoot) :
     store.getHead config = .ok ⟨anchorRoot, .pending⟩ := by
   have notGloas : ¬ .glamsterdam ≤ fork := Nat.not_le_of_lt before
   have epochZero : getCurrentEpoch anchorState = 0 := by
     simp [getCurrentEpoch, computeEpochAtSlot, stateZero]
-  have epoch : store.getCurrentStoreEpoch config = .ok 0 := by
-    simp [Store.getCurrentStoreEpoch, current, computeEpochAtSlot, bind, Except.bind, pure,
-      Except.pure]
   -- The anchor block is not its own parent, so it has no child.
   have children : store.getNodeChildren ⟨anchorRoot, .pending⟩ = .ok [] := by
     simp [Store.getNodeChildren, notGloas, blocks, pure, Except.pure,
@@ -363,6 +338,26 @@ theorem getHead_anchor {config : Config} {store : Store preset fork}
   simp only [notGloas, false_and, ite_false, justified, bind, Except.bind]
   rw [Store.getHeadFrom, none]
   rfl
+
+/-- Before Gloas, a store that holds only an anchor block at slot zero has that block as head.
+
+The clock of the store is at slot zero, and both checkpoints are the anchor. -/
+theorem getHead_anchor {config : Config} {store : Store preset fork}
+    {anchorState : BeaconState preset fork} {anchorBlock : BeaconBlock preset fork}
+    {anchorRoot : Root} (before : fork < .glamsterdam)
+    (blocks : store.blocks =
+      (∅ : Std.TreeMap Root (BeaconBlock preset fork)).insert anchorRoot anchorBlock)
+    (states : store.blockStates =
+      (∅ : Std.TreeMap Root (BeaconState preset fork)).insert anchorRoot anchorState)
+    (justified : store.justifiedCheckpoint = ⟨getCurrentEpoch anchorState, anchorRoot⟩)
+    (finalized : store.finalizedCheckpoint = ⟨getCurrentEpoch anchorState, anchorRoot⟩)
+    (current : store.getCurrentSlot config = .ok 0) (stateZero : anchorState.slot = 0)
+    (blockZero : anchorBlock.slot = 0) (parent : anchorBlock.parentRoot ≠ anchorRoot) :
+    store.getHead config = .ok ⟨anchorRoot, .pending⟩ :=
+  -- Slot zero is in epoch zero.
+  getHead_anchor_of_epoch before blocks states justified finalized
+    (by simp [Store.getCurrentStoreEpoch, current, computeEpochAtSlot, bind, Except.bind, pure,
+      Except.pure]) stateZero blockZero parent
 
 /-- Before Electra, a store reads a vote with the first seat of a committee as that seat alone.
 
@@ -431,30 +426,30 @@ private theorem readsAttestation_firstSeat {config : Config} {store : Store pres
     domainOk, rootOk, liftAccessor, liftSsz, SignatureChecks.acceptAll, bind, Except.bind, pure,
     Except.pure, Except.mapError]
 
-/-- The events of the witness: wait for the deadline, tick, vote, then let time go on. -/
-private def voteEvents {ν μ σ : Type*} (deadline : ℕ) (v : ν) (ticked : σ) (m : μ) :
+/-- The events of a witness: wait for a time, tick, send, then let time go on. -/
+def tickSendEvents {ν μ σ : Type*} (tickTime : ℕ) (v : ν) (ticked : σ) (m : μ) :
     ℕ → Event ν μ σ
-  | 0 => .wait deadline
+  | 0 => .wait tickTime
   | 1 => .move v ticked
   | 2 => .send v m
-  | n + 3 => .wait (deadline + n + 1)
+  | n + 3 => .wait (tickTime + n + 1)
 
-/-- After the tick, the clock is at the deadline, nothing is sent, and the validator has ticked. -/
-private theorem worldAt_vote_two {ν μ σ : Type*} [DecidableEq ν] {time deadline : ℕ}
+/-- After the tick, the clock is at the time, nothing is sent, and the validator has ticked. -/
+theorem worldAt_tickSend_two {ν μ σ : Type*} [DecidableEq ν] {time tickTime : ℕ}
     {state : ν → σ} {v : ν} {ticked : σ} {m : μ} :
-    worldAt (World.initial time state) (voteEvents deadline v ticked m) 2 =
-      ⟨deadline, ∅, fun _ => ∅, Function.update state v ticked⟩ := by
-  simp [worldAt, voteEvents, World.initial, World.apply]
+    worldAt (World.initial time state) (tickSendEvents tickTime v ticked m) 2 =
+      ⟨tickTime, ∅, fun _ => ∅, Function.update state v ticked⟩ := by
+  simp [worldAt, tickSendEvents, World.initial, World.apply]
 
-/-- After the vote, only the vote is sent, and the clock moves on by one at each event. -/
-private theorem worldAt_vote {ν μ σ : Type*} [DecidableEq ν] {time deadline : ℕ}
+/-- After the send, only that message is sent, and the clock moves on by one at each event. -/
+theorem worldAt_tickSend {ν μ σ : Type*} [DecidableEq ν] {time tickTime : ℕ}
     {state : ν → σ} {v : ν} {ticked : σ} {m : μ} (n : ℕ) :
-    worldAt (World.initial time state) (voteEvents deadline v ticked m) (n + 3) =
-      ⟨deadline + n, {m}, Function.update (fun _ => ∅) v {m}, Function.update state v ticked⟩ := by
+    worldAt (World.initial time state) (tickSendEvents tickTime v ticked m) (n + 3) =
+      ⟨tickTime + n, {m}, Function.update (fun _ => ∅) v {m}, Function.update state v ticked⟩ := by
   induction n with
   | zero =>
-    rw [worldAt, worldAt_vote_two]
-    simp only [voteEvents, World.apply, Nat.add_zero]
+    rw [worldAt, worldAt_tickSend_two]
+    simp only [tickSendEvents, World.apply, Nat.add_zero]
     congr 1
     · simp
     · funext u
@@ -464,49 +459,47 @@ private theorem worldAt_vote {ν μ σ : Type*} [DecidableEq ν] {time deadline 
       · simp [Function.update_of_ne same]
   | succ n ih =>
     rw [worldAt, ih]
-    simp [voteEvents, World.apply]
+    simp [tickSendEvents, World.apply]
     omega
 
 /-- Honest validators that vote have an execution, with one honest validator that votes.
 
-The store starts from an anchor whose block and state sit at slot zero, before Electra.
-
-The anchor block does not name its own root as its parent.
-
-The validator `v` holds the first seat of the first committee of slot zero, in the anchor state.
-
-That committee fits in the bits of an attestation.
-
-The assignment puts the validator in that committee, and in no other slot.
-
-The attestation deadline of slot zero falls inside the slot, and fits in 64 bits.
-
-Signature checks accept every signature, as the consensus test vectors with placeholders do.
-
-So the witness covers one validator, one slot and one fork range, with no state built here.
-
-The execution starts at the time of the anchor, and the validator votes at the deadline.
-
-It is synchronous for every positive delay, and the validator does its duty to vote.
-
-The store of the validator stays reachable from the anchor. -/
+The witness covers one validator, one slot and one fork range, with no state built here. -/
 theorem exists_votes_execution {anchorState : BeaconState preset fork}
     {anchorBlock : BeaconBlock preset fork} {store : Store preset fork}
+    -- The store starts from an anchor.
     (anchored : getForkchoiceStore config anchorState anchorBlock = .ok store)
+    -- The block and the state of the anchor sit at slot zero.
     (stateZero : anchorState.slot = 0) (blockZero : anchorBlock.slot = 0)
+    -- The fork is before Electra.
     (before : fork < .pectra)
+    -- The anchor block does not name its own root as its parent.
     (parent : ∀ root, SszType.hashTreeRoot anchorBlock = .ok root → anchorBlock.parentRoot ≠ root)
     {committee : Array ValidatorIndex}
+    -- The committee is the first committee of slot zero, in the anchor state.
     (committeeOk : getBeaconCommittee anchorState 0 0 = .ok committee) {v : ValidatorIndex}
+    -- The validator `v` holds the first seat of that committee.
+    --
+    -- That committee fits in the bits of an attestation.
     (first : committee[0]? = some v) (small : committee.size ≤ maxAttesters preset fork)
     (slots : 0 < config.SLOT_DURATION_MS) {due : UInt64}
+    -- The attestation deadline of slot zero falls inside the slot.
     (dueOk : getAttestationDueMs config fork = .ok due) (inSlot : due < config.SLOT_DURATION_MS)
+    -- That deadline fits in 64 bits.
     (fits : store.genesisTimeMs.toNat + due.toNat < 2 ^ 64) {Δ : ℕ} (positive : 0 < Δ) :
+    -- Signature checks accept every signature, as the consensus test vectors with placeholders do.
     ∃ e : Execution (honestForkChoice config .acceptAll sources anchorState anchorBlock
+        -- The assignment puts the validator in that committee, and in no other slot.
         (Assignment.single v 0 0) store.genesisTimeMs) {v},
+      -- The execution starts at the time of the anchor.
       e.startTime = store.timeMs.toNat ∧ e.start = (fun _ => store) ∧
+      -- The validator votes at the deadline.
       (∃ attestation, e.events 2 = .send v (.attestation attestation)) ∧
+      -- The validator does its duty to vote.
+      --
+      -- The execution is synchronous for every positive delay.
       Votes 0 e ∧ e.Synchronous Δ ∧
+      -- The store of the validator stays reachable from the anchor.
       ∀ n, Store.Reachable config anchorState anchorBlock ((e.world n).state v) := by
   obtain ⟨anchorRoot, blockRooted, checkpoints⟩ := getForkchoiceStore_checkpointStates anchored
   have stored : store.checkpointStates[(⟨getCurrentEpoch anchorState, anchorRoot⟩ : Checkpoint)]? =
@@ -607,7 +600,7 @@ theorem exists_votes_execution {anchorState : BeaconState preset fork}
       (Assignment.single v 0 0) store.genesisTimeMs) {v} :=
     { startTime := store.timeMs.toNat
       start := fun _ => store
-      events := voteEvents deadline v ticked (.attestation attestation)
+      events := tickSendEvents deadline v ticked (.attestation attestation)
       allowed := fun n => by
         match n with
         | 0 =>
@@ -620,22 +613,22 @@ theorem exists_votes_execution {anchorState : BeaconState preset fork}
           exact .tick (by rw [clock]; omega) fits onTicked
         | 2 =>
           refine ⟨fun x _ honest other => (other honest).elim, fun _ => ?_⟩
-          rw [worldAt_vote_two]
+          rw [worldAt_tickSend_two]
           intro x mem _
           refine .inr ?_
           rw [statementData x mem]
           simpa using maySign
         | n + 3 =>
-          rw [worldAt_vote]
+          rw [worldAt_tickSend]
           show deadline + n ≤ deadline + n + 1
           omega }
   have worldTwo :
       e.world 2 = ⟨deadline, ∅, fun _ => ∅, Function.update (fun _ => store) v ticked⟩ :=
-    worldAt_vote_two
+    worldAt_tickSend_two
   have later : ∀ n, e.world (n + 3) = ⟨deadline + n, {.attestation attestation},
       Function.update (fun _ => ∅) v {.attestation attestation},
       Function.update (fun _ => store) v ticked⟩ :=
-    worldAt_vote
+    worldAt_tickSend
   refine ⟨e, rfl, rfl, ⟨attestation, rfl⟩, ?_, ⟨positive, fun T => ⟨T + 3, ?_⟩, ?_⟩,
     fun n => e.reachable (fun u _ => .anchor anchored) n v rfl⟩
   · -- The only duty is in slot zero, at the deadline, and the vote of the third event does it.

@@ -10,17 +10,6 @@ The decoder reads the elements that the encoder writes.
 
 Source: [`format_description.txt`][format] of `google/snappy`.
 
-Bytes `e` take the output `o` to the output `o'` in this sense.
-
-Start the element loop on `e`, followed by any bytes, with the output `o`.
-
-It then reaches the end of `e` with the output `o'`.
-
-- The bytes of a literal take the output `o` to `o` followed by the data (§2.1).
-- A copy takes a prefix of a list `L` to a longer prefix, if it repeats bytes of `L` (§2.2).
-- The copies that the encoder writes for one offset do the same, one after the other.
-- The literal that the encoder writes for a range of the input takes it from its start to its end.
-
 [format]: https://github.com/google/snappy/blob/7406111ac4ae539ea0db8b7ea2dc76730cd957f4/format_description.txt
 -/
 
@@ -28,7 +17,7 @@ It then reaches the end of `e` with the output `o'`.
 
 namespace EthLib.Networking.Proofs.Snappy.Encode
 
-open EthLib.Base (uintToBytes)
+open EthLib.Base (ByteOrder.toLE)
 open EthLib.Networking.Snappy
 open EthLib.Networking.Proofs.Snappy.Block
 
@@ -75,20 +64,15 @@ theorem reads_literal {declared : Nat} {o data : List UInt8} (hne : data ≠ [])
 
 /-! ## Copies (§2.2) -/
 
-/-- A list `r` that starts with the first `p` bytes of `L` is the first `p + n` bytes of `L`.
-
-The list `r` has `p + n` bytes, and `L` has at least as many.
-
-The offset is positive and at most `p`.
-
-Each byte of `r` from `p` on equals the byte `offset` places before it in `r`.
-
-Each byte of `L` from `p` up to `p + n` equals the byte `offset` places before it in `L`.
--/
+/-- A list `r` that starts with the first `p` bytes of `L` is the first `p + n` bytes of `L`. -/
 private theorem eq_take_of_repeat {L r : List UInt8} {p n offset : Nat} (hoff : 0 < offset)
+    -- The offset is positive and at most `p`.
     (hle : offset ≤ p)
+    -- The list `r` has `p + n` bytes, and `L` has at least as many.
     (hpn : p + n ≤ L.length) (hlen : r.length = p + n) (hpre : L.take p <+: r)
+    -- Each byte of `r` from `p` on equals the byte `offset` places before it in `r`.
     (hr : ∀ (j : Nat) (hj : p ≤ j) (hjr : j < r.length), r[j] = r[j - offset]'(by omega))
+    -- Each byte of `L` from `p` up to `p + n` equals the byte `offset` places before it in `L`.
     (hmatch : ∀ (j : Nat) (_hj : p ≤ j) (_hjn : j < p + n) (h1 : j < L.length)
       (h2 : j - offset < L.length), L[j] = L[j - offset]) :
     r = L.take (p + n) := by
@@ -145,7 +129,7 @@ theorem reads_copyElement {declared : Nat} {L : List UInt8} {p offset len : Nat}
     simp [show (1 + (len - 4) * 4 + offset / 256 * 32) % 4 = 1 by omega,
       show (1 + (len - 4) * 4 + offset / 256 * 32) / 4 % 8 = len - 4 by omega,
       show (1 + (len - 4) * 4 + offset / 256 * 32) / 4 / 8 = offset / 256 by omega,
-      EthLib.Base.bytesToUint_toVector, hb, show 4 + (len - 4) = len by omega,
+      EthLib.Base.ByteOrder.ofLE_toVector, hb, show 4 + (len - 4) = len by omega,
       show offset / 256 * 256 + offset % 256 = offset by omega,
       Nat.min_eq_left (show p ≤ L.length by omega), show offset ≠ 0 by omega,
       show ¬ declared < p + len by omega, hr]
@@ -159,10 +143,45 @@ theorem reads_copyElement {declared : Nat} {L : List UInt8} {p offset len : Nat}
     simp only [hc, ↓reduceIte, copyTwo, List.cons_append, List.nil_append, decompressElements, ht]
     simp [show (2 + (len - 1) * 4) % 4 = 2 by omega,
       show (2 + (len - 1) * 4) / 4 = len - 1 by omega,
-      EthLib.Base.bytesToUint_toVector, hb0, hb1, show len - 1 + 1 = len by omega,
+      EthLib.Base.ByteOrder.ofLE_toVector, hb0, hb1, show len - 1 + 1 = len by omega,
       show offset % 256 + 256 * (offset / 256) = offset by omega,
       Nat.min_eq_left (show p ≤ L.length by omega), show offset ≠ 0 by omega,
       show ¬ declared < p + len by omega, show ¬ s.length + 1 + 1 < 2 by omega, hr]
+
+/-- A copy element with a four-byte offset takes the first `p` bytes of `L` to its first `p + len`.
+
+Each byte of the copy is the byte `offset` places before it in `L`. -/
+theorem reads_copyFour {declared : Nat} {L : List UInt8} {p offset len : Nat}
+    -- The offset is from 1 to 2^32 - 1 and at most `p`, and the length is from 1 to 64.
+    (hoff : 0 < offset) (hbound : offset < 2 ^ 32) (hle : offset ≤ p)
+    (hlen1 : 1 ≤ len) (hlen2 : len ≤ maxCopyLength)
+    -- Both `L` and the declared length hold at least `p + len` bytes.
+    (hL : p + len ≤ L.length) (hfit : p + len ≤ declared)
+    (hmatch : ∀ (j : Nat) (_hj : p ≤ j) (_hjn : j < p + len) (h1 : j < L.length)
+      (h2 : j - offset < L.length), L[j] = L[j - offset]) :
+    -- The tag holds type 11 and len - 1 (§2.2.2), then a little-endian 32-bit offset (§2.2.3).
+    Reads declared (UInt8.ofNat (3 + (len - 1) * 4) :: (ByteOrder.toLE 4 offset).toList)
+      (L.take p) (L.take (p + len)) := by
+  have hlp : (L.take p).length = p := by simp; omega
+  obtain ⟨r, hr, hrlen, hpre, hrep⟩ := copyBytes_spec (o := L.take p) len hoff (by omega)
+  have hrL : r = L.take (p + len) :=
+    eq_take_of_repeat hoff hle hL (by omega) hpre (fun j hj hjr => hrep j (by omega) hjr) hmatch
+  subst hrL
+  simp only [maxCopyLength] at hlen2
+  refine reads_of_step (by simp) fun s fuel => ?_
+  have ht : (UInt8.ofNat (3 + (len - 1) * 4)).toNat = 3 + (len - 1) * 4 := by
+    rw [UInt8.toNat_ofNat']; omega
+  -- The four bytes after the tag read back as the offset.
+  have hread :
+      (ByteOrder.toLE 4 offset).foldr (fun byte acc => byte.toNat + 256 * acc) 0 = offset :=
+    EthLib.Base.ByteOrder.foldr_toLE_of_lt (by omega)
+  have h3 : (3 + (len - 1) * 4) % 4 = 3 := by omega
+  have hup : (3 + (len - 1) * 4) / 4 + 1 = len := by omega
+  simp only [List.cons_append, decompressElements]
+  rw [ht, h3, hup]
+  simp [EthLib.Base.ByteOrder.ofLE_toVector, hread, show offset ≠ 0 by omega,
+    Nat.min_eq_left (show p ≤ L.length by omega), show ¬ declared < p + len by omega, hr,
+    show ¬ 4 + s.length < 4 by omega]
 
 /-! ## The encoder -/
 

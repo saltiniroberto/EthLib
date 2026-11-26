@@ -14,13 +14,11 @@ A legacy transaction is the RLP list of its fields, so its first byte is at leas
 
 A typed transaction is its type, then the RLP list of its fields.
 
-[EIP-2718](https://eips.ethereum.org/EIPS/eip-2718#transactions) keeps each type at most `0x7f`.
+[EIP-2718][eip-2718] keeps each type at most `0x7f`.
 
 So the first byte tells the two forms apart.
 
-A fork accepts only the types that it or an earlier fork added.
-
-The hash of a transaction is the Keccak-256 hash of its bytes.
+[eip-2718]: https://eips.ethereum.org/EIPS/eip-2718#transactions
 -/
 
 @[expose] public section
@@ -134,6 +132,14 @@ instance : Codec FeeMarketTransaction where
         s := ← Item.field 11 s }
     | items => .error (.wrongFieldCount 12 items.length)
 
+/-- A versioned hash is the RLP string of its 32 bytes.
+
+Source: [EIP-4844][eip-4844], "Blob transaction".
+
+[eip-4844]: https://eips.ethereum.org/EIPS/eip-4844#blob-transaction -/
+instance : Codec Cryptography.Kzg.VersionedHash :=
+  .wrapper Cryptography.Kzg.VersionedHash.mk Cryptography.Kzg.VersionedHash.bytes
+
 /-- The payload of a transaction of type 3 is the list of its fourteen fields, in order. -/
 instance : Codec BlobTransaction where
   -- EIP-4844: `(T_c, T_n, T_f, T_m, T_g, T_t, T_v, p, T_A)`, then the maximum fee per blob gas.
@@ -244,7 +250,9 @@ def decodePayload (type : UInt8) (payload : ByteArray) : Except TransactionError
 
 A first byte of at least `0xc0` starts a legacy transaction, which every fork accepts.
 
-Any other first byte is a type, which the fork must have. -/
+Any other first byte is a type, which the fork must have.
+
+A fork accepts only the types that it or an earlier fork added. -/
 def decodeTransaction (fork : Fork) (bytes : ByteArray) : Except TransactionError Transaction :=
   if h : 0 < bytes.size then
     let first := bytes[0]

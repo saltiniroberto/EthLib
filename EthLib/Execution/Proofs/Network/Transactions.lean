@@ -3,19 +3,14 @@ module
 public import EthLib.Execution.Network.Transactions
 public import EthLib.Serialization.Proofs.Rlp.Codec
 public import EthLib.Serialization.Proofs.Rlp.Encodings
+import EthLib.Base.Proofs.CodeInjective
 
 /-!
 # Proofs: the transaction exchange
 
 An announcement reads back from its RLP item on the versions that use its form.
 
-It reads from no other item.
-
-Take an answer that passes the check.
-
-Its transactions have hashes that are requested hashes, in the order of the request.
-
-An answer passes exactly when its transactions hash to a sublist of the requested hashes, in order.
+An answer passes the check exactly when its transactions hash to requested hashes, in order.
 
 A blob transaction in its network form hashes the encoding of its body, cut from its own bytes.
 -/
@@ -37,7 +32,7 @@ theorem ofItem_eth68 {version : EthVersion} (hv : version < .eth72) (t : ByteArr
 
 /-- The announcement of eth/72 reads back on eth/72. -/
 theorem ofItem_eth72 (t : ByteArray) (s : List Nat) (h : List Hash32)
-    (c : Option (Vector UInt8 16)) :
+    (c : Vector UInt8 16) :
     ofItem .eth72 (eth72 t s h c).toItem = .ok (eth72 t s h c) := by
   have : ¬ EthVersion.eth72 < .eth72 := by decide
   simp [ofItem, toItem, this, Item.fields, Item.toItems, Item.field_toItem, bind, Except.bind,
@@ -45,7 +40,7 @@ theorem ofItem_eth72 (t : ByteArray) (s : List Nat) (h : List Hash32)
 
 /-- eth/68 to eth/71 reject the announcement of eth/72, which has four fields. -/
 theorem ofItem_eth68_of_eth72 {version : EthVersion} (hv : version < .eth72) (t : ByteArray)
-    (s : List Nat) (h : List Hash32) (c : Option (Vector UInt8 16)) :
+    (s : List Nat) (h : List Hash32) (c : Vector UInt8 16) :
     ofItem version (eth72 t s h c).toItem = .error (.wrongFieldCount 3 4) := by
   simp [ofItem, toItem, hv, Item.fields, Item.toItems, bind, Except.bind]
 
@@ -144,7 +139,6 @@ theorem checkPooled_nil (requested : List Hash32) : checkPooled requested [] = .
 /-- Two errors with one code come from one constructor. -/
 theorem PoolError.code_injective (e₁ e₂ : PoolError) (h : e₁.code = e₂.code) :
     e₁.ctorIdx = e₂.ctorIdx := by
-  cases e₁ <;> cases e₂ <;>
-    first | rfl | (simp only [PoolError.code] at h; exact absurd h (by decide))
+  code_injective PoolError.code
 
 end EthLib.Execution.Network

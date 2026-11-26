@@ -1,5 +1,7 @@
 module
 
+public import EthLib.Base.Pow
+
 /-!
 # `Secp256k1.Field`
 
@@ -7,12 +9,6 @@ The two prime fields of secp256k1, from SEC 2 v2 §2.4.1.
 
 - `Fp` is the base field, integers mod `p = 2^256 - 2^32 - 977`, for the coordinates.
 - `Fn` is the scalar field, integers mod the order `n` of the generator.
-
-The private key and the integers `r` and `s` of a signature live in `Fn`.
-
-Each field is `Fin` of its modulus, so every element is below the modulus by construction.
-
-Core gives `Fin` its `+`, `-`, `*` and negation, all reduced mod the modulus.
 
 Other files of this module give the Montgomery form of `Fp`, the inverses and the square root.
 
@@ -38,35 +34,29 @@ instance Fp.instNeZeroModulus : NeZero Fp.modulus := ⟨by decide⟩
 
 instance Fn.instNeZeroModulus : NeZero Fn.modulus := ⟨by decide⟩
 
-/-- An element of the base field. -/
-abbrev Fp := Fin Fp.modulus
+/-- An element of the base field, for the coordinates. -/
+abbrev Fp :=
+  -- Each field is `Fin` of its modulus, so every element is below the modulus by construction.
+  --
+  -- Core gives `Fin` its `+`, `-`, `*` and negation, all reduced mod the modulus.
+  Fin Fp.modulus
 
-/-- An element of the scalar field. -/
+/-- An element of the scalar field.
+
+The private key and the integers `r` and `s` of a signature live in it. -/
 abbrev Fn := Fin Fn.modulus
-
-/-- `a^e` in `Fin m`, for `e < 2^fuel`, by square and multiply.
-
-Each step reads the low bit of `e`, then squares the base for the next bit.
-
-It recurses on `fuel`, so the kernel can run it. -/
-def Fin.powBits {m : Nat} [NeZero m] : Nat → Fin m → Nat → Fin m
-  | 0, _, _ => 1
-  | fuel + 1, a, e =>
-    -- `a^e = a^(e mod 2) * (a^2)^(e / 2)`.
-    let half := Fin.powBits fuel (a * a) (e / 2)
-    if e % 2 = 1 then a * half else half
 
 namespace Fp
 
 /-- `a^e`, for an exponent below `2^256`. -/
-def pow (a : Fp) (e : Nat) : Fp := Fin.powBits 256 a e
+def pow (a : Fp) (e : Nat) : Fp := Base.powBits 256 a e
 
 end Fp
 
 namespace Fn
 
 /-- `a^e`, for an exponent below `2^256`. -/
-def pow (a : Fn) (e : Nat) : Fn := Fin.powBits 256 a e
+def pow (a : Fn) (e : Nat) : Fn := Base.powBits 256 a e
 
 end Fn
 

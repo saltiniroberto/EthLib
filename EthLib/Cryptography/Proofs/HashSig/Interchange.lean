@@ -5,6 +5,7 @@ public import VCVio.OracleComp.QueryTracking.RandomOracle.Simulation
 public import VCVio.OracleComp.QueryTracking.RandomOracle.CachePartial
 public import VCVio.OracleComp.QueryTracking.LoggingOracle.Core
 public import VCVio.OracleComp.QueryTracking.WriterCost
+import EthLib.Cryptography.Proofs.RandomOracleWithCoins
 import VCVio.OracleComp.EvalDist.Measure
 
 /-!
@@ -17,28 +18,6 @@ Take two hash computations that return the same value for every fixed answer fun
 They may query different inputs, in different orders.
 
 Inside any game, either one can replace the other, and the game's output keeps its distribution.
-
-The proof runs both computations, one after the other.
-
-Both outputs agree, since one answer function is consistent with the joint run.
-
-Then each computation can move past the rest of the game and be dropped.
-
-Some hash computations agree only on the answer functions that keep a few answers already fixed.
-
-A signer that derives its key again from a seed is one example.
-
-It agrees with a signer that reads the derived key once the cache holds the derivation's answers.
-
-Such computations can replace each other inside a game, from any cache that holds those answers.
-
-A relation packages this fact, for a set of known answers.
-
-It is closed under binds, under hash queries that add answers, and under logged adversary runs.
-
-With no known answer, it is interchangeability from every cache.
-
-The last section moves an adversary's requests to another oracle, with its log translated.
 -/
 
 @[expose] public section
@@ -50,29 +29,6 @@ open OracleComp OracleSpec MeasureTheory
 variable {ι₀ : Type} [DecidableEq ι₀] {spec₀ : OracleSpec.{0, 0} ι₀}
   [∀ t : spec₀.Domain, SampleableType (spec₀.Range t)]
 
-/-- A query to the lazy random oracle commutes with a computation that also draws coins.
-
-The answer, the output and the final cache have the same joint distribution in either order. -/
-theorem evalDist_run_bind_romImpl_swap {β γ : Type} [MeasurableSpace γ] (t : ι₀)
-    (ob : OracleComp (unifSpec + spec₀) β) (cache : spec₀.QueryCache)
-    (f : spec₀.Range t → β → spec₀.QueryCache → ProbComp γ) :
-    𝒟[(spec₀.randomOracle t).run cache >>= fun z ↦
-        (simulateQ (OracleSpec.romImpl spec₀) ob).run z.2 >>= fun w ↦ f z.1 w.1 w.2] =
-      𝒟[(simulateQ (OracleSpec.romImpl spec₀) ob).run cache >>= fun w ↦
-        (spec₀.randomOracle t).run w.2 >>= fun z ↦ f z.1 w.1 z.2] := by
-  induction ob using OracleComp.inductionOn generalizing cache with
-  | pure b => simp only [simulateQ_pure, StateT.run_pure, pure_bind]
-  | query_bind t' k ih =>
-    simp only [simulateQ_bind, simulateQ_spec_query, StateT.run_bind, bind_assoc]
-    rcases t' with n | t'
-    · simp only [roSim.run_apply_inl, bind_map_left]
-      rw [OracleComp.evalDist_bind_bind_swap]
-      exact evalDist_bind_congr_of_support _ _ _ fun u _ ↦ ih u cache
-    · rw [romImpl_apply_inr]
-      refine (randomOracle.evalDist_run_bind_run_swap t t' cache fun u u' c ↦
-        (simulateQ (OracleSpec.romImpl spec₀) (k u')).run c >>= fun w ↦ f u w.1 w.2).trans ?_
-      exact evalDist_bind_congr_of_support _ _ _ fun y _ ↦ ih y.1 y.2
-
 /-- A hash computation commutes with a computation that also draws coins.
 
 Both outputs and the final cache have the same joint distribution in either order. -/
@@ -83,13 +39,27 @@ theorem evalDist_simulateQ_run_bind_romImpl_swap {α β γ : Type} [MeasurableSp
         (simulateQ (OracleSpec.romImpl spec₀) ob).run w.2 >>= fun v ↦ f w.1 v.1 v.2] =
       𝒟[(simulateQ (OracleSpec.romImpl spec₀) ob).run cache >>= fun v ↦
         (simulateQ spec₀.randomOracle oa).run v.2 >>= fun w ↦ f w.1 v.1 w.2] := by
-  induction oa using OracleComp.inductionOn generalizing cache with
-  | pure a => simp only [simulateQ_pure, StateT.run_pure, pure_bind]
-  | query_bind t k ih =>
-    simp only [simulateQ_bind, simulateQ_spec_query, StateT.run_bind, bind_assoc]
-    rw [evalDist_bind_congr_of_support _ _ _ fun z _ ↦ ih z.1 z.2]
-    exact evalDist_run_bind_romImpl_swap t ob cache fun u b c ↦
-      (simulateQ spec₀.randomOracle (k u)).run c >>= fun w ↦ f w.1 b w.2
+  -- Lifted beside the coins, the hash computation commutes with the other one.
+  have h := run_bind_bind_comm (OracleComp.liftComp oa (unifSpec + spec₀)) ob
+    (fun a b ↦ pure (a, b)) cache
+  simp only [simulateQ_bind, simulateQ_pure, StateT.run_bind, StateT.run_pure,
+    QueryImpl.simulateQ_add_liftComp_right] at h
+  simpa only [bind_assoc, pure_bind] using
+    (h.bind_left fun z ↦ f z.1.1 z.1.2 z.2).evalDist_eq
+
+/-- A query to the lazy random oracle commutes with a computation that also draws coins.
+
+The answer, the output and the final cache have the same joint distribution in either order. -/
+theorem evalDist_run_bind_romImpl_swap {β γ : Type} [MeasurableSpace γ] (t : ι₀)
+    (ob : OracleComp (unifSpec + spec₀) β) (cache : spec₀.QueryCache)
+    (f : spec₀.Range t → β → spec₀.QueryCache → ProbComp γ) :
+    𝒟[(spec₀.randomOracle t).run cache >>= fun z ↦
+        (simulateQ (OracleSpec.romImpl spec₀) ob).run z.2 >>= fun w ↦ f z.1 w.1 w.2] =
+      𝒟[(simulateQ (OracleSpec.romImpl spec₀) ob).run cache >>= fun w ↦
+        (spec₀.randomOracle t).run w.2 >>= fun z ↦ f z.1 w.1 z.2] := by
+  -- It is the case of a computation that asks one query.
+  simpa only [simulateQ_spec_query] using
+    evalDist_simulateQ_run_bind_romImpl_swap (liftM (spec₀.query t)) ob cache f
 
 /-- A hash computation whose output and cache are discarded changes nothing that follows.
 
@@ -139,7 +109,13 @@ theorem eq_of_mem_support_run_bind_run_of_le {α : Type} {known : spec₀.QueryC
 
 /-- Two hash computations that agree once `known` holds can replace each other.
 
-The continuation then has the same output distribution, from every cache that extends `known`. -/
+The continuation then has the same output distribution, from every cache that extends `known`.
+
+Some hash computations agree only on the answer functions that keep a few answers already fixed.
+
+A signer that derives its key again from a seed is one example.
+
+It agrees with a signer that reads the derived key once the cache holds the derivation's answers. -/
 theorem evalDist_interchange_of_le {α β γ : Type} [MeasurableSpace γ]
     {known : spec₀.QueryCache} (oa ob : OracleComp spec₀ α)
     (h : ∀ f : QueryImpl spec₀ Id, known.AgreesWithFn f →
@@ -150,16 +126,19 @@ theorem evalDist_interchange_of_le {α β γ : Type} [MeasurableSpace γ]
         (simulateQ (OracleSpec.romImpl spec₀) (cont w.1)).run w.2 >>= fun v ↦ g v.1] =
       𝒟[(simulateQ spec₀.randomOracle ob).run cache >>= fun w ↦
         (simulateQ (OracleSpec.romImpl spec₀) (cont w.1)).run w.2 >>= fun v ↦ g v.1] := by
+  -- The proof runs both computations, one after the other.
   calc _ = 𝒟[(simulateQ spec₀.randomOracle oa).run cache >>= fun w ↦
         (simulateQ spec₀.randomOracle ob).run w.2 >>= fun u ↦
         (simulateQ (OracleSpec.romImpl spec₀) (cont w.1)).run u.2 >>= fun v ↦ g v.1] :=
         evalDist_bind_congr_of_support _ _ _ fun w _ ↦
           (evalDist_simulateQ_run_bind_romImpl_discard ob (cont w.1) w.2 g).symm
+    -- Both outputs agree, since one answer function is consistent with the joint run.
     _ = 𝒟[(simulateQ spec₀.randomOracle oa).run cache >>= fun w ↦
         (simulateQ spec₀.randomOracle ob).run w.2 >>= fun u ↦
         (simulateQ (OracleSpec.romImpl spec₀) (cont u.1)).run u.2 >>= fun v ↦ g v.1] :=
         evalDist_bind_congr_of_support _ _ _ fun w hw ↦ evalDist_bind_congr_of_support _ _ _
           fun u hu ↦ by rw [eq_of_mem_support_run_bind_run_of_le oa ob h hle hw hu]
+    -- Then each computation can move past the rest of the game and be dropped.
     _ = 𝒟[(simulateQ spec₀.randomOracle ob).run cache >>= fun u ↦
         (simulateQ spec₀.randomOracle oa).run u.2 >>= fun w ↦
         (simulateQ (OracleSpec.romImpl spec₀) (cont u.1)).run w.2 >>= fun v ↦ g v.1] :=
@@ -215,7 +194,9 @@ def RomEquiv {α : Type} (x y : OracleComp (unifSpec + spec₀) α) : Prop :=
 
 /-- Two computations are interchangeable once the cache holds `known`.
 
-Followed by any continuation, they give one output distribution from each cache above `known`. -/
+Followed by any continuation, they give one output distribution from each cache above `known`.
+
+It is closed under binds, under hash queries that add answers, and under logged adversary runs. -/
 def RomEquivFrom {α : Type} (known : spec₀.QueryCache) (x y : OracleComp (unifSpec + spec₀) α) :
     Prop :=
   ∀ {β : Type} [MeasurableSpace β] (cont : α → OracleComp (unifSpec + spec₀) β)
@@ -295,8 +276,7 @@ theorem query_bind {β : Type} {known : spec₀.QueryCache} (t : ι₀)
       (OracleComp.liftComp (spec₀.query t : OracleComp spec₀ _) (unifSpec + spec₀) >>= k') := by
   refine bind_right_of_mem_support _ fun cache hc z hz ↦ ?_
   rw [QueryImpl.simulateQ_add_liftComp_right, simulateQ_spec_query] at hz
-  have hle : cache ≤ z.2 := QueryImpl.withCaching_cache_le _ t cache z hz
-  have hz' : z.2 t = some z.1 := QueryImpl.withCaching_run_caches _ t cache z hz
+  obtain ⟨hle, hz', -⟩ := caches_of_mem_support_randomOracle_run t cache hz
   have hknown : known t = none ∨ known t = some z.1 := by
     rcases hkt : known t with _ | v
     · exact Or.inl rfl
@@ -443,6 +423,7 @@ theorem run_simulateQ_withLogging {ιS : Type} {S : OracleSpec.{0, 0} ιS} {α :
 
 end RomEquiv
 
+-- This section moves an adversary's requests to another oracle, with its log translated.
 section Translate
 
 variable {ιW : Type} {W : OracleSpec.{0, 0} ιW} {D₁ R₁ D₂ R₂ : Type}

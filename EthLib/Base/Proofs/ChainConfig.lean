@@ -8,27 +8,12 @@ public import EthLib.Base.Proofs.Fork
 
 The active fork is the greatest fork whose activation a block has reached.
 
-A later block, with a number and a timestamp no smaller, has an active fork no earlier.
+It also proves:
 
-A fork that always activates with a later fork is never active.
-
-On mainnet, some fork is always active.
-
-It is never Constantinople, and never a fork of the consensus layer alone.
-
-A chain sets no blob schedule at a block exactly when the block reaches none of their activations.
-
-The schedule that it sets is one of its schedules, and the block has reached its activation.
-
-The order check of EIP-6122 passes exactly when no fork by block follows a fork by timestamp.
-
-A chain whose forks are in the order of the timeline passes it.
-
-Mainnet and Hoodi set none.
-
-Three numbers build a blob schedule exactly when they meet its bounds, and it holds them.
-
-The numbers of a schedule build it back.
+- that a later block has an active fork no earlier;
+- which blob schedule a chain sets at a block, and the bounds of a schedule;
+- when the order check of EIP-6122 passes;
+- the active forks and blob schedules of mainnet, Hoodi and Sepolia.
 -/
 
 @[expose] public section
@@ -347,6 +332,29 @@ theorem hoodi_dencun_le (h : hoodi.activeFork n t = some f) : .dencun ≤ f := b
 
 /-- Hoodi sets no blob schedule of its own, so each fork keeps the schedule of its EIPs. -/
 theorem hoodi_blobScheduleAt (n t : Nat) : hoodi.blobScheduleAt n t = none := rfl
+
+/-! ## Sepolia -/
+
+/-- Sepolia lists its forks in the order of the timeline, with activations in order. -/
+theorem sepolia_ordered : sepolia.Ordered := by
+  decide
+
+/-- Some fork is active at every block of Sepolia, since Frontier holds from block 0. -/
+theorem sepolia_activeFork_isSome (n t : Nat) : ∃ f, sepolia.activeFork n t = some f := by
+  cases h : sepolia.activeFork n t with
+  | none =>
+    have := activeFork_eq_none_iff.mp h .frontier (.block 0) (by decide)
+    simp [Activation.reached] at this
+  | some f => exact ⟨f, rfl⟩
+
+/-- Every block of Sepolia has at least the rules of London. -/
+theorem sepolia_london_le (h : sepolia.activeFork n t = some f) : .london ≤ f := by
+  have hLondon : (Fork.london, Activation.block 0) ∈ sepolia.activations := by decide
+  obtain ⟨-, hmax⟩ := activeFork_eq_some_iff.mp h
+  exact hmax .london (.block 0) hLondon (by simp [Activation.reached])
+
+/-- Sepolia sets no blob schedule of its own, so each fork keeps the schedule of its EIPs. -/
+theorem sepolia_blobScheduleAt (n t : Nat) : sepolia.blobScheduleAt n t = none := rfl
 
 end ChainConfig
 

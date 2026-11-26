@@ -17,15 +17,7 @@ A run keeps each step with its inputs: the slot step, or the signed block and it
 
 So a theorem about a run can name the blocks of that run and the attestations in them.
 
-A block step of a run checks its state root, and is applied on a state with no upgrade due.
-
 Each step of a run is a step of a chain, so the invariants of chains hold along a run.
-
-Slots and blocks before the next fork form runs.
-
-A run has at most one block for each slot it covers.
-
-A genesis state has its latest block header at slot zero, with a zero state root.
 -/
 
 @[expose] public section
@@ -40,8 +32,14 @@ variable {preset : Preset} {config : Config} {checks : SignatureChecks}
 
 It need not be valid for launch. -/
 def Genesis (config : Config) (checks : SignatureChecks) (g : ForkedBeaconState preset) : Prop :=
-  ∃ hash time deposits,
-    initializeBeaconStateFromEth1 config checks hash time deposits = .ok g.state
+  ∃ hash time deposits before,
+    initializeBeaconStateFromEth1 config checks hash time deposits before = .ok g.state
+
+/-- A genesis state built from deposits is before Altair. -/
+theorem Genesis.before {g : ForkedBeaconState preset} (genesis : Genesis config checks g) :
+    g.fork < .altair :=
+  let ⟨_, _, _, before, _⟩ := genesis
+  before
 
 private theorem header_deposit {fork : Fork} {before after : BeaconState preset fork}
     {early : fork < .hegota} {deposit : Deposit}
@@ -57,8 +55,8 @@ theorem genesis_header {g : ForkedBeaconState preset}
     (genesis : Genesis config checks g) :
     g.state.latestBlockHeader.slot = 0 ∧
       g.state.latestBlockHeader.stateRoot = Vector.replicate 32 0 := by
-  obtain ⟨hash, time, deposits, initialized⟩ := genesis
-  obtain ⟨before, time, root, deposited, activated, finalRoot, dep, act, stateEq⟩ :=
+  obtain ⟨hash, time, deposits, before, initialized⟩ := genesis
+  obtain ⟨time, root, deposited, activated, finalRoot, dep, act, stateEq⟩ :=
     initializeBeaconStateFromEth1_ok initialized
   have depositedHeader : deposited.latestBlockHeader =
       (emptyGenesisState config before time hash deposits.size.toUInt64 root).latestBlockHeader :=
@@ -87,6 +85,7 @@ inductive Step (config : Config) (checks : SignatureChecks) :
       Step config checks before after
   | block {fork : Fork} {before after : BeaconState preset fork}
       (engine : ExecutionEngine preset fork) (signed : SignedBeaconBlock preset fork)
+      -- A block step of a run is applied on a state with no upgrade due.
       (due : upgradeDue config ⟨fork, before⟩ = false)
       (ok : applySignedBlock config checks engine before signed true = .ok after) :
       Step config checks ⟨fork, before⟩ ⟨fork, after⟩
@@ -381,6 +380,22 @@ theorem run_of_processSlots {fork : Fork} {state after : BeaconState preset fork
   obtain ⟨run, -⟩ := run_of_advanceSlots _ advanced (by simpa only [lastSlot] using before)
   exact ⟨run⟩
 
+/-- Slots that advance a state across forks form a run.
+
+Unlike the slots of one fork, they may cross an upgrade. -/
+theorem run_of_advanceSlotsAcross :
+    ∀ (count : Nat) {x y : ForkedBeaconState preset},
+      advanceSlotsAcross config checks count x = .ok y → Nonempty (Run config checks x y)
+  | 0, x, y, computed => by
+    simp only [advanceSlotsAcross, pure, Except.pure, Except.ok.injEq] at computed
+    subst computed
+    exact ⟨.nil⟩
+  | count + 1, x, y, computed => by
+    simp only [advanceSlotsAcross, bind_ok_iff] at computed
+    obtain ⟨middle, middleOk, rest⟩ := computed
+    obtain ⟨tail⟩ := run_of_advanceSlotsAcross count rest
+    exact ⟨(Run.nil.snoc (.slot middleOk)).append tail⟩
+
 /-- The slots up to a block and the block, when its slot is before the next fork.
 
 The slots form a run with no block step, to the state that the block applies to.
@@ -495,22 +510,20 @@ theorem Run.induction_of_same_period {x : ForkedBeaconState preset} (period : Ep
     (blockStep : ∀ {f : Fork} {s t : BeaconState preset f} (engine : ExecutionEngine preset f)
       (signed : SignedBeaconBlock preset f) (due : upgradeDue config ⟨f, s⟩ = false)
       (ok : applySignedBlock config checks engine s signed true = .ok t)
-      (pre : Run config checks x ⟨f, s⟩), f < .glamsterdam → motive ⟨f, s⟩ pre →
+      (pre : Run config checks x ⟨f, s⟩), motive ⟨f, s⟩ pre →
         motive ⟨f, t⟩ (pre.snoc (.block engine signed due ok)))
     (slotStep : ∀ {middle last : ForkedBeaconState preset} (pre : Run config checks x middle)
-      (ok : advanceSlotAcross config checks middle = .ok last), last.fork < .glamsterdam →
+      (ok : advanceSlotAcross config checks middle = .ok last),
       (getCurrentEpoch last.state = getCurrentEpoch middle.state ∨
         getCurrentEpoch last.state % period ≠ 0) →
       motive middle pre → motive last (pre.snoc (.slot ok)))
     {y : ForkedBeaconState preset} (tail : Run config checks x y)
-    (early : y.fork < .glamsterdam)
     (same : (getCurrentEpoch y.state).toNat / max 1 period.toNat =
       (getCurrentEpoch x.state).toNat / max 1 period.toNat) :
     motive y tail := by
   induction tail with
   | nil => exact start
   | @snoc middle last pre step ih =>
-    have middleEarly := Nat.lt_of_le_of_lt step.chainStep.fork_le early
     have low := UInt64.le_iff_toNat_le.mp (currentEpoch_le_of_chainSteps pre.chainSteps)
     have high := UInt64.le_iff_toNat_le.mp step.chainStep.currentEpoch_le
     have midSame : (getCurrentEpoch middle.state).toNat / max 1 period.toNat =
@@ -518,11 +531,11 @@ theorem Run.induction_of_same_period {x : ForkedBeaconState preset} (period : Ep
       have above := Nat.div_le_div_right (c := max 1 period.toNat) high
       have below := Nat.div_le_div_right (c := max 1 period.toNat) low
       omega
-    have prior := ih middleEarly midSame
+    have prior := ih midSame
     cases step with
-    | block engine signed due ok => exact blockStep engine signed due ok pre early prior
+    | block engine signed due ok => exact blockStep engine signed due ok pre prior
     | slot ok =>
-      refine slotStep pre ok early ?_ prior
+      refine slotStep pre ok ?_ prior
       rcases epoch_same_or_not_start high (same.trans midSame.symm) with equal | inside
       · exact .inl (UInt64.toNat_inj.mp equal)
       · refine .inr fun zero => inside ?_

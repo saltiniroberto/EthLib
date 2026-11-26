@@ -4,100 +4,18 @@ public import EthLib.Engine.ForkchoiceUpdated
 public import EthLib.Base.Except
 public import EthLib.Engine.Proofs.Json
 import EthLib.Base.Proofs.Toolchain.JsonBasic
-import EthLib.Base.Proofs.BigEndian
+import EthLib.Base.Proofs.ByteOrder
 import EthLib.Base.Proofs.List
 public import EthLib.Base.Proofs.Except
 
 /-!
 # Proofs: the parameters, the head and the payload attributes of `engine_forkchoiceUpdated`
 
-The update is syncing exactly when the execution layer does not hold the head.
+An update is syncing, invalid, valid or an error, and each case has its own theorem.
 
-A held head whose chain fails the terminal block check is invalid, with the zero hash.
+The decoders read back the parameters, the attributes and the response that the writers write.
 
-The head then does not change.
-
-A held head of proof of work fails that check exactly when it is not terminal.
-
-A valid head below the known finalized block is valid, and the head does not change.
-
-A valid update that keeps the head is exactly that case.
-
-Any other valid update selects a valid head that the execution layer holds.
-
-Its safe and finalized blocks are then zero, or the head or one of its known ancestors.
-
-They are zero only while the transition block is not finalized.
-
-The update fails in one case only.
-
-The head is valid, and its chain passes the terminal block check.
-
-The head is not below the known finalized block.
-
-Its safe or its finalized block is then zero after the transition, or neither zero nor on its chain.
-
-Otherwise such a head is valid and becomes the head.
-
-A head that the execution layer does not hold gives a syncing update.
-
-An invalid head names as latest valid hash the valid block of its chain nearest the head.
-
-There is none when no block of the chain is valid.
-
-That hash is zero when the block is of proof of work, and else a valid payload of the chain.
-
-Each block of a chain after the first is the parent of the block before it.
-
-The forkchoice state decodes exactly when its object holds exactly its three fields.
-
-Each of them is a hash of 32 bytes.
-
-The parameters decode exactly when they are a JSON array of the state and the attributes.
-
-From version 4 custody columns may follow, and they must then decode.
-
-The state must decode, and the attributes must be `null` or an object.
-
-Custody columns that decode never change the answer.
-
-Without payload attributes, every version gives the same answer.
-
-When the update applies a valid head, attributes that fit no structure of the version give `-38003`.
-
-When it applies none, the attributes are not read.
-
-Attributes that fit give the answer of their checks against the head, which the tree holds.
-
-They pass exactly when the version takes their fork and their structure is that of the fork.
-
-Their timestamp must also be above the head's.
-
-The attributes at that fork keep every field.
-
-A fork that the version does not take, or no fork at all, gives `-38005`.
-
-A version takes the forks from Paris to Glamsterdam whose attribute structure it decodes.
-
-No version takes another fork.
-
-A structure that is not that of the fork, or a timestamp not above the head's, gives `-38003`.
-
-The decoders read back the state, the attributes and the parameters that the writers write.
-
-A JSON value reads as a forkchoice response exactly when it is an object of this form.
-
-It holds a payload status, and its only other member that is not `null` may be an ID.
-
-The status is valid, invalid or syncing, and the ID 8 bytes in lowercase hex or absent.
-
-Attributes sent with a head that the update applies come back at the fork of the next block.
-
-The bytes that the ID of a build hashes determine the head and the attributes, at one fork.
-
-Take two calls on one configuration and one tree that start builds.
-
-They hash the same bytes only for the same head and the same attributes at the same fork.
+The bytes that the ID of a build hashes determine its head and its attributes, at one fork.
 -/
 
 public section
@@ -595,11 +513,11 @@ theorem forkchoiceStateOfJson_eq_ok_iff {j : Lean.Json} {s : ForkchoiceState} :
 
 /-- The parameters decode exactly when they are a JSON array of the state and the attributes.
 
-From version 4 the custody columns may follow them.
+The attributes may be absent, and from version 4 the custody columns may follow them.
 
 The first value must decode as a forkchoice state.
 
-The second value must be `null` or an object.
+The second value, `null` when absent, must be `null` or an object.
 
 The custody columns, `null` when absent, must decode.
 
@@ -608,7 +526,8 @@ theorem forkchoiceUpdatedParams_eq_ok_iff {version : Nat} {params : Lean.Json}
     {r : ForkchoiceState × Option Lean.Json} :
     forkchoiceUpdatedParams version params = .ok r ↔
       ∃ stateJson attributes custody s,
-        (params = .arr #[stateJson, attributes] ∧ custody = .null ∨
+        ((params = .arr #[stateJson, attributes] ∨ params = .arr #[stateJson] ∧ attributes = .null) ∧
+            custody = .null ∨
           4 ≤ version ∧ params = .arr #[stateJson, attributes, custody]) ∧
         forkchoiceStateOfJson stateJson = .ok s ∧
         (∃ columns, custodyColumnsOfJson custody = .ok columns) ∧
@@ -628,11 +547,14 @@ theorem forkchoiceUpdatedParams_eq_ok_iff {version : Nat} {params : Lean.Json}
       by_cases h4 : 4 ≤ version
       · cases hs : forkchoiceStateOfJson stateJson <;> cases hc : custodyColumnsOfJson custody <;>
           cases attributes <;>
-          simp [paramsArray, h4, hs, hc, bind, Except.bind, pure, Except.pure, eq_comm,
-            and_assoc]
+          simp [paramsArray, h4, hs, hc, bind, Except.bind, pure, Except.pure, and_assoc] <;>
+          exact eq_comm
       · simp [paramsArray, h4, bind, Except.bind, pure, Except.pure]
+    | [stateJson] =>
+      cases hs : forkchoiceStateOfJson stateJson <;>
+        simp [paramsArray, hs, hNull, bind, Except.bind, pure, Except.pure, and_assoc] <;>
+        exact eq_comm
     | [] => simp [paramsArray, bind, Except.bind, pure, Except.pure]
-    | [_] => simp [paramsArray, bind, Except.bind, pure, Except.pure]
     | _ :: _ :: _ :: _ :: _ => simp [paramsArray, bind, Except.bind, pure, Except.pure]
   | _ => simp [paramsArray, bind, Except.bind]
 
@@ -1318,7 +1240,7 @@ theorem forkchoiceUpdatedParams_json {fork : Fork} (version : Nat) (state : Fork
       optionJson (dataJson ·.toList) custody, state, Or.inr ⟨h4, by simp [h4]⟩,
       forkchoiceStateOfJson_json state, ⟨custody, custodyColumnsOfJson_json custody⟩, hlast⟩
   · exact ⟨forkchoiceStateJson state, optionJson payloadAttributesJson attributes, .null, state,
-      Or.inl ⟨by simp [h4], rfl⟩, forkchoiceStateOfJson_json state, ⟨none, rfl⟩, hlast⟩
+      Or.inl ⟨Or.inl (by simp [h4]), rfl⟩, forkchoiceStateOfJson_json state, ⟨none, rfl⟩, hlast⟩
 
 /-- The status of every answer of an update is valid, invalid or syncing. -/
 private theorem forkchoiceUpdated_status {result : PayloadStatus × Option Hash32}
@@ -1655,25 +1577,27 @@ theorem forkchoiceUpdatedCall_payloadAttributesJson_of_heze {fork : Fork}
 /-! ## The ID of a build -/
 
 /-- Two 64-bit numbers with the same 8 big-endian bytes are equal. -/
-private theorem natToBytes_eight_inj {a b : UInt64}
-    (h : natToBytes 8 a.toNat = natToBytes 8 b.toNat) : a = b := by
+private theorem toBE_eight_inj {a b : UInt64}
+    (h : (ByteOrder.toBE 8 a.toNat).toList = (ByteOrder.toBE 8 b.toNat).toList) : a = b := by
   exact UInt64.toNat_inj.mp
-    (natToBytes_inj (by simpa using a.toNat_lt) (by simpa using b.toNat_lt) h)
+    (ByteOrder.toBE_inj (n := 8) a.toNat_lt b.toNat_lt (Vector.toList_inj.mp h))
 
 /-- The bytes that the ID of a build hashes for a withdrawal determine the withdrawal. -/
 private theorem withdrawalBytes_inj (w w' : Execution.Blocks.Withdrawal)
-    (h : natToBytes 8 w.index.toNat ++ (natToBytes 8 w.validatorIndex.toNat ++
-        (w.address.toList ++ natToBytes 8 w.amount.toNat)) =
-      natToBytes 8 w'.index.toNat ++ (natToBytes 8 w'.validatorIndex.toNat ++
-        (w'.address.toList ++ natToBytes 8 w'.amount.toNat))) : w = w' := by
-  obtain ⟨h1, h⟩ := List.append_inj h (by simp [natToBytes_length])
-  obtain ⟨h2, h⟩ := List.append_inj h (by simp [natToBytes_length])
+    (h : (ByteOrder.toBE 8 w.index.toNat).toList
+      ++ ((ByteOrder.toBE 8 w.validatorIndex.toNat).toList ++
+        (w.address.toList ++ (ByteOrder.toBE 8 w.amount.toNat).toList)) =
+      (ByteOrder.toBE 8 w'.index.toNat).toList
+        ++ ((ByteOrder.toBE 8 w'.validatorIndex.toNat).toList ++
+        (w'.address.toList ++ (ByteOrder.toBE 8 w'.amount.toNat).toList))) : w = w' := by
+  obtain ⟨h1, h⟩ := List.append_inj h (by simp)
+  obtain ⟨h2, h⟩ := List.append_inj h (by simp)
   obtain ⟨h3, h4⟩ := List.append_inj h (by simp)
   cases w
   cases w'
   simp only [Execution.Blocks.Withdrawal.mk.injEq]
-  exact ⟨natToBytes_eight_inj h1, natToBytes_eight_inj h2, Vector.toList_inj.mp h3,
-    natToBytes_eight_inj h4⟩
+  exact ⟨toBE_eight_inj h1, toBE_eight_inj h2, Vector.toList_inj.mp h3,
+    toBE_eight_inj h4⟩
 
 /-- Bytes each after a byte 1, then a byte 0, split one way only from what follows. -/
 private theorem markedBytes_inj {x x' r r' : List UInt8}
@@ -1743,7 +1667,7 @@ theorem payloadIdInput_inj {fork : Fork} {head head' : Hash32} {a a' : PayloadAt
   have e := congrArg (fun b : ByteArray => b.data.toList) h
   simp only [payloadIdInput, List.append_assoc] at e
   obtain ⟨hHead, e⟩ := List.append_inj e (by simp)
-  obtain ⟨hTime, e⟩ := List.append_inj e (by simp [natToBytes_length])
+  obtain ⟨hTime, e⟩ := List.append_inj e (by simp)
   obtain ⟨hRandao, e⟩ := List.append_inj e (by simp)
   obtain ⟨hFee, e⟩ := List.append_inj e (by simp)
   -- The inclusion list ends with the byte 2, which no entry starts with.
@@ -1751,17 +1675,17 @@ theorem payloadIdInput_inj {fork : Fork} {head head' : Hash32} {a a' : PayloadAt
   -- The withdrawals vary in length, so this split counts the fixed bytes after them.
   obtain ⟨hW, e⟩ := List.append_inj' e (by
     by_cases hd : .dencun ≤ fork <;> by_cases hg : .glamsterdam ≤ fork <;>
-      simp [hd, hg, natToBytes_length])
+      simp [hd, hg])
   obtain ⟨hB, hG⟩ := List.append_inj e (by by_cases hd : .dencun ≤ fork <;> simp [hd])
   refine ⟨Vector.toList_inj.mp hHead, ?_⟩
   obtain ⟨t, r, s, w, b, n, g, l⟩ := a
   obtain ⟨t', r', s', w', b', n', g', l'⟩ := a'
   simp only [PayloadAttributes.mk.injEq]
-  refine ⟨natToBytes_eight_inj hTime, Vector.toList_inj.mp hRandao, Vector.toList_inj.mp hFee,
+  refine ⟨toBE_eight_inj hTime, Vector.toList_inj.mp hRandao, Vector.toList_inj.mp hFee,
     ?_, ?_, ?_⟩
   · by_cases hs : .shapella ≤ fork
     · simp only [hs, dite_true] at hW
-      have := flatMap_inj_of_length (n := 44) (by decide) (fun x => by simp [natToBytes_length])
+      have := flatMap_inj_of_length (n := 44) (by decide) (fun x => by simp)
         withdrawalBytes_inj hW
       exact funext fun _ => this
     · exact Since.eq_of_not_le hs _ _
@@ -1771,8 +1695,8 @@ theorem payloadIdInput_inj {fork : Fork} {head head' : Hash32} {a a' : PayloadAt
     · exact Since.eq_of_not_le hd _ _
   · by_cases hg : .glamsterdam ≤ fork
     · simp only [hg, dite_true] at hG
-      obtain ⟨hn, hg'⟩ := List.append_inj hG (by simp [natToBytes_length])
-      exact ⟨funext fun _ => natToBytes_eight_inj hn, funext fun _ => natToBytes_eight_inj hg',
+      obtain ⟨hn, hg'⟩ := List.append_inj hG (by simp)
+      exact ⟨funext fun _ => toBE_eight_inj hn, funext fun _ => toBE_eight_inj hg',
         funext hL⟩
     · exact ⟨Since.eq_of_not_le hg _ _, Since.eq_of_not_le hg _ _, funext hL⟩
 
@@ -1784,8 +1708,8 @@ private theorem payloadIdInput_head_timestamp {fork fork' : Fork} {head head' : 
   have e := congrArg (fun b : ByteArray => b.data.toList) h
   simp only [payloadIdInput, List.append_assoc] at e
   obtain ⟨hHead, e⟩ := List.append_inj e (by simp)
-  obtain ⟨hTime, -⟩ := List.append_inj e (by simp [natToBytes_length])
-  exact ⟨Vector.toList_inj.mp hHead, natToBytes_eight_inj hTime⟩
+  obtain ⟨hTime, -⟩ := List.append_inj e (by simp)
+  exact ⟨Vector.toList_inj.mp hHead, toBE_eight_inj hTime⟩
 
 /-- Two calls that start builds with the same bytes to hash start the same build.
 

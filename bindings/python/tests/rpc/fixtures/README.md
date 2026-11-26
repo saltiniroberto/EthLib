@@ -5,7 +5,7 @@ These directories keep the layout of the source, one directory for each method.
 
 The directory `error-groups` holds the groups of error codes of the API, from `src/error-groups/` of the source.
 
-- Source: [`ethereum/execution-apis`](https://github.com/ethereum/execution-apis) at commit `3284ee80c3da3e516c53782dde75157cccf1ebdc`.
+- Source: [`ethereum/execution-apis`](https://github.com/ethereum/execution-apis) at commit `166e334c73d96ffce916ea84e97addbcd8b3727a`.
 - Authors: the contributors of `ethereum/execution-apis`.
 - Licence: CC0 1.0 Universal.
 
@@ -38,7 +38,7 @@ The two block access-list methods run against the same chain and the `bal` files
 The files of the other methods run through the readers of the parameters, without a chain.
 
 The view runs every file of `eth_simulateV1`, and compares its error code or its blocks.
-One file is expected to fail, for the reason that `SOUNDNESS.md` gives.
+Two files are expected to fail, for the reasons that `SOUNDNESS.md` gives.
 The results of the calls in each block are not yet specified, so the comparison leaves them out.
 
 The trie suite also checks each answer of `eth_getProof` against the state root of block 60.
@@ -51,6 +51,24 @@ Some files name a block by an object of EIP-1898, or by a hash written as a stri
 The tests also check how the reader reads that block parameter.
 For a method that the view does not serve, they do not check the result of the request.
 The view does not serve the trace methods yet, so the tests do not run their other files.
+
+## Methods that are not vendored
+
+The source has twelve method directories under `tests/` that EthLib does not vendor.
+Nine of them answer from state of the node that the test chain alone does not fix:
+
+- `eth_gasPrice` and `eth_maxPriorityFeePerGas` read the gas price oracle of the node;
+- `eth_syncing` reads the sync state of the node;
+- `net_listening` and `net_peerCount` read the peers of the node;
+- `eth_capabilities` reads the retention policy of the node;
+- `txpool_content`, `txpool_contentFrom` and `txpool_status` read the transaction pool of the node.
+
+`testing_buildBlockV1` and `testing_commitBlockV1` build a new block, and the second one also makes it the head.
+The chain view only reads the chain, so it serves neither.
+
+The twelfth, `eth_blobBaseFee`, waits for [ethereum/execution-apis#1004](https://github.com/ethereum/execution-apis/pull/1004), which proposes that it return the blob base fee of the next block.
+
+## Error groups
 
 The tests compare the error codes of the bindings with these groups.
 They take the order of the groups from the table of reserved ranges in `src/error-groups/README.md` of the source.

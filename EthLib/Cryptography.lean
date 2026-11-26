@@ -12,12 +12,17 @@ public import EthLib.Cryptography.Vrf
 public import EthLib.Cryptography.Secp256k1
 public import EthLib.Cryptography.Secp256r1
 public import EthLib.Cryptography.Rfc6979
+public import EthLib.Cryptography.Ecdsa.Curve
+public import EthLib.Cryptography.Sec1
 public import EthLib.Cryptography.Ecdsa.Encoding
 public import EthLib.Cryptography.AltBn128
 public import EthLib.Cryptography.Aes
 public import EthLib.Cryptography.Ethash
 public import EthLib.Cryptography.Montgomery
 public import EthLib.Cryptography.Montgomery.Fin
+public import EthLib.Cryptography.Montgomery.Limbs
+public import EthLib.Cryptography.Montgomery.Product
+public import EthLib.Cryptography.Montgomery.Words
 public import EthLib.Cryptography.Word64
 public import EthLib.Cryptography.BaseField
 public import EthLib.Cryptography.Fp2

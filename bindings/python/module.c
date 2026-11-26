@@ -49,7 +49,6 @@ size_t SPHINCS_FORS_HEIGHT;
 
 size_t ENR_MAX_RECORD_SIZE;
 size_t RLPX_SECRETS_SIZE;
-size_t REQRESP_MAX_PAYLOAD_SIZE;
 size_t REQRESP_MAX_ERROR_MESSAGE_SIZE;
 size_t SECP256K1_HASH_LEN;
 size_t SECP256K1_SIGNATURE_LEN;
@@ -353,11 +352,6 @@ eth_rlpx_const_secrets_size(
 );
 
 extern uint64_t
-eth_reqresp_const_max_payload_size(
-  lean_object* unit
-);
-
-extern uint64_t
 eth_reqresp_const_max_error_message_size(
   lean_object* unit
 );
@@ -633,6 +627,11 @@ static PyMethodDef methods[] = {
   {"bls_pop_verify", py_bls_pop_verify, METH_VARARGS, DOC_bls_pop_verify},
   {"bls_decode_g1", py_bls_decode_g1, METH_VARARGS, DOC_bls_decode_g1},
   {"bls_decode_g2", py_bls_decode_g2, METH_VARARGS, DOC_bls_decode_g2},
+  {"bls_key_validate", py_bls_key_validate, METH_VARARGS, DOC_bls_key_validate},
+  {"bls_sk_to_pk", py_bls_sk_to_pk, METH_VARARGS, DOC_bls_sk_to_pk},
+  {"bls_bytes48_to_g1", py_bls_bytes48_to_g1, METH_VARARGS, DOC_bls_bytes48_to_g1},
+  {"bls_g1_add", py_bls_g1_add, METH_VARARGS, DOC_bls_g1_add},
+  {"bls_g1_neg", py_bls_g1_neg, METH_VARARGS, DOC_bls_g1_neg},
   {"bls_expand_message_xmd", py_bls_expand_message_xmd, METH_VARARGS, DOC_bls_expand_message_xmd},
   {"bls_hash_to_g2", py_bls_hash_to_g2, METH_VARARGS, DOC_bls_hash_to_g2},
   {"bls_pairing", py_bls_pairing, METH_VARARGS, DOC_bls_pairing},
@@ -898,6 +897,8 @@ static PyMethodDef methods[] = {
    METH_VARARGS, DOC_consensus_default_auth_data},
   {"consensus_relay_submission_bid", py_consensus_relay_submission_bid,
    METH_VARARGS, DOC_consensus_relay_submission_bid},
+  {"consensus_relay_verify_bid_value", py_consensus_relay_verify_bid_value,
+   METH_VARARGS, DOC_consensus_relay_verify_bid_value},
   {"consensus_relay_validators", py_consensus_relay_validators,
    METH_VARARGS, DOC_consensus_relay_validators},
   {"consensus_keymanager_json", py_consensus_keymanager_json, METH_VARARGS,
@@ -1149,6 +1150,8 @@ static PyMethodDef methods[] = {
    DOC_consensus_reqresp_request_bounds},
   {"consensus_reqresp_response_bounds", py_consensus_reqresp_response_bounds, METH_VARARGS,
    DOC_consensus_reqresp_response_bounds},
+  {"consensus_reqresp_decode_chunk", py_consensus_reqresp_decode_chunk, METH_VARARGS,
+   DOC_consensus_reqresp_decode_chunk},
   {"consensus_reqresp_response_valid", py_consensus_reqresp_response_valid, METH_VARARGS,
    DOC_consensus_reqresp_response_valid},
   {"consensus_gossip_topic_bound", py_consensus_gossip_topic_bound, METH_VARARGS,
@@ -1343,6 +1346,8 @@ static PyMethodDef methods[] = {
   {"state_rewards_root", py_state_rewards_root, METH_VARARGS, DOC_state_rewards_root},
   {"mainnet_active_fork", py_mainnet_active_fork, METH_VARARGS, DOC_mainnet_active_fork},
   {"hoodi_active_fork", py_hoodi_active_fork, METH_VARARGS, DOC_hoodi_active_fork},
+  {"sepolia_active_fork", py_sepolia_active_fork, METH_VARARGS, DOC_sepolia_active_fork},
+  {"chain_config", py_chain_config, METH_VARARGS, DOC_chain_config},
   {"active_fork", py_active_fork, METH_VARARGS, DOC_active_fork},
   {"execution_blob_schedule", py_execution_blob_schedule, METH_VARARGS,
     DOC_execution_blob_schedule},
@@ -1561,7 +1566,6 @@ PyInit__native(void) {
     SECP256R1_SIGNATURE_LEN  = (size_t) eth_secp256r1_const_signature_len(lean_box(0));
     ENR_MAX_RECORD_SIZE     = (size_t) eth_enr_const_max_record_size(lean_box(0));
     RLPX_SECRETS_SIZE       = (size_t) eth_rlpx_const_secrets_size(lean_box(0));
-    REQRESP_MAX_PAYLOAD_SIZE = (size_t) eth_reqresp_const_max_payload_size(lean_box(0));
     REQRESP_MAX_ERROR_MESSAGE_SIZE = (size_t) eth_reqresp_const_max_error_message_size(lean_box(0));
     PBKDF2_HASH_LEN = (size_t) eth_pbkdf2_const_hash_len(lean_box(0));
     SALSA_BLOCK_SIZE = (size_t) eth_scrypt_const_salsa_block_size(lean_box(0));
@@ -1632,7 +1636,6 @@ PyInit__native(void) {
   PyModule_AddIntConstant(m, "SECP256R1_SIGNATURE_LEN", SECP256R1_SIGNATURE_LEN);
   PyModule_AddIntConstant(m, "ENR_MAX_RECORD_SIZE", ENR_MAX_RECORD_SIZE);
   PyModule_AddIntConstant(m, "RLPX_SECRETS_SIZE", RLPX_SECRETS_SIZE);
-  PyModule_AddIntConstant(m, "REQRESP_MAX_PAYLOAD_SIZE", REQRESP_MAX_PAYLOAD_SIZE);
   PyModule_AddIntConstant(m, "REQRESP_MAX_ERROR_MESSAGE_SIZE", REQRESP_MAX_ERROR_MESSAGE_SIZE);
   PyModule_AddIntConstant(m, "PBKDF2_HASH_LEN", PBKDF2_HASH_LEN);
   PyModule_AddIntConstant(m, "SALSA_BLOCK_SIZE", SALSA_BLOCK_SIZE);

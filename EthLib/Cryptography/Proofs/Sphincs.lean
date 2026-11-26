@@ -15,7 +15,6 @@ public import EthLib.Cryptography.Proofs.Sphincs.Serialization
 public import EthLib.Cryptography.Proofs.Sphincs.Sign
 public import EthLib.Cryptography.Proofs.Sphincs.Correctness
 public import EthLib.Cryptography.Proofs.Sphincs.Errors
-public import EthLib.Cryptography.Proofs.Sphincs.Unforgeability.Game
 public import EthLib.Cryptography.Proofs.Sphincs.Unforgeability.VerifyQueries
 public import EthLib.Cryptography.Proofs.Sphincs.Unforgeability.HonestQueries
 public import EthLib.Cryptography.Proofs.Sphincs.SignatureFailure
@@ -35,6 +34,7 @@ public import EthLib.Cryptography.Proofs.Sphincs.Unforgeability.Bridge.Cost
 public import EthLib.Cryptography.Proofs.Sphincs.Cost
 public import EthLib.Cryptography.Proofs.Sphincs.Unforgeability.Bridge.AdversaryCalls
 public import EthLib.Cryptography.Proofs.Sphincs.Unforgeability
+public import EthLib.Cryptography.Proofs.Sphincs.Unforgeability.Bridge.SigningFailure
 
 /-!
 # Proofs: leanSPHINCS

@@ -48,8 +48,6 @@ def exactArray? {α : Type} (n : Nat) (a : Array α) : Option (Vector α n) :=
 
 /-- The elements of an array as a vector of `n` elements, or an error built from its length.
 
-The error is built only for an array of another length: no padding, no truncation.
-
 Examples:
 * `exactArray 2 #[10, 20] id = .ok #v[10, 20]`
 * `exactArray 3 #[10, 20] id = .error 2`
@@ -57,6 +55,7 @@ Examples:
 def exactArray {α ε : Type} (n : Nat) (a : Array α) (bad : Nat → ε) : Except ε (Vector α n) :=
   match exactArray? n a with
   | some v => .ok v
+  -- The error is built only for an array of another length: no padding, no truncation.
   | none => .error (bad a.size)
 
 /-- The bytes of a buffer as an object of `n` bytes, if the buffer has exactly `n` bytes.
@@ -70,14 +69,13 @@ def exactBytes? (n : Nat) (bytes : ByteArray) : Option (Vector UInt8 n) :=
 
 /-- The bytes of a buffer as an object of `n` bytes, or an error built from the buffer's length.
 
-The error is built only for a buffer of another length: no padding, no truncation.
-
 Examples:
 * `exactBytes 2 (ByteArray.mk #[10, 20]) id = .ok #v[10, 20]`
 * `exactBytes 3 (ByteArray.mk #[10, 20]) id = .error 2`
 -/
 def exactBytes {ε : Type} (n : Nat) (bytes : ByteArray) (bad : Nat → ε) :
     Except ε (Vector UInt8 n) :=
+  -- The error is built only for a buffer of another length: no padding, no truncation.
   exactArray n bytes.data bad
 
 /-- Read the `n` bytes of a buffer that start at an offset.
@@ -96,14 +94,18 @@ def readBytes (b : ByteArray) (offset n : Nat) (h : offset + n ≤ b.size) :
 
 /-- The byte at index `i` of the buffer, or `0` past its end.
 
+Use it only where the specification reads zeros past the end, and cite that rule at the call.
+
+A decoder checks the length first, then reads with a proof that the byte exists.
+
 It reads the byte in place, since the array of all the bytes would cost a copy of the buffer. -/
-@[inline] def byteAt (data : ByteArray) (i : Nat) : UInt8 :=
+@[inline] def byteAtOrZero (data : ByteArray) (i : Nat) : UInt8 :=
   if h : i < data.size then data[i] else 0
 
 /-! ## Bitwise operations -/
 
 /-- The exclusive or of two byte strings of one length, byte by byte. -/
-def xorBytes {n : Nat} (a b : Vector UInt8 n) : Vector UInt8 n :=
+@[inline] def xorBytes {n : Nat} (a b : Vector UInt8 n) : Vector UInt8 n :=
   Vector.zipWith (· ^^^ ·) a b
 
 /-- The exclusive or of two untyped byte strings, byte by byte, over the length of the first.
@@ -116,7 +118,7 @@ def xorByteArray (a b : ByteArray) : ByteArray :=
 where
   /-- Each byte from the index on is XORed with the byte of the second string. -/
   go (i : Nat) (acc : ByteArray) : ByteArray :=
-    if h : i < acc.size then go (i + 1) (acc.set i (acc[i] ^^^ byteAt b i)) else acc
+    if h : i < acc.size then go (i + 1) (acc.set i (acc[i] ^^^ byteAtOrZero b i)) else acc
   termination_by acc.size - i
   decreasing_by simp only [ByteArray.set, ByteArray.size, Array.size_set] at h ⊢; omega
 

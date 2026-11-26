@@ -11,29 +11,13 @@ The Snappy framing format, from `framing_format.txt` of `google/snappy`:
 <https://github.com/google/snappy/blob/7406111ac4ae539ea0db8b7ea2dc76730cd957f4/framing_format.txt>
 
 Consensus-layer peers compress request and response messages with it.
-
-A stream is a sequence of chunks with nothing between them (§1).
-
-The first chunk is the stream identifier (§4.1).
-
-A data chunk starts with a masked CRC-32C of its uncompressed data (§3).
-
-A peer controls every byte, so decoding is total and names each way a stream can be malformed.
-
-The decoder reads the whole stream at once.
-
-A reader can also stop at the chunk that completes a given number of bytes.
-
-The encoder writes uncompressed chunks only.
-
-It gives proofs, tests and bindings a stream to decode, and it is not a compressor.
 -/
 
 @[expose] public section
 
 namespace EthLib.Networking.Snappy
 
-open EthLib.Base (bytesToUint uintToBytes)
+open EthLib.Base (ByteOrder.ofLE ByteOrder.toLE)
 open EthLib.Cryptography.Hash.Crc32c (crc32c)
 
 /-- The ten bytes every stream starts with (§4.1).
@@ -57,14 +41,16 @@ def uncompressedType : UInt8 := 0x01
 -/
 def maxChunkLength : Nat := 65536
 
-/-- The masked CRC-32C that a data chunk stores (§3). -/
+/-- The masked CRC-32C that a data chunk stores (§3), at its start. -/
 def maskedCrc (data : ByteArray) : UInt32 :=
   -- §3: the CRC-32C of RFC 3720, §12.1.
   let crc := crc32c data
   -- §3: rotate the checksum right by 15 bits, then add the constant 0xa282ead8 modulo 2^32.
   ((crc >>> 15) ||| (crc <<< 17)) + 0xa282ead8
 
-/-- Every way decoding a stream can reject its input. -/
+/-- Every way decoding a stream can reject its input.
+
+A peer controls every byte, so decoding is total and names each way a stream can be malformed. -/
 inductive FrameError where
   /-- The stream does not start with a stream identifier chunk (§1).
 
@@ -113,7 +99,7 @@ def FrameError.code : FrameError → UInt32
 /-- The uncompressed data of a chunk, if the stored checksum matches it (§3). -/
 def verifyChecksum (checksum data : List UInt8) : Except FrameError (List UInt8) :=
   -- §3: the checksum is always stored as a four bytes long integer, in little-endian.
-  let stored := UInt32.ofNat (bytesToUint checksum.toArray.toVector)
+  let stored := UInt32.ofNat (ByteOrder.ofLE checksum.toArray.toVector)
   -- §4.2 and §4.3: it is the masked CRC-32C of the uncompressed data.
   let computed := maskedCrc ⟨data.toArray⟩
   if stored == computed then .ok data else .error (.checksumMismatch stored computed)
@@ -171,12 +157,15 @@ def decodeChunk (type : UInt8) (body : List UInt8) : Except FrameError (List UIn
   else
     .ok []
 
+-- Each check of a length against a bound reads only as many elements as the bound.
+attribute [local instance high] decideLeLength decideLengthLt
+
 /-- Read the chunk at the front of a stream, and return its decoded bytes and the bytes after it. -/
 def readChunk : List UInt8 → Except FrameError (List UInt8 × List UInt8)
   -- §1: a chunk is first a single byte of chunk identifier, then a three-byte length.
   | type :: l0 :: l1 :: l2 :: rest =>
       -- §1: the length is little-endian, from 0 to 16777215, and excludes the four header bytes.
-      let len := bytesToUint #v[l0, l1, l2]
+      let len := ByteOrder.ofLE #v[l0, l1, l2]
       -- §1: then the data, of that length.
       if rest.length < len then
         .error (.chunkPastEnd len rest.length)
@@ -186,7 +175,7 @@ def readChunk : List UInt8 → Except FrameError (List UInt8 × List UInt8)
   -- Not in §1: the input ended inside the four header bytes.
   | bs => .error (.headerTruncated bs.length)
 
-/-- Decode the chunks of a stream, one after the other.
+/-- Decode the chunks of a stream, one after the other, with nothing between them (§1).
 
 The fuel bounds the number of chunks.
 
@@ -211,7 +200,9 @@ def decodeFramesList (bs : List UInt8) : Except FrameError (List UInt8) :=
       else .error (.missingStreamIdentifier (some type))
   | [] => .error (.missingStreamIdentifier none)
 
-/-- The bytes a framed stream decodes to, or why it is not a valid stream. -/
+/-- The bytes a framed stream decodes to, or why it is not a valid stream.
+
+The decoder reads the whole stream at once. -/
 def decodeFrames (bs : ByteArray) : Except FrameError ByteArray :=
   (decodeFramesList bs.data.toList).map fun out => ⟨out.toArray⟩
 
@@ -219,21 +210,19 @@ def decodeFrames (bs : ByteArray) : Except FrameError ByteArray :=
 
 It returns the decoded bytes of the chunks read and the bytes after the last of them.
 
-It reads at least one chunk unless the stream is empty, even when `need` is 0.
-
-A chunk is read whole, so the output can be longer than `need`.
-
-The stream can end first, and then the output is shorter.
-
 The fuel bounds the number of chunks. -/
 def readChunks (need : Nat) : List UInt8 → Nat →
     Except FrameError (List UInt8 × List UInt8)
+  -- The stream can end first, and then the output is shorter.
   | [], _ => .ok ([], [])
   -- Out of fuel: unreachable with enough fuel, so the field is arbitrary.
   | bs@(_ :: _), 0 => .error (.headerTruncated bs.length)
   | bs@(_ :: _), fuel + 1 => do
+      -- The reader reads at least one chunk unless the stream is empty, even when `need` is 0.
       let (out, rest) ← readChunk bs
       -- Not in the source: the reader stops at the chunk that completes `need` bytes.
+      --
+      -- A chunk is read whole, so the output can be longer than `need`.
       if need ≤ out.length then .ok (out, rest)
       else (readChunks (need - out.length) rest fuel).map fun read => (out ++ read.1, read.2)
 
@@ -259,9 +248,9 @@ def uncompressedChunk (data : List UInt8) : List UInt8 :=
   -- §1 and §4.3: the type 0x01, then the length of the chunk data in three bytes, little-endian.
   --
   -- §4.3: that data is the four checksum bytes, then the raw bytes.
-  uncompressedType :: (uintToBytes 3 (data.length + 4)).toList ++
+  uncompressedType :: (ByteOrder.toLE 3 (data.length + 4)).toList ++
     -- §3: the masked CRC-32C, as a four bytes long integer in little-endian.
-    (uintToBytes 4 (maskedCrc ⟨data.toArray⟩).toNat).toList ++ data
+    (ByteOrder.toLE 4 (maskedCrc ⟨data.toArray⟩).toNat).toList ++ data
 
 /-- The data cut into pieces of 65536 bytes, the last one shorter, each written by `chunk`.
 
@@ -279,6 +268,8 @@ def encodeChunks (chunk : List UInt8 → List UInt8) : List UInt8 → Nat → Li
 /-- A framed stream that decodes to `data`: the stream identifier, then uncompressed chunks.
 
 It is the inverse that proofs, tests and bindings use, not a compressor.
+
+The encoder writes uncompressed chunks only.
 -/
 def encodeFramesLiteral (data : ByteArray) : ByteArray :=
   -- §1 and §4.1: the stream identifier chunk first, then the data chunks back-to-back.

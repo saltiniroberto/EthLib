@@ -31,9 +31,9 @@ The cohort is the keys active and unslashed at the start `x`.
 
 The branch splits into one segment per epoch, at the epochs of the starts of its steps.
 
-A segment runs inside its epoch, and its last step may be the slot that ends the epoch.
+The blocks of a segment pay the sync debits of its epoch.
 
-The blocks of the segment pay the sync debits of the epoch, and that slot pays its rewards pass.
+The slot that ends the epoch pays its rewards pass.
 
 Together they fit the penalty `lambda_t` of the epoch. -/
 
@@ -77,14 +77,6 @@ theorem producer_le_cohort (x : ForkedBeaconState preset) (early : x.fork < .gla
     Finset.sum_image fun a _ b _ same => UInt64.toNat_inj.mp same, Finset.sum_filter]
   refine Finset.sum_le_sum fun i _ => ?_
   cases (x.state.validators.data[i.toNat]?.map (·.slashed)).getD true <;> simp
-
-/-- The sums over a list of events and over a set of keys commute. -/
-private theorem list_sum_comm (S : Finset Nat) (f : Nat → BalanceEvent preset → Nat) :
-    ∀ events : List (BalanceEvent preset),
-      (events.map fun e => ∑ j ∈ S, f j e).sum = ∑ j ∈ S, (events.map (f j)).sum
-  | [] => by simp
-  | e :: rest => by
-    simp only [List.map_cons, List.sum_cons, list_sum_comm S f rest, Finset.sum_add_distrib]
 
 /-- The debits of one event over a set of keys are at most its debits over the registry. -/
 theorem keys_debits_le (S : Finset Nat) (e : BalanceEvent preset) :
@@ -140,18 +132,11 @@ private theorem contains_epochs {g a u w : ForkedBeaconState preset} (run : Run 
   exact ⟨currentEpoch_le_of_chainSteps pre.chainSteps,
     UInt64.le_trans step.chainStep.currentEpoch_le (currentEpoch_le_of_chainSteps post.chainSteps)⟩
 
-/-- A segment of a branch that starts in an epoch either stays in it or ends it with one slot.
-
-Every step of the segment `mid` starts at the epoch of its start `m`.
-
-If the segment leaves the epoch, its last step is the slot that ends it, after an inner run.
-
-That slot records the fork crossings of its upgrades, which pay no penalty and no sync debit.
-
-When it also runs the epoch passes, it records the rewards pass and then the later passes. -/
+/-- A segment of a branch that starts in an epoch either stays in it or ends it with one slot. -/
 theorem segment_events_cases {m n : ForkedBeaconState preset}
     (mid : Run config checks m n) (early : n.fork < .glamsterdam) (altair : .altair ≤ m.fork)
     (high : Nat) (endEpoch : (getCurrentEpoch n.state).toNat ≤ high + 1)
+    -- Every step of the segment `mid` starts at the epoch of its start `m`.
     (starts : ∀ {u w : ForkedBeaconState preset} (step : Step config checks u w),
       mid.Contains step → getCurrentEpoch u.state = getCurrentEpoch m.state)
     {found : List (BalanceEvent preset)} (replayed : mid.balanceEvents high = .ok found) :
@@ -173,6 +158,11 @@ theorem segment_events_cases {m n : ForkedBeaconState preset}
               e.source = .slashings ∨ e.source = .deposits ∨ e.source = .consolidations) ∧
             (∀ e ∈ rewarded.2,
               e.source = .rewards ∨ e.source = .penalties ∨ e.source = .inactivity)) := by
+  -- If the segment leaves the epoch, its last step is the slot that ends it, after an inner run.
+  --
+  -- That slot records the fork crossings of its upgrades, which pay no penalty and no sync debit.
+  --
+  -- When it also runs the epoch passes, it records the rewards pass and then the later passes.
   rcases segment_slot_cases mid starts with same | ⟨u, inner, boundary, rfl, uEpoch, crossing⟩
   · exact .inl same
   right
@@ -205,37 +195,36 @@ theorem segment_events_cases {m n : ForkedBeaconState preset}
   exact .inr ⟨just, pass, rewarded, later, justified, scored, rewardedOk, rfl, laterSources,
     rewardSources⟩
 
-/-- The penalty and sync debits of the cohort in one segment of a branch fit its epoch's `lambda_t`.
-
-The segment `mid` runs from `m`, and each of its steps starts at the epoch of `m`.
-
-`t` is the number of epochs from `x` to `m`.
-
-The blocks of the segment read the total of `m`, and so does its rewards pass, if it has one.
-
-That total is at most `W_t`, by the active-stake ceiling, whose floor reads only earlier epochs.
-
-The floor `T_minus_t` bounds it below only when the segment ends the epoch, and so runs a pass.
-
-The eligible stake of the cohort at the last state of the epoch must be at most `W_t`.
-
-That state is read through a split of the segment, so its run is a prefix of the branch. -/
+/-- The cohort's penalty and sync debits in one segment of a branch fit its epoch's `lambda_t`. -/
 private theorem segment_penalties_core {g x m n : ForkedBeaconState preset}
     (shared : Run config checks g x) (genesis : Genesis (config := config) (checks := checks) g)
     (altairX : .altair ≤ x.fork) (era : .pectra ≤ x.fork ∨ n.fork < .pectra)
     (high : Nat) (guard : aprioriGuardAt config x high)
+    -- `t` is the number of epochs from `x` to `m`.
     (toM : Run config checks x m) (mid : Run config checks m n) (early : n.fork < .glamsterdam)
     (endEpoch : (getCurrentEpoch n.state).toNat ≤ high + 1)
+    -- The blocks of the segment read the total of `m`, and so does its rewards pass, if it has one.
+    --
+    -- That total is at most `W_t`, by the active-stake ceiling.
+    --
+    -- The floor of that ceiling reads only earlier epochs.
     (totalBound : ∀ total, getTotalActiveBalance m.state = .ok total →
       total.toNat ≤ stakeCeilingAt config x high (ix x m) + slashedUnwithdrawnStake x)
     (floorCeiling : stakeFloorAt config x high (ix x m) ≤
       stakeCeilingAt config x high (ix x m) + slashedUnwithdrawnStake x)
+    -- The segment `mid` runs from `m`, and each of its steps starts at the epoch of `m`.
     (starts : ∀ {u w : ForkedBeaconState preset} (step : Step config checks u w),
       mid.Contains step → getCurrentEpoch u.state = getCurrentEpoch m.state)
+    -- The floor `T_minus_t` bounds it below only when the segment ends the epoch.
+    --
+    -- Only then does the segment run a pass.
     (floor : ∀ {u : ForkedBeaconState preset}, Run config checks x u → u.fork < .glamsterdam →
       (getCurrentEpoch u.state).toNat < (getCurrentEpoch n.state).toNat → ∀ total,
         getTotalActiveBalance u.state = .ok total →
         stakeFloorAt config x high (ix x u) ≤ total.toNat)
+    -- The eligible stake of the cohort at the last state of the epoch must be at most `W_t`.
+    --
+    -- That state is read through a split of the segment, so its run is a prefix of the branch.
     (eligible : ∀ {z : ForkedBeaconState preset} (pre : Run config checks m z)
       (post : Run config checks z n), mid = pre.append post →
       (getCurrentEpoch z.state).toNat < (getCurrentEpoch n.state).toNat →
@@ -246,6 +235,11 @@ private theorem segment_penalties_core {g x m n : ForkedBeaconState preset}
       epochPenalty preset config (startInactivityScore config x)
         (stakeCeilingAt config x high (ix x m) + slashedUnwithdrawnStake x)
         (stakeFloorAt config x high (ix x m)) (ix x m) := by
+  -- A segment runs inside its epoch, and its last step may be the slot that ends the epoch.
+  --
+  -- The blocks of the segment pay the sync debits of the epoch.
+  --
+  -- That slot pays its rewards pass.
   have mEarly : m.fork < .glamsterdam :=
     Nat.lt_of_le_of_lt (fork_le_of_chainSteps mid.chainSteps) early
   have xEarly : x.fork < .glamsterdam :=
@@ -308,14 +302,18 @@ private theorem segment_penalties_core {g x m n : ForkedBeaconState preset}
   have penalties : ((during ++ later ++ crossings).map fun e =>
       ∑ j ∈ penaltyCohort x, penaltyDebit j e).sum = 0 :=
     penaltyDebits_zero _ ((free.append laterFree).append crossingsFree)
-  have passDebits := list_sum_comm (penaltyCohort x) penaltyDebit rewarded.2
+  -- The sums over the events and over the cohort commute.
+  have passDebits : (rewarded.2.map fun e => ∑ j ∈ penaltyCohort x, penaltyDebit j e).sum =
+      ∑ j ∈ penaltyCohort x, (rewarded.2.map (penaltyDebit j)).sum := by
+    simpa using Multiset.sum_map_sum (m := (rewarded.2 : Multiset (BalanceEvent preset)))
+      (s := penaltyCohort x) (f := fun e j => penaltyDebit j e)
   simp only [List.map_append, List.sum_append, sourceDebits_append,
     syncDebits_zero laterQuiet, syncDebits_zero crossingsQuiet, syncDebits_zero rewardQuiet]
     at debits penalties ⊢
   -- The pass reads the registry and the total of `m`, and the scores of the start `x`.
   obtain ⟨activeKept, effectiveKept, passEpoch, registry⟩ :=
     pass_kept_of_effective inner effective uEpoch cachedOk justified scored
-  have totalSame := total_active_congr mEarly uEarly
+  have totalSame := total_active_congr
     (activeKept.mono (getCurrentEpoch_le_activityFixedEpoch _)) passEpoch effectiveKept
   have sizes : x.state.validators.data.size ≤ pass.validators.data.size := by
     rw [registry.1]
@@ -669,23 +667,22 @@ private theorem run_penalties_le {g x y : ForkedBeaconState preset}
 
 /-- The penalty envelope of the a priori bound, from Electra, under the floor of the active stake.
 
-It takes the hypotheses that the active-stake ceiling also reads:
-
-- `unit`, the lower bound on the initial ceiling.
-- `floor`, the floor `T_minus` of the total active balance at each state before the epoch of `y`.
-- `eligible`, the cohort's eligible stake at each such state of the branch, at most `T_plus + Y`.
+It takes three hypotheses that the active-stake ceiling also reads.
 
 The penalties are those of the epochs from `x` through the epoch of `y`. -/
 private theorem penaltyProducer_of_floor {g x y : ForkedBeaconState preset}
     (shared : Run config checks g x) (tail : Run config checks x y) (high : Nat)
     (supported : Supported shared tail high) (twoSlots : 2 ≤ preset.SLOTS_PER_EPOCH.toNat)
     (electra : .pectra ≤ x.fork)
+    -- The first is the lower bound on the initial ceiling.
     (unit : preset.EFFECTIVE_BALANCE_INCREMENT.toNat ≤ stakeCeilingAt config x high 0)
+    -- The second is the floor `T_minus` of the total active balance before the epoch of `y`.
     (floor : ∀ {u : ForkedBeaconState preset}, Run config checks x u → u.fork < .glamsterdam →
       (getCurrentEpoch u.state).toNat < (getCurrentEpoch y.state).toNat → ∀ total,
         getTotalActiveBalance u.state = .ok total →
         stakeFloorAt config x high
           ((getCurrentEpoch u.state).toNat - (getCurrentEpoch x.state).toNat) ≤ total.toNat)
+    -- The third bounds the cohort's eligible stake at each such state by `T_plus + Y`.
     (eligible : ∀ {z : ForkedBeaconState preset} (pre : Run config checks x z)
       (post : Run config checks z y), tail = pre.append post →
       (getCurrentEpoch z.state).toNat < (getCurrentEpoch y.state).toNat →
@@ -817,20 +814,13 @@ private theorem retained_eq_funding {fork : Fork} (x : ForkedBeaconState preset)
   retained_eq_funding_after x s s queue cutoff within (fun _ _ => rfl)
     (fun _ low high => absurd high (Nat.not_lt.mpr low))
 
-/-- The pass of pending consolidations, at `next`, does not raise the retained potential.
-
-Its cutoff is `next`, the epoch after the pass.
-
-A retained key cannot withdraw at `next`, so the pass never moves it, and it keeps its support.
-
-A slashed source leaves the queue, and keeps its retained cohort support if it has one.
-
-The pass keeps the registry, so the virtual sources of its output are those of its input. -/
+/-- The pass of pending consolidations, at `next`, does not raise the retained potential. -/
 private theorem retained_pass_consolidations {fork : Fork} {next : Epoch}
     (x : ForkedBeaconState preset)
     (delay : 2 ≤ config.MIN_VALIDATOR_WITHDRAWABILITY_DELAY.toNat)
     {queue : List PendingConsolidation} {s : BeaconState preset fork} {result}
     (ok : passPendingConsolidations next s queue = .ok result)
+    -- Its cutoff is `next`, the epoch after the pass.
     (nextEq : next.toNat = (getCurrentEpoch s).toNat + 1)
     (distinct : (queue.map (·.sourceIndex)).Nodup)
     (sources : ∀ c ∈ queue, ∃ v, s.validators.data[c.sourceIndex.toNat]? = some v ∧
@@ -840,6 +830,11 @@ private theorem retained_pass_consolidations {fork : Fork} {next : Epoch}
     (within : s.RegistryWithinLimit) :
     retainedFundingPotential x result.1 (queue.drop result.2) next ≤
       retainedFundingPotential x s queue next := by
+  -- A retained key cannot withdraw at `next`, so the pass never moves it, and it keeps its support.
+  --
+  -- A slashed source leaves the queue, and keeps its retained cohort support if it has one.
+  --
+  -- The pass keeps the registry, so the virtual sources of its output are those of its input.
   have registry := (passPendingConsolidations_kept ok).1
   have resultWithin : result.1.RegistryWithinLimit := by
     simpa only [BeaconState.RegistryWithinLimit, registry] using within
@@ -1327,7 +1322,7 @@ private theorem retained_block {fork : Fork} {s t : BeaconState preset fork}
   have sources := retained_block_sources x cutoff order ok ordered oldSize cutoffLe slashedBound
   have bound := funding_block_extra (extra := retainedSources x s cutoff) early matched engine
     block ok events replayed
-  have carry := depositCarry_processBlock early ok
+  have carry := depositCarry_processBlock ok
   have same : fundingCarry ⟨fork, t⟩ = fundingCarry ⟨fork, s⟩ := by
     simp only [fundingCarry, carry]
   have fewer : fundingPotential t (fundingSources t ++ retainedSources x t cutoff) ≤
@@ -1347,7 +1342,7 @@ The key was unslashed at `x`, so its new slashing delays withdrawal by the slash
 
 The guard keeps the window below half that vector. -/
 private theorem retained_slashed_bound {x s : ForkedBeaconState preset} {high : Nat}
-    (pre : Run config checks x s) (caps : CapOrder preset) (early : s.fork < .glamsterdam)
+    (pre : Run config checks x s) (caps : CapOrder preset)
     (guard : aprioriGuardAt config x high) (cutoff : Epoch) (cutoffLe : cutoff.toNat ≤ high + 1) :
     ∀ (i : Nat) (v : Validator), (x.state.validators.data[i]?).any (fun old =>
         isActiveValidator old (getCurrentEpoch x.state) && !old.slashed) = true →
@@ -1358,7 +1353,7 @@ private theorem retained_slashed_bound {x s : ForkedBeaconState preset} {high : 
   | none => simp [old] at cohort
   | some u =>
     simp only [old, Option.any_some, Bool.and_eq_true, Bool.not_eq_true'] at cohort
-    have lower := pre.newly_slashed_withdrawableEpoch caps.activation caps.compounding early
+    have lower := pre.newly_slashed_withdrawableEpoch caps
       (by omega) i u v old found cohort.2 slashed
     rw [UInt64.lt_iff_toNat_lt]
     unfold driftHorizon at short
@@ -1384,7 +1379,7 @@ private theorem retained_block_reachable {g x : ForkedBeaconState preset} {high 
   have holds := (run_justified_separated (shared.append pre) genesis).1
   exact retained_block x cutoff early holds.balancesMatch caps.compounding engine block ok events
     replayed holds.exitsOrdered (registryGrows_of_chainSteps pre.chainSteps) cutoffLe
-    (retained_slashed_bound pre caps early guard cutoff
+    (retained_slashed_bound pre caps guard cutoff
       ((UInt64.le_iff_toNat_le.mp cutoffLe).trans endEpoch))
 
 end
@@ -1418,14 +1413,14 @@ private theorem retained_run_bound {g x y : ForkedBeaconState preset}
       | slot ok =>
         simpa using retained_slot x aElectra before delay holds.balancesMatch holds.exitsOrdered
           (reached.activationExitOrder genesis)
-          (fun witness => reached.pendingConsolidation_invariant genesis aEarly witness (by omega))
+          (fun witness => reached.pendingConsolidation_invariant genesis witness (by omega))
           (registryGrows_of_chainSteps pre.chainSteps) ok added addedOk
       | @block fork s t engine signed due ok =>
         have processed := (applySignedBlock_ok ok).2.1
         have result := retained_block_reachable shared genesis pre caps guard before engine
           signed.message processed added (Step.balanceEvents_block before addedOk)
           (getCurrentEpoch s) (UInt64.le_refl _) within
-        have carry := depositCarry_processBlock before processed
+        have carry := depositCarry_processBlock processed
         have slot := (frame_processBlock processed).slot
         have spent : (added.map fun _ => (0 : Nat)).sum = 0 := by simp
         simpa only [getCurrentEpoch, slot, fundingCarry, carry, spent,
@@ -1479,21 +1474,7 @@ open Cryptography.Bls Uint64
 
 Then the eligible stake of the cohort at `z` is at most the retained potential at `r`.
 
-The retained potential uses the cutoff at that epoch.
-
-Within one epoch the effective balances of old keys stay fixed, so each weight is read at `r`.
-
-A key eligible at `z` is active there, or not yet withdrawable.
-
-An active key at `z` is active or still pending activation at `r`.
-
-The reason is that an assigned exit never moves.
-
-A key not yet withdrawable at `z` was not withdrawable at `r` either.
-
-If it was slashed at `r`, its slashing pushed withdrawal past the window.
-
-Otherwise a key that could withdraw by `r` keeps that withdrawable epoch through the epoch. -/
+The retained potential uses the cutoff at that epoch. -/
 private theorem eligible_le_retained_anchor {g x r z y : ForkedBeaconState preset} {high : Nat}
     (shared : Run config checks g x) (genesis : Genesis (config := config) (checks := checks) g)
     (caps : CapOrder preset) (guard : aprioriGuardAt config x high) (_electra : .pectra ≤ x.fork)
@@ -1503,6 +1484,19 @@ private theorem eligible_le_retained_anchor {g x r z y : ForkedBeaconState prese
     (endEpoch : (getCurrentEpoch y.state).toNat ≤ high + 1) :
     (∑ i ∈ penaltyCohort x, eligibleWeight z.state i) ≤
       retainedFundingPotential x r.state (fundingSources r.state) (getCurrentEpoch r.state) := by
+  -- Within one epoch the effective balances of old keys stay fixed, so each weight is read at `r`.
+  --
+  -- A key eligible at `z` is active there, or not yet withdrawable.
+  --
+  -- An active key at `z` is active or still pending activation at `r`.
+  --
+  -- The reason is that an assigned exit never moves.
+  --
+  -- A key not yet withdrawable at `z` was not withdrawable at `r` either.
+  --
+  -- If it was slashed at `r`, its slashing pushed withdrawal past the window.
+  --
+  -- Otherwise a key that could withdraw by `r` keeps that withdrawable epoch through the epoch.
   have zEarly := Nat.lt_of_le_of_lt (fork_le_of_chainSteps post.chainSteps) early
   have rEarly := Nat.lt_of_le_of_lt (fork_le_of_chainSteps inner.chainSteps) zEarly
   have xEarly := Nat.lt_of_le_of_lt (fork_le_of_chainSteps pre.chainSteps) rEarly
@@ -1510,9 +1504,9 @@ private theorem eligible_le_retained_anchor {g x r z y : ForkedBeaconState prese
   have finite := finite_of_earlier before
   rw [same] at finite before
   have ordered := reached_exit_delay shared (pre.append inner) genesis guard
-  have effective := run_same_epoch_effective inner zEarly same
+  have effective := run_same_epoch_effective inner same
   have exits := (run_justified_separated (shared.append pre) genesis).1.exitsOrdered
-  have slashedBound := retained_slashed_bound pre caps rEarly guard (getCurrentEpoch r.state)
+  have slashedBound := retained_slashed_bound pre caps guard (getCurrentEpoch r.state)
     (by omega)
   have inside : ∀ i ∈ penaltyCohort x, i < r.state.validators.data.size := fun i member =>
     Nat.lt_of_lt_of_le (penaltyCohort_inside xEarly member) sizes
@@ -1552,7 +1546,7 @@ private theorem eligible_le_retained_anchor {g x r z y : ForkedBeaconState prese
         apply UInt64.not_le.mp
         intro withdrawn
         have exited := UInt64.le_trans (exits _ (Array.mem_of_getElem? foundR)) withdrawn
-        have stays := inner.retired_validator caps.activation caps.compounding zEarly
+        have stays := inner.retired_validator caps
           i v w' foundR foundZ exited (Bool.eq_false_iff.mpr slashed) withdrawn
         rw [stays.2.2] at notWithdrawable
         exact absurd (UInt64.lt_of_lt_of_le notWithdrawable withdrawn) (UInt64.lt_irrefl _)
@@ -1688,36 +1682,18 @@ theorem list_map_sum_range {α : Type} (l : List α) (g : α → Nat) :
 
 /-- Let `r` be the first state of an epoch, at any fork.
 
-Given the budgets of its keys, the total active balance at `r` is at least the floor there.
-
-The floor starts from the unslashed active stake at `x` and subtracts every way it can leave.
-
-Each key of the cohort that is not scheduled to exit at `x` falls in one of two cases.
-
-Take a key whose exit at `r` is after the window.
-
-At `r` it keeps its stake less its slack, debits, any slashing penalty and one increment.
-
-This follows from the balance floor of one key over the branch to `r`.
-
-A key whose exit at `r` is within the window was given that exit on the branch.
-
-The step that set it charged the departure queue its effective balance then.
-
-That balance meets the same bound by the balance floor of one key over the branch to that step.
-
-The keys select stops and prefixes of the replay, and the budgets are read only there.
-
-The budgets are of three kinds.
-
-They are the charges with the partial withdrawals, the penalty debits and the slashing penalties. -/
+Given the budgets of its keys, the total active balance at `r` is at least the floor there. -/
 private theorem anchor_floor_core {g x r : ForkedBeaconState preset} {high : Nat}
     (shared : Run config checks g x) (pre : Run config checks x r)
     (supported : Supported shared pre high) (twoSlots : 2 ≤ preset.SLOTS_PER_EPOCH.toNat)
     (producer : ∀ {y : ForkedBeaconState preset},
       FloorProducer (config := config) (checks := checks) (g := g) (x := x) (y := y))
+    -- The keys select stops and prefixes of the replay, and the budgets are read only there.
+    --
+    -- The budgets are of three kinds.
     (stops : (i : Nat) → Stop pre i)
     {events : List (BalanceEvent preset)} (replayed : pre.balanceEvents high = .ok events)
+    -- The first fits the charges with the partial withdrawals.
     (joint : ∀ (keys carrier : Finset Nat) (charge : Nat → Nat)
         (parts : Nat → List (BalanceEvent preset)), keys ⊆ penaltyCohort x →
       (∀ i ∈ carrier, ∃ c, (stops i).charge = some c ∧ charge i = c.amount ∧ c.epoch ≤ high + 1) →
@@ -1726,8 +1702,10 @@ private theorem anchor_floor_core {g x r : ForkedBeaconState preset} {high : Nat
         (∑ i ∈ keys, ((parts i).map (floorPartialDebit (UInt64.ofNat i))).sum) ≤
           departureBudgetAt (config := config) x high +
               duePartialWithdrawals x (driftHorizon x high))
+    -- The second fits the penalty debits.
     (penalty : (events.map fun e => ∑ j ∈ penaltyCohort x, floorPenaltyDebit j e).sum ≤
       windowPenalties (config := config) x high (ix x r))
+    -- The third fits the slashing penalties.
     (slashing : ∀ (keys : Finset Nat) (flag : Nat → Bool), keys ⊆ penaltyCohort x →
       (∑ i ∈ keys,
             if flag i then base x i / minSlashingPenaltyQuotient preset
@@ -1736,6 +1714,21 @@ private theorem anchor_floor_core {g x r : ForkedBeaconState preset} {high : Nat
           minSlashingPenaltyQuotient preset (preElectraEpochs config x high))
     {total : Gwei} (computed : getTotalActiveBalance r.state = .ok total) :
     stakeFloorAt config x high (ix x r) ≤ total.toNat := by
+  -- The floor starts from the unslashed active stake at `x` and subtracts every way it can leave.
+  --
+  -- Each key of the cohort that is not scheduled to exit at `x` falls in one of two cases.
+  --
+  -- Take a key whose exit at `r` is after the window.
+  --
+  -- At `r` it keeps its stake less its slack, debits, any slashing penalty and one increment.
+  --
+  -- This follows from the balance floor of one key over the branch to `r`.
+  --
+  -- A key whose exit at `r` is within the window was given that exit on the branch.
+  --
+  -- The step that set it charged the departure queue its effective balance then.
+  --
+  -- That balance meets the same bound by the balance floor of one key over the branch to that step.
   have support := supported
   obtain ⟨genesis, parameters, caps, aligned, early, endEpoch, guard⟩ := supported
   have xEarly := Nat.lt_of_le_of_lt (fork_le_of_chainSteps pre.chainSteps) early
@@ -1935,7 +1928,7 @@ The charges and partial withdrawals fit the departure budget and the due partial
 
 The penalty debits fit the penalties of the epochs before `r`.
 
-The reason is that every step to `r` starts before its epoch. -/
+That holds since every step to `r` starts before its epoch. -/
 private theorem electra_anchor_budgets {g x r : ForkedBeaconState preset} {high : Nat}
     (shared : Run config checks g x) (pre : Run config checks x r)
     (supported : Supported shared pre high) (twoSlots : 2 ≤ preset.SLOTS_PER_EPOCH.toNat)
@@ -2025,11 +2018,7 @@ private theorem electra_slashing {x : ForkedBeaconState preset} {high : Nat}
 
 Let `r` be the first state of the epoch of `u`.
 
-Take as given the budgets at `r` and the total there.
-
-Then the total active balance at `u` is at least the floor at its epoch.
-
-The branch splits at `r` once. -/
+Then the total active balance at `u` is at least the floor at its epoch. -/
 private theorem endpoint_floor_core {g x u : ForkedBeaconState preset} {high : Nat}
     (shared : Run config checks g x) (tail : Run config checks x u)
     (supported : Supported shared tail high) (twoSlots : 2 ≤ preset.SLOTS_PER_EPOCH.toNat)
@@ -2038,6 +2027,7 @@ private theorem endpoint_floor_core {g x u : ForkedBeaconState preset} {high : N
     (transport : ∀ {r : ForkedBeaconState preset}, Run config checks x r →
       Run config checks r u → getCurrentEpoch u.state = getCurrentEpoch r.state → ∀ {total : Gwei},
         getTotalActiveBalance u.state = .ok total → getTotalActiveBalance r.state = .ok total)
+    -- Take as given the budgets at `r` and the total there.
     (budgets : ∀ {r : ForkedBeaconState preset} (pre : Run config checks x r)
       (inner : Run config checks r u), tail = pre.append inner →
       getCurrentEpoch u.state = getCurrentEpoch r.state →
@@ -2064,6 +2054,7 @@ private theorem endpoint_floor_core {g x u : ForkedBeaconState preset} {high : N
           minSlashingPenaltyQuotient preset (preElectraEpochs config x high))
     {total : Gwei} (computed : getTotalActiveBalance u.state = .ok total) :
     stakeFloorAt config x high (ix x u) ≤ total.toNat := by
+  -- The branch splits at `r` once.
   obtain ⟨genesis, parameters, caps, aligned, early, endEpoch, guard⟩ := supported
   obtain ⟨r, pre, inner, split, same, starts⟩ := epoch_anchor tail early
   have rEarly := Nat.lt_of_le_of_lt (fork_le_of_chainSteps inner.chainSteps) early
@@ -2130,17 +2121,16 @@ end
 
 /-- Along a trace, the balance plus the debt stays above `low`.
 
-Once the key is slashed, the bound is `low` less one slashing penalty `base / quotient`.
-
-Before the slashing, the effective balance exceeds the balance by a bounded amount.
-
-The bound is the starting slack plus the debt.
-
-So the part of the penalty above `base / quotient`, which the high-water mark pays, was funded. -/
+Once the key is slashed, the bound is `low` less one slashing penalty `base / quotient`. -/
 private theorem FloorTrace.balance_floor {low base quotient : Nat} {a b : FloorAccount}
     (trace : FloorTrace low base quotient a b) (initial : low ≤ a.balance + a.debt)
     (start : low + (a.high - a.balance) ≤ base) :
     low ≤ b.balance + b.debt + if b.slashedHigh.isSome then base / quotient else 0 := by
+  -- Before the slashing, the effective balance exceeds the balance by a bounded amount.
+  --
+  -- The bound is the starting slack plus the debt.
+  --
+  -- So the part of the penalty above `base / quotient`, which the high-water mark pays, was funded.
   induction trace with
   | nil =>
     generalize base / quotient = pay
@@ -2168,15 +2158,7 @@ private theorem FloorTrace.balance_floor {low base quotient : Nat} {a b : FloorA
     generalize base / quotient = pay at *
     omega
 
-/-- The balance floor of one key, at any fork, given three facts that depend on the fork.
-
-Every step's slashing quotient is at least the window's, and no step is the Electra crossing.
-
-The slashing base covers the smaller of the key's effective balance and balance plus its slack.
-
-The per-key trace of the branch gives a floor on its balance at every state.
-
-The effective balance follows the balance down. -/
+/-- The balance floor of one key, at any fork, given three facts that depend on the fork. -/
 private theorem floor_bound_of_guards {g x y : ForkedBeaconState preset}
     (shared : Run config checks g x) (tail : Run config checks x y) (high : Nat)
     (supported : Supported shared tail high) (twoSlots : 2 ≤ preset.SLOTS_PER_EPOCH.toNat)
@@ -2184,12 +2166,16 @@ private theorem floor_bound_of_guards {g x y : ForkedBeaconState preset}
     (i : Nat) (v w : Validator) (initial : x.state.validators.data[i]? = some v)
     (final : y.state.validators.data[i]? = some w) (unslashed : v.slashed = false)
     (activated : v.activationEpoch ≠ FAR_FUTURE_EPOCH) (later : high + 1 < w.exitEpoch.toNat)
+    -- Every step's slashing quotient is at least the window's, and no step is the Electra crossing.
     (quotients : ∀ {m n : ForkedBeaconState preset}, Run config checks x m →
       Step config checks m n → Run config checks n y →
       minSlashingPenaltyQuotient preset (preElectraEpochs config x high) ≤
         (EthLib.Consensus.parameters preset m.fork).MIN_SLASHING_PENALTY_QUOTIENT.toNat)
     (regime : ∀ {m n : ForkedBeaconState preset}, Run config checks x m →
       Step config checks m n → Run config checks n y → .pectra ≤ m.fork ∨ n.fork < .pectra)
+    -- The slashing base covers the smaller of the key's effective balance and its balance.
+    --
+    -- That balance counts its slack.
     (start : min (effectiveAt x i) (actualBalanceAt x i) +
       (effectiveAt x i - actualBalanceAt x i) ≤ base x i) :
     effectiveAt x i ≤ effectiveAt y i + (effectiveAt x i - actualBalanceAt x i) +
@@ -2200,6 +2186,9 @@ private theorem floor_bound_of_guards {g x y : ForkedBeaconState preset}
           preset.MAX_EFFECTIVE_BALANCE.toNat else max (effectiveAt x i) (actualBalanceAt x i)) /
         minSlashingPenaltyQuotient preset (preElectraEpochs config x high) else 0) +
       if FirstDown tail i then preset.EFFECTIVE_BALANCE_INCREMENT.toNat else 0 := by
+  -- The per-key trace of the branch gives a floor on its balance at every state.
+  --
+  -- The effective balance follows the balance down.
   obtain ⟨genesis, _, caps, _, early, endEpoch, guard⟩ := supported
   have positive := guard
   obtain ⟨increment, _, _, _, _, _, _, quotient, _, delay, _⟩ := positive
@@ -2278,20 +2267,19 @@ private theorem floorProducer_electra {g x y : ForkedBeaconState preset}
     (fun pre _ _ => .inl (Nat.le_trans electra (fork_le_of_chainSteps pre.chainSteps)))
     (by simp only [base, notBefore, ↓reduceIte]; omega)
 
-/-- Before Electra, the balance floor of each key holds.
-
-The guard keeps the whole window before the fork.
-
-Each step's quotient is at least the least pre-Electra quotient.
-
-The slashing base is the larger of the key's effective balance and balance.
-
-That larger value is capped at `MAX_EFFECTIVE_BALANCE`.
-
-The effective balance is within that cap before Electra. -/
+/-- Before Electra, the balance floor of each key holds. -/
 private theorem floorProducer_pre {g x y : ForkedBeaconState preset}
     (before : x.fork < .pectra) :
     FloorProducer (config := config) (checks := checks) (g := g) (x := x) (y := y) := by
+  -- The guard keeps the whole window before the fork.
+  --
+  -- Each step's quotient is at least the least pre-Electra quotient.
+  --
+  -- The slashing base is the larger of the key's effective balance and balance.
+  --
+  -- That larger value is capped at `MAX_EFFECTIVE_BALANCE`.
+  --
+  -- The effective balance is within that cap before Electra.
   intro shared tail high supported twoSlots events replayed i v w initial final unslashed
     activated later
   have support := supported
@@ -2309,7 +2297,7 @@ private theorem floorProducer_pre {g x y : ForkedBeaconState preset}
     simp only
         [minSlashingPenaltyQuotient, positive, ↓reduceIte, EthLib.Consensus.parameters, mBefore]
     split_ifs <;> omega
-  · have cap := shared.effectiveBalance_capped genesis caps.activation caps.compounding xEarly v
+  · have cap := shared.effectiveBalance_capped genesis caps v
       (Array.mem_of_getElem? initial)
     have notAfter : ¬ .pectra ≤ x.fork := Nat.not_le_of_gt before
     simp only [withdrawalMaxEffectiveBalance, notAfter, ↓reduceIte] at cap
@@ -2494,17 +2482,7 @@ theorem floor_by_epoch_induction {x : ForkedBeaconState preset} {high : Nat}
 
 /-- From Electra, take a branch from `x` within its window, and a pre-Glamsterdam state of it.
 
-The total active balance at that state is at least the floor at its epoch.
-
-The proof is a strong induction on the epoch of the state.
-
-At a state `u`, the floor at every earlier epoch holds by induction.
-
-The eligible stake at every earlier split of the branch to `u` then fits the ceiling.
-
-This follows from the retained anchor of its epoch.
-
-Both feed the floor at `u`, which assumes no floor or eligible fact at the epoch of `u`. -/
+The total active balance at that state is at least the floor at its epoch. -/
 private theorem floor_all_runs {g x : ForkedBeaconState preset} {high : Nat}
     (shared : Run config checks g x) (genesis : Genesis (config := config) (checks := checks) g)
     (parameters : Parameters preset) (caps : CapOrder preset)
@@ -2516,6 +2494,15 @@ private theorem floor_all_runs {g x : ForkedBeaconState preset} {high : Nat}
       (getCurrentEpoch u.state).toNat ≤ high + 1 → ∀ total,
         getTotalActiveBalance u.state = .ok total →
         stakeFloorAt config x high (ix x u) ≤ total.toNat := by
+  -- The proof is a strong induction on the epoch of the state.
+  --
+  -- At a state `u`, the floor at every earlier epoch holds by induction.
+  --
+  -- The eligible stake at every earlier split of the branch to `u` then fits the ceiling.
+  --
+  -- This follows from the retained anchor of its epoch.
+  --
+  -- Both feed the floor at `u`, which assumes no floor or eligible fact at the epoch of `u`.
   apply floor_by_epoch_induction .glamsterdam
   intro u head early within strict total computed
   have xEarly := Nat.lt_of_le_of_lt (fork_le_of_chainSteps head.chainSteps) early
@@ -2695,8 +2682,7 @@ private theorem pre_validator_cap (shared : Run config checks g x)
     (early : y.fork < .pectra) (v : Validator) (member : v ∈ y.state.validators.data) :
     v.effectiveBalance.toNat ≤ preset.MAX_EFFECTIVE_BALANCE.toNat := by
   have caps := supported.2.2.1
-  have bound := (shared.append tail).effectiveBalance_capped supported.1 caps.activation
-    caps.compounding (Nat.lt_trans early (by decide)) v member
+  have bound := (shared.append tail).effectiveBalance_capped supported.1 caps v member
   have notElectra : ¬ Fork.pectra ≤ y.fork := Nat.not_le_of_lt early
   simpa [withdrawalMaxEffectiveBalance, getMaxEffectiveBalance, notElectra] using
     UInt64.le_iff_toNat_le.mp bound

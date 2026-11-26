@@ -4,6 +4,7 @@ public import EthLib.Base.Exports
 public import EthLib.Base.Exports.PyValue
 public import Lean.Data.Json
 public import EthLib.Base.Hex
+public import EthLib.Base.Json.Document
 public import EthLib.Serialization.Ssz.Codec.Json
 public import EthLib.Consensus.BeaconApi.Config
 public import EthLib.Networking.ReqResp.Encoding
@@ -13,15 +14,7 @@ public import EthLib.Networking.ReqResp.Encoding
 
 C-ABI exports of the presets, the configurations and the parameters at a fork.
 
-Each one takes typed Python values and comes back as a `dict`.
-
-The keys of the `dict` are the names of the source.
-
-An integer is an `int`, and a byte string is a `str` of `0x` and lowercase hex.
-
-A preset or a configuration is named by `mainnet` or `minimal`, and a fork by its name in Lean.
-
-An unknown name comes back as code 0 and a message, since no error type covers it.
+Each one takes typed Python values and comes back as a `dict`, keyed by the names of the source.
 -/
 
 public section
@@ -35,16 +28,16 @@ open Lean Base
 
 /-- Bytes in hex, after `0x`. -/
 instance {n : Nat} : ToJson (Vector UInt8 n) where
+  -- A byte string reaches Python as a `str` of `0x` and lowercase hex.
   toJson bytes := hexString bytes.toList
 
-/-- A 64-bit integer as a JSON number, which Python reads as an `int`.
-
-It stays local to this file, so only the JSON forms derived here write a number.
-
-Those are the forms of the preset, the configuration, the parameters and their entries.
-
-Elsewhere a 64-bit integer keeps the JSON form of Lean, a string of digits. -/
+/-- A 64-bit integer as a JSON number, which Python reads as an `int`. -/
 local instance (priority := high) : ToJson UInt64 where
+  -- Local, so only the forms derived here write a number.
+  --
+  -- Those are the forms of the preset, the configuration, the parameters and their entries.
+  --
+  -- Elsewhere a 64-bit integer keeps the JSON form of Lean, a string of digits.
   toJson n := toJson n.toNat
 
 /-- A 64-bit integer, from a number or from a string that Lean reads as one. -/
@@ -56,10 +49,9 @@ local instance (priority := high) : FromJson UInt64 where
       if h : n < UInt64.size then return UInt64.ofNatLT n h
       else throw s!"{n} does not fit in 64 bits"
 
-/-- A 256-bit integer as a JSON number, which Python reads as an `int`.
-
-It stays local to this file, as the form of a 64-bit integer does. -/
+/-- A 256-bit integer as a JSON number, which Python reads as an `int`. -/
 local instance (priority := high) : ToJson U256 where
+  -- Local to this file, as the form of a 64-bit integer is.
   toJson n := toJson n.toNat
 
 deriving instance ToJson for BlobScheduleEntry
@@ -73,7 +65,7 @@ instance {n : Nat} : FromJson (Vector UInt8 n) where
   fromJson? json := do
     let text ← json.getStr?
     let bytes ← (Serialization.Ssz.ofHex text).mapError fun e => s!"{text}: {reprStr e}"
-    Base.exactBytes n ⟨bytes⟩ fun _ => s!"{text} does not hold {n} bytes"
+    Base.exactBytes n bytes fun _ => s!"{text} does not hold {n} bytes"
 
 /-- A 256-bit integer, from a number or from decimal digits. -/
 instance : FromJson U256 where
@@ -98,10 +90,9 @@ def specValuePy : BeaconApi.SpecValue → Json
   | .list items => .arr (items.map specValuePy).toArray
   | .entry fields => Json.mkObj (fields.map fun (name, value) => (name, toJson value))
 
-/-- The values of a preset or a configuration, each under its name, with numbers as numbers.
-
-They are the values of the spec map of the Beacon API, which names them all once. -/
+/-- The values of a preset or a configuration, each under its name, with numbers as numbers. -/
 def entriesJson (entries : List (String × BeaconApi.SpecValue)) : Json :=
+  -- The values of the spec map of the Beacon API, which names them all once.
   Json.mkObj (entries.map fun (name, value) => (name, specValuePy value))
 
 /-- The preset of a name, with the values that it derives from its fields. -/
@@ -114,62 +105,75 @@ def nameOf (bytes : ByteArray) : Result String := do
 
 /-- The preset of a name. -/
 def presetOf : String → Result Preset
+  -- A preset is named by `mainnet` or `minimal`.
   | "mainnet" => return .mainnet
   | "minimal" => return .minimal
+  -- No error type covers an unknown name, so it has code 0 and a message.
   | name => rejectArgument none s!"no preset is named {name}"
 
 /-- The configuration of a name. -/
 def configOf : String → Result Config
+  -- A configuration is named by `mainnet` or `minimal`.
   | "mainnet" => return .mainnet
   | "minimal" => return .minimal
+  -- No error type covers an unknown name, so it has code 0 and a message.
   | name => rejectArgument none s!"no configuration is named {name}"
 
-/-- The configuration of a name, with some of its values replaced.
+/-- A configuration, if its blob schedule and its gas limit schedule meet the rules of their forks.
 
-The replacements come as a JSON object with the names of the configuration file.
+The specification forbids a schedule that breaks them, so such a configuration fails with code 0. -/
+def checkSchedules (preset : Preset) (config : Config) : Result Config := do
+  unless config.blobScheduleValid preset do
+    rejectArgument none ("configuration: a blob schedule needs distinct epochs, " ++
+      "each at least FULU_FORK_EPOCH, and limits of at most MAX_BLOB_COMMITMENTS_PER_BLOCK")
+  unless config.gasLimitScheduleValid do
+    rejectArgument none
+      "configuration: a gas limit schedule needs distinct epochs, each at least GLOAS_FORK_EPOCH"
+  return config
 
-An empty replacement keeps the configuration of the name. -/
+/-- The configuration of a name, with some of its values replaced by those of a JSON object. -/
 def configWith (name replacements : ByteArray) : Result Config := do
-  let config ← configOf (← nameOf name)
+  let name ← nameOf name
+  let config ← configOf name
+  -- An empty replacement keeps the configuration of the name.
   if replacements.isEmpty then return config
   let some text := String.fromUTF8? replacements | rejectArgument none "configuration is not UTF-8"
-  let replaced ← toResult none ((Json.parse text).mapError fun e =>
+  -- The object names its values as the configuration file does.
+  let replaced ← toResult none ((Base.Json.ofText text).mapError fun e =>
     UnreadArgument.mk s!"configuration: {e}")
-  toResult none ((fromJson? ((toJson config).mergeObj replaced)).mapError fun e =>
+  let replaced ← toResult none ((fromJson? ((toJson config).mergeObj replaced)).mapError fun e =>
     UnreadArgument.mk s!"configuration: {e}")
+  -- A schedule that breaks the rules of its fork has code 0.
+  checkSchedules (← presetOf name) replaced
 
-/-- The configuration of a name, with some of its values replaced.
-
-The replacements come as a `dict` with the names of the configuration file.
-
-Each value replaces its key in the JSON form of the configuration, bytes as `0x` and hex.
-
-None or an empty `dict` keeps the configuration of the name.
-
-Any other value than a `dict` has code 0. -/
+/-- The configuration of a name, with some of its values replaced by those of a `dict`. -/
 def configWithValue (name : String) (replacements : Option PyValue) : Result Config := do
-  let config ← configOf name
-  match replacements with
-  | none | some (.dict #[]) => return config
-  | some (.dict entries) =>
-    toResult none
-      ((fromJson? ((toJson config).mergeObj (PyValue.dict entries).toJson)).mapError fun e =>
-        UnreadArgument.mk s!"configuration: {e}")
-  | some _ => rejectArgument none "configuration: expected a dict"
+  let base ← configOf name
+  let config ← match replacements with
+    -- None or an empty `dict` keeps the configuration of the name.
+    | none | some (.dict #[]) => pure base
+    -- The `dict` names its values as the configuration file does.
+    --
+    -- Each value replaces its key in the JSON form of the configuration, bytes as `0x` and hex.
+    | some (.dict entries) =>
+      toResult none
+        ((fromJson? ((toJson base).mergeObj (PyValue.dict entries).toJson)).mapError fun e =>
+          UnreadArgument.mk s!"configuration: {e}")
+    -- Any other value than a `dict` has code 0.
+    | some _ => rejectArgument none "configuration: expected a dict"
+  -- A schedule that breaks the rules of its fork has code 0 as well.
+  checkSchedules (← presetOf name) config
 
-/-- The fork of a name, for the forks from Phase 0 to Hegotá, whose beacon chain is Heze.
-
-The configuration has no epoch for BPO3 to BPO5, so they fail. -/
+/-- The fork of a name, for the forks from Phase 0 to Hegotá, whose beacon chain is Heze. -/
 def forkOf (name : ByteArray) : Result Fork := do
+  -- A fork is named by its name in Lean, and an unknown name has code 0.
   let fork ← forkUpTo .hegota name
+  -- The configuration has no epoch for BPO3 to BPO5, so they fail.
   if .bpo3 ≤ fork ∧ fork ≤ .bpo5 then rejectArgument none s!"fork {fork.name} not yet specified"
   if .phase0 ≤ fork then return fork
   else rejectArgument none s!"{fork.name} is not a fork of the beacon chain"
 
-/-- The JSON text of a value, as UTF-8 bytes. -/
-def jsonBytes (value : Json) : ByteArray := value.compress.toUTF8
-
-/-- The configuration of a name, with the payload cap that every network shares. -/
+/-- The configuration of a name, as JSON. -/
 def configJson (config : Config) : Json := entriesJson (BeaconApi.configEntries config)
 
 /-- The preset of a name, as a `dict`. -/

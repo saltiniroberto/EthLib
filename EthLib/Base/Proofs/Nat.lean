@@ -5,15 +5,11 @@ module
 
 Facts about natural numbers that Lean core does not prove and that several layers use.
 
-A number below `p` equals its remainder `r` mod `n` when `p <= r + n`.
-
-Applying a step once more before its repetitions is one more repetition.
+They cover remainders, repeated steps, hex digits, rounded quotients and the shares of a total.
 
 Lean writes a digit `0` to `9` or `a` to `f` for a number below sixteen, and `*` from sixteen on.
 
 Lean states each case as a public lemma, and this module gathers them into one equation.
-
-Whole increments of a total, each paid a share of a factor, get at most the total's share.
 -/
 
 @[expose] public section

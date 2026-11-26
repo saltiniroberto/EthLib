@@ -7,7 +7,7 @@ public import Mathlib.Data.ZMod.Basic
 public import Mathlib.Algebra.Field.ZMod
 public import Mathlib.Tactic.NormNum.Prime
 public import Mathlib.FieldTheory.Finite.Basic
-public import EthLib.Cryptography.Proofs.Montgomery
+public import EthLib.Cryptography.Proofs.Montgomery.ZMod
 public import EthLib.Cryptography.Proofs.BaseField
 
 /-!
@@ -16,23 +16,6 @@ public import EthLib.Cryptography.Proofs.BaseField
 This file maps `Fp`, held in Montgomery form, to Mathlib's `ZMod p`, as the scalar field proofs do.
 
 The notes of the scalar field proofs on the scoped field instance apply here too.
-
-## Primality of the modulus
-
-The factors of `p - 1` reach 234 bits, beyond the range of `norm_num`.
-
-So the primality of `p` is a chain of Lucas certificates, a Pratt tree.
-
-The factorization is `p - 1 = 2 * 3^2 * 11 * 23 * 47 * 10177 * 859267 * 52437899 * q1 * q2`.
-
-The two large primes are these:
-
-- `q1 = 2584487767265781317813`.
-- `q2 = 15778400344354997994418419698270088123916926905054652752758194827714659`.
-
-Each of the two large factors carries its own certificate, with ten auxiliary primes in total.
-
-The kernel checks every modular power, so the whole tree needs no compiled code.
 
 The square root is not treated here, but with the decompression proofs that need it.
 -/
@@ -45,6 +28,20 @@ namespace EthLib.Cryptography.Bls.Fp
 set_option maxRecDepth 8000
 
 /-! ## The Lucas certificate chain (Pratt tree) for `p` -/
+
+-- The factors of `p - 1` reach 234 bits, beyond the range of `norm_num`.
+--
+-- So the primality of `p` is a chain of Lucas certificates, a Pratt tree.
+--
+-- The factorization is `p - 1 = 2 * 3^2 * 11 * 23 * 47 * 10177 * 859267 * 52437899 * q1 * q2`.
+--
+-- The two large primes are these:
+-- - `q1 = 2584487767265781317813`.
+-- - `q2 = 15778400344354997994418419698270088123916926905054652752758194827714659`.
+--
+-- Each of the two large factors carries its own certificate, with ten auxiliary primes in total.
+--
+-- The kernel checks every modular power, so the whole tree needs no compiled code.
 
 /-- Pratt-tree node: `9272813673901` is prime (Lucas certificate, witness `2`). -/
 private theorem prime_9272813673901 : Nat.Prime 9272813673901 :=
@@ -214,27 +211,10 @@ instance : Fact (1 < params.p) := ⟨by decide⟩
 
 /-! ## The map to `ZMod p` -/
 
-/-- The element of `Fp` that an element of `ZMod p` stands for. -/
-def ofZMod (z : ZMod modulus) : Fp := Fp.ofNat z.val
-
-/-- An element of `ZMod p` maps back to itself. -/
-theorem toZMod_ofZMod (z : ZMod modulus) : Montgomery.toZMod (ofZMod z) = z :=
-  (Montgomery.toZMod_ofNat z.val).trans (ZMod.natCast_zmod_val z)
-
-/-- An element of `Fp` maps back to itself. -/
-theorem ofZMod_toZMod (a : Fp) : ofZMod (Montgomery.toZMod a) = a :=
-  toZMod_injective (toZMod_ofZMod _)
-
 /-- `Fp` and Mathlib's `ZMod p` are isomorphic rings.
 
 The map sends an element to the integer mod `p` that it stands for. -/
-def toZMod : Fp ≃+* ZMod modulus where
-  toFun := Montgomery.toZMod
-  invFun := ofZMod
-  left_inv := ofZMod_toZMod
-  right_inv := toZMod_ofZMod
-  map_mul' := Montgomery.toZMod_mul
-  map_add' := Montgomery.toZMod_add
+def toZMod : Fp ≃+* ZMod modulus := Montgomery.toZModEquiv
 
 /-- The isomorphism is the map of the Montgomery form. -/
 theorem toZMod_apply (a : Fp) : toZMod a = Montgomery.toZMod a := rfl
@@ -274,12 +254,8 @@ theorem toZMod_ofNat (n : Nat) : toZMod (Fp.ofNat n) = n := by
   rw [toZMod_apply]
   exact Montgomery.toZMod_ofNat n
 
-/-- `Fp` is finite, through the isomorphism. -/
-noncomputable instance : Fintype Fp := Fintype.ofEquiv _ toZMod.symm.toEquiv
-
 /-- `Fp` has `p` elements. -/
-theorem card_eq : Fintype.card Fp = modulus :=
-  (Fintype.card_congr toZMod.toEquiv).trans (ZMod.card modulus)
+theorem card_eq : Fintype.card Fp = modulus := Montgomery.card_eq
 
 /-! ## The integer of an element
 
@@ -429,37 +405,17 @@ theorem toZMod_inverse (a : Fp) : toZMod a.inverse = (toZMod a)⁻¹ := by
 
 /-- The field structure of `ZMod p`, carried to `Fp` by the isomorphism.
 
-The operations are those of the specification: the sum, the product, the power and the division.
-
-The inverse is the one of the Montgomery form, equal to the inverse of the specification.
-
-The scalar actions and the casts from the integers and the rationals go through `ZMod p`.
-
-Proofs alone use them.
-
-It is scoped, as for the scalar field, to avoid coercion loops.
-
 Activate it with `open scoped EthLib.Cryptography.Bls.Fp`. -/
 scoped instance instField : Field Fp :=
-  letI : SMul ℕ Fp := ⟨fun n a => ofZMod (n • Montgomery.toZMod a)⟩
-  letI : SMul ℤ Fp := ⟨fun n a => ofZMod (n • Montgomery.toZMod a)⟩
-  letI : SMul ℚ≥0 Fp := ⟨fun q a => ofZMod (q • Montgomery.toZMod a)⟩
-  letI : SMul ℚ Fp := ⟨fun q a => ofZMod (q • Montgomery.toZMod a)⟩
-  letI : Pow Fp ℤ := ⟨fun a n => ofZMod (Montgomery.toZMod a ^ n)⟩
-  letI : IntCast Fp := ⟨fun n => ofZMod n⟩
-  letI : NNRatCast Fp := ⟨fun q => ofZMod q⟩
-  letI : RatCast Fp := ⟨fun q => ofZMod q⟩
-  Function.Injective.field (Montgomery.toZMod : Fp → ZMod modulus) toZMod_injective
-    Montgomery.toZMod_zero Montgomery.toZMod_one Montgomery.toZMod_add Montgomery.toZMod_mul
-    Montgomery.toZMod_neg Montgomery.toZMod_sub toZMod_inv
-    (fun a b => by
-      change Montgomery.toZMod (a * b.inverse) = _
-      rw [Montgomery.toZMod_mul, ← toZMod_apply b.inverse, toZMod_inverse, div_eq_mul_inv]
-      rfl)
-    (fun _ _ => toZMod_ofZMod _) (fun _ _ => toZMod_ofZMod _) (fun _ _ => toZMod_ofZMod _)
-    (fun _ _ => toZMod_ofZMod _) toZMod_pow (fun _ _ => toZMod_ofZMod _)
-    toZMod_natCast (fun _ => toZMod_ofZMod _) (fun _ => toZMod_ofZMod _)
-    (fun _ => toZMod_ofZMod _)
+  -- The sum, the product, the power and the division are those of the specification.
+  --
+  -- The inverse is the one of the Montgomery form, equal to the inverse of the specification.
+  --
+  -- It is scoped, since its division is the one of this specification.
+  Montgomery.field fun (a b : Fp) => by
+    change Montgomery.toZMod (a * b.inverse) = _
+    rw [Montgomery.toZMod_mul, ← toZMod_apply b.inverse, toZMod_inverse, div_eq_mul_inv]
+    rfl
 
 @[simp] theorem zero_def : Fp.zero = (0 : Fp) := rfl
 

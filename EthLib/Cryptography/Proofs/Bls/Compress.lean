@@ -13,11 +13,7 @@ The square root computes `a^((p + 1) / 4)`, since `p = 3 mod 4`.
 
 It squares back to `a` exactly on the squares.
 
-Soundness is the final check of the square root, and completeness is Euler's criterion.
-
 Decompressing the compression of a valid point gives back the same group element.
-
-The coordinates may change, since compression scales to `z = 1`, but the group element does not.
 
 The converse direction shows that the encoding is canonical.
 
@@ -41,6 +37,7 @@ set_option maxRecDepth 4000
 
 /-- Soundness of `Fp.sqrt`: a returned root squares to the input. -/
 theorem sqrt_ok {a c : Fp} (h : Fp.sqrt a = .ok c) : c * c = a := by
+  -- Soundness is the final check of the square root.
   rw [Fp.sqrt] at h
   split at h
   · rename_i hbeq
@@ -64,6 +61,7 @@ private theorem pow_sqrt_exponent {x y : ZMod Fp.modulus} (h : y * y = x) :
 /-- Completeness of `Fp.sqrt`: it succeeds on every square. -/
 theorem sqrt_complete {a b : Fp} (h : b * b = a) :
     Fp.sqrt a = .ok (Fp.powNat a ((Fp.modulus + 1) / 4)) := by
+  -- Completeness is Euler's criterion.
   have hcand : Fp.powNat a ((Fp.modulus + 1) / 4) * Fp.powNat a ((Fp.modulus + 1) / 4) = a := by
     apply toZMod.injective
     rw [toZMod_mul, toZMod_powNat]
@@ -126,16 +124,16 @@ The decoder reads them back, and it rejects an integer of at least `p`. -/
 
 /-- The bytes of an element are those of its integer. -/
 private theorem toBytesBE_data (x : Fp) :
-    (Fp.toBytesBE x).data.toList = Base.natToBytes 48 x.val := by
+    (Fp.toBytesBE x).data.toList = (Base.ByteOrder.toBE 48 x.val).toList := by
   rw [show Fp.toBytesBE x = Montgomery.toBytesBE x from rfl, Montgomery.toBytesBE_eq]
   unfold Fp.val
   rfl
 
 /-- Decoding the encoding of a field element recovers its value. -/
-private theorem bytesToNat_toBytesBE (x : Fp) :
-    Base.bytesToNat (Fp.toBytesBE x).data.toList = x.val := by
+private theorem ofBE_toBytesBE (x : Fp) :
+    Base.ByteOrder.ofBE (Fp.toBytesBE x).data.toList = x.val := by
   rw [toBytesBE_data]
-  exact Base.bytesToNat_natToBytes_of_lt (lt_of_lt_of_le (val_lt x) (by decide))
+  exact Base.ByteOrder.ofBE_toBE_of_lt (lt_of_lt_of_le (val_lt x) (by decide))
 
 set_option exponentiation.threshold 400 in
 /-- The most significant byte of a canonical field element has its top three bits clear (`< 0x20`).
@@ -146,24 +144,24 @@ theorem toBytesBE_head_lt (x : Fp) : ((Fp.toBytesBE x).get! 0).toNat < 0x20 := b
   -- Split the 48 bytes into the head byte and the 47 after it.
   obtain ⟨b, rest, hbr⟩ : ∃ b rest, (Fp.toBytesBE x).data.toList = b :: rest := by
     rw [toBytesBE_data]
-    cases h : Base.natToBytes 48 x.val with
+    cases h : (Base.ByteOrder.toBE 48 x.val).toList with
     | nil =>
       have := congrArg List.length h
-      rw [Base.natToBytes_length] at this
+      rw [Base.ByteOrder.length_toList_toBE] at this
       simp at this
     | cons b rest => exact ⟨b, rest, rfl⟩
   have hlen : rest.length = 47 := by
     have := congrArg List.length hbr
-    rw [toBytesBE_data, Base.natToBytes_length] at this
+    rw [toBytesBE_data, Base.ByteOrder.length_toList_toBE] at this
     simp at this
     omega
   have hget : (Fp.toBytesBE x).get! 0 = b := by
     show (Fp.toBytesBE x).data[0]! = b
     rw [← Array.getElem!_toList, hbr]
     rfl
-  have hval : b.toNat * 256 ^ 47 + Base.bytesToNat rest = x.val := by
-    rw [← hlen, ← Base.bytesToNat_cons, ← hbr, toBytesBE_data,
-      Base.bytesToNat_natToBytes_of_lt hv]
+  have hval : b.toNat * 256 ^ 47 + Base.ByteOrder.ofBE rest = x.val := by
+    rw [← hlen, ← Base.ByteOrder.ofBE_cons, ← hbr, toBytesBE_data,
+      Base.ByteOrder.ofBE_toBE_of_lt hv]
   have hlt : x.val < 32 * 256 ^ 47 := lt_of_lt_of_le (val_lt x) (by decide)
   rw [hget]
   have : b.toNat * 256 ^ 47 < 32 * 256 ^ 47 := by omega
@@ -198,28 +196,29 @@ theorem toBytesBE_fromBytesBE {b : ByteArray} {x : Fp}
       rw [getElem!_pos b i (by simp at h1; omega)]
       rfl
     rw [Montgomery.ofBytesBE_eq, hl] at h
-    by_cases hlt : Base.bytesToNat b.data.toList < params.p
+    by_cases hlt : Base.ByteOrder.ofBE b.data.toList < params.p
     -- An in-range value is the decoded element itself, and it writes the same bytes.
     · simp only [hlt, ↓reduceIte] at h
       cases h
-      have hv : Montgomery.toNat (Montgomery.ofNat (M := params) (Base.bytesToNat b.data.toList)) =
-          Base.bytesToNat b.data.toList := by
-        have := val_ofNat_of_lt (n := Base.bytesToNat b.data.toList) hlt
+      have hv :
+          Montgomery.toNat (Montgomery.ofNat (M := params) (Base.ByteOrder.ofBE b.data.toList)) =
+          Base.ByteOrder.ofBE b.data.toList := by
+        have := val_ofNat_of_lt (n := Base.ByteOrder.ofBE b.data.toList) hlt
         unfold Fp.val at this
         exact this
       have hlen : b.data.toList.length = 4 * 12 := by simp [hs]
       apply ByteArray.ext
       apply Array.toList_inj.mp
       show (Montgomery.toBytesBE _).data.toList = _
-      rw [Montgomery.toBytesBE_eq, hv, ← hlen, Base.natToBytes_bytesToNat]
+      rw [Montgomery.toBytesBE_eq, hv, ← hlen, Base.ByteOrder.toList_toBE_ofBE]
     -- A value at or above p is rejected.
     · simp only [hlt, ↓reduceIte] at h
       cases h
 
 /-- A decoded field element has the integer of the input bytes. -/
 theorem val_of_fromBytesBE {b : ByteArray} {x : Fp} (h : Fp.fromBytesBE b = .ok x) :
-    x.val = Base.bytesToNat b.data.toList := by
-  rw [← toBytesBE_fromBytesBE h, bytesToNat_toBytesBE]
+    x.val = Base.ByteOrder.ofBE b.data.toList := by
+  rw [← toBytesBE_fromBytesBE h, ofBE_toBytesBE]
 
 end EthLib.Cryptography.Bls.Fp
 
@@ -482,17 +481,7 @@ For any valid point `p`, `compress` followed by `uncompress` succeeds.
 
 It returns a point `q` denoting the same group element (`toPoint q = toPoint p`).
 
-The Jacobian representative is generally *not* preserved, but the underlying curve point is.
-
-`compress` records only the affine `x` plus the sign of `y`.
-
-So decompression rebuilds the canonical `z = 1` representative.
-
-This is the encoding half of the BLS G1 serialization spec.
-
-It relies on `p` being prime: both square roots are `±y`, recovered via the stored sign bit.
-
-It also relies on `p ≡ 3 (mod 4)`, so `Fp.sqrt` is exact. -/
+This is the encoding half of the BLS G1 serialization spec. -/
 theorem uncompress_compress {p : G1} (h : Valid p) :
     ∃ q, uncompress (compress p) = .ok q ∧ toPoint q = toPoint p := by
   by_cases hinf : p.isInfinity = true
@@ -507,6 +496,7 @@ theorem uncompress_compress {p : G1} (h : Valid p) :
       rw [hB0, UInt8.lt_iff_toNat_lt]; exact Fp.toBytesBE_head_lt xa
     have hsqw : ya * ya = xa * xa * xa + Fp.ofNat 4 := by
       have := affine_sqrt_witness h hinf; rw [hpa] at this; exact this
+    -- The proof relies on `p ≡ 3 (mod 4)`, so the square root of `Fp` is exact.
     have hsqrt := Fp.sqrt_complete hsqw
     have hysq : Fp.powNat (xa * xa * xa + Fp.ofNat 4) ((Fp.modulus + 1) / 4)
         * Fp.powNat (xa * xa * xa + Fp.ofNat 4) ((Fp.modulus + 1) / 4)
@@ -520,7 +510,13 @@ theorem uncompress_compress {p : G1} (h : Valid p) :
       · rw [ite_eq_left hs, byteArray_get!_set!_ne _ _ hi0, byteArray_get!_set!_ne _ _ hi0]
       · rw [ite_eq_right hs, byteArray_get!_set!_ne _ _ hi0]
     have hsize : (packBytes (compress p)).size = 48 := size_packBytes _
+    -- Compression records only the affine `x` plus the sign of `y`.
+    --
+    -- So decompression rebuilds the canonical `z = 1` representative.
     refine ⟨⟨xa, ya, Fp.one⟩, ?_, ?_⟩
+    -- The proof relies on `p` being prime.
+    --
+    -- Both square roots are `±y`, recovered via the stored sign bit.
     · by_cases hs : Fp.signBit ya
       · have hhead : (packBytes (compress p)).get! 0 = B0 ||| 0x80 ||| 0x20 := by
           rw [hcp]; dsimp only
@@ -552,6 +548,11 @@ theorem uncompress_compress {p : G1} (h : Valid p) :
             rw [byteArray_get!_set!_self _ _ (by rw [hsize]; decide), hhead, ← hB0]
             exact b0_neg_m B0 hb0
           · rw [byteArray_get!_set!_ne _ _ hi0, hother i hi0]
+    -- The Jacobian representative is generally not preserved, but the underlying curve point is.
+    --
+    -- The coordinates may change, since compression scales to `z = 1`.
+    --
+    -- The group element does not change.
     · have := toPoint_affine_normalize (p := p) hinf
       rw [hpa] at this; exact this
 
@@ -572,16 +573,13 @@ The proof rests on three facts:
 
 /-- The equation `x^3 + 4 = 0` has no solution modulo `p`.
 
-Equivalently, `-4` is not a cube modulo `p`.
-
-# Why it holds
-
-- `p - 1` is divisible by 3, so the cubes form a subgroup of index 3 in the nonzero residues.
-- By Euler's criterion for cubes, `a` is a cube if and only if `a^((p - 1) / 3) = 1`.
-- The kernel evaluates `(-4)^((p - 1) / 3) mod p` and finds a value other than 1.
--/
+Equivalently, `-4` is not a cube modulo `p`. -/
 private theorem cube_add_four_ne_zero_zmod (x : ZMod Fp.modulus) :
     x * x * x + 4 ≠ 0 := by
+  -- The kernel shows that `-4` is not a cube modulo `p`:
+  -- - `p - 1` is divisible by 3, so the cubes form a subgroup of index 3 in the nonzero residues.
+  -- - By Euler's criterion for cubes, `a` is a cube if and only if `a^((p - 1) / 3) = 1`.
+  -- - The kernel evaluates `(-4)^((p - 1) / 3) mod p` and finds a value other than 1.
   intro h
   -- Rewrite the root as a cube: x^3 = -4, with -4 written as the natural number p - 4.
   have h3 : x ^ 3 = ((Fp.modulus - 4 : Nat) : ZMod Fp.modulus) := by

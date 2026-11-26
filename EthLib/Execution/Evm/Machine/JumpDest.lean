@@ -8,12 +8,6 @@ public import EthLib.Execution.Evm.Op
 
 The valid jump destinations of code: the JUMPDEST bytes at the start of an opcode.
 
-A scan reads the code from its first byte, one opcode at a time.
-
-A PUSH1 to PUSH32 opcode skips its data, so a byte `0x5b` in that data is no destination.
-
-Every other byte, a valid opcode or not, takes one position.
-
 The scan is the same at every fork, because JUMPDEST and PUSH1 to PUSH32 date from Frontier.
 
 The subsection Jump Destination Validity of the Yellow Paper, Shanghai version, defines it.
@@ -27,19 +21,23 @@ Source: [`Paper.tex` at `efc5f9a`][yp] of the Yellow Paper.
 
 namespace EthLib.Execution.Evm
 
-open EthLib.Base (byteAt)
+open EthLib.Base (byteAtOrZero)
 
 /-- The byte of JUMPDEST. -/
 def JUMPDEST : UInt8 := 0x5b
 
 /-- The position of the opcode after the one at `pc`, past the data of a PUSH. -/
 def nextOpcode (code : ByteArray) (pc : Nat) : Nat :=
-  match Op.decode (byteAt code pc) with
+  match Op.decode (byteAtOrZero code pc) with
   -- §9.4.3: `N(i, w) = i + w - PUSH1 + 2` for `w` in `[PUSH1, PUSH32]`.
   --
   -- PUSH0 has no data, so it gets `i + 1` here, as in the other case of `N`.
+  --
+  -- A PUSH1 to PUSH32 opcode skips its data, so a byte `0x5b` in that data is no destination.
   | some (.push n) => pc + n.val + 1
   -- `N(i, w) = i + 1` otherwise.
+  --
+  -- Every other byte, a valid opcode or not, takes one position.
   | _ => pc + 1
 
 /-- The positions of the opcodes of the code from `pc`, scanning at most `fuel` opcodes. -/
@@ -72,13 +70,15 @@ def markJumpDestsFrom (code : ByteArray) :
     if h : pc < code.size then
       -- `{i} ∪ D_J(c, N(i, c[i]))` if `c[i] = JUMPDEST`, else `D_J(c, N(i, c[i]))`.
       markJumpDestsFrom code fuel (nextOpcode code pc)
-        (if byteAt code pc = JUMPDEST then flags.set pc true h else flags)
+        (if code[pc] = JUMPDEST then flags.set pc true h else flags)
     else flags
 
 /-- The valid jump destinations of the code, as one flag for each position.
 
 A flag is true when an opcode starts at the position and the byte there is JUMPDEST. -/
 def validJumpDestinations (code : ByteArray) : Array Bool :=
+  -- A scan reads the code from its first byte, one opcode at a time.
+  --
   -- `D(c) = D_J(c, 0)`, one flag for each byte of the code.
   (markJumpDestsFrom code code.size 0 (Vector.replicate code.size false)).toArray
 

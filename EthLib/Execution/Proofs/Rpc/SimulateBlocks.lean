@@ -14,35 +14,17 @@ import EthLib.Base.Proofs.ChainConfig
 /-!
 # Proofs: the blocks of `eth_simulateV1`
 
-A simulated block follows the last block of its chain, and has the number that it is given.
+The simulated blocks, gap blocks included, follow the base block one by one, each at its own fork.
 
-Its parent hash is the hash of the header of that block, and its hash is the hash of its own header.
-
-The blocks of a simulation, gap blocks included, have consecutive numbers after the base block.
-
-When the view holds the hash of each header, the first has the hash of the base block as parent.
-
-Each other has the hash of the block before it.
+Their parent hashes link them when the view holds the hash of each header.
 
 Without validation, a block whose base fee is not overridden has a base fee of 0.
 
-That holds whatever the base fee of the block before it.
+With validation, no overrides and signed calls, a block from Paris on passes the checks of a block.
 
-Each block of a simulation, gap blocks included, is a simulated block at its own fork.
+It then agrees with the state transition.
 
-A gap block is simulated from an empty request.
-
-A block of the plan is simulated from its request, at its fork.
-
-That fork is no earlier than the active fork of the header of the base block.
-
-A block simulated without calls has no transactions.
-
-With validation and no overrides, a simulated block from Paris on passes the checks of a block.
-
-Its calls must then be signed, and it agrees with the state transition.
-
-Its transition may still fail at a sender with code.
+That transition may still fail at a sender with code.
 -/
 
 @[expose] public section
@@ -391,29 +373,25 @@ private theorem links_snoc {N0 : Nat} {H0 : Hash32} {t : SimulateStep} {base : R
       Option.getD_some]
     exact hBlkHash
 
-/-- The simulated blocks, gap blocks included, follow the base block of the plan one by one.
-
-There is one block for each planned block and each gap block before it.
-
-The block at index `i`, from 0, has the number of the base block plus `i + 1`.
-
-The first has the hash of the base block as parent hash, and each other the hash of the one before.
-
-The hash of each block is the hash of its header.
-
-The view must hold the hash of the header of each canonical block, as a valid view does. -/
+/-- The simulated blocks, gap blocks included, follow the base block of the plan one by one. -/
 theorem simulateBlocks_links {v : ChainView}
+    -- The view must hold the hash of the header of each canonical block, as a valid view does.
     (hHash : ∀ r ∈ v.canonical, r.block.header.hash = .ok r.hash) {payload : SimulatePayload}
     {p : BlockParam} {choices : SimulateChoices}
     {plan : SimulatePlan} {blocks : List SimulatedBlock}
     (hPlan : v.planSimulate payload p choices = .ok plan)
     (h : v.simulateBlocks payload p choices = .ok blocks) :
+    -- There is one block for each planned block and each gap block before it.
     blocks.length = PlannedBlock.count (plan.blocks.map Prod.fst) ∧
+    -- The block at index `i`, from 0, has the number of the base block plus `i + 1`.
     (∀ i (hi : i < blocks.length),
       blocks[i].record.block.header.number = plan.base.block.header.number + i + 1) ∧
+    -- The first has the hash of the base block as parent hash.
     (∀ b ∈ blocks.head?, b.record.block.header.parentHash = plan.base.hash) ∧
+    -- Each other has the hash of the one before.
     (∀ i (hi : i + 1 < blocks.length),
       blocks[i + 1].record.block.header.parentHash = blocks[i].record.hash) ∧
+    -- The hash of each block is the hash of its header.
     (∀ b ∈ blocks, b.record.block.header.hash = .ok b.record.hash) := by
   simp only [ChainView.simulateBlocks] at h
   obtain ⟨plan', hPlan', h⟩ := bind_ok_iff.mp h
@@ -806,11 +784,13 @@ private theorem foldlM_signed {fork : Fork} {env : Evm.BlockEnvironment fork}
     · rw [hEq]
       exact Or.inr ⟨n, e, rfl, hP⟩
 
-/-- A simulated body whose transactions agree with the real ones agrees with the real body. -/
+/-- A simulated body whose transactions agree with the real ones agrees with the real body.
+
+The simulation must keep the cap on the items of the block access list, as a real body does. -/
 private theorem applyBody_signed {fork : Fork} {config : ChainConfig}
     {env : Evm.BlockEnvironment fork} {header : Header fork} {txs : List Transaction}
     {ws : Since .shapella fork (List Withdrawal)} {start : State.BlockState}
-    {overrides : BodyOverrides} {output : BlockOutput fork}
+    {overrides : BodyOverrides} {output : BlockOutput fork} (hCap : overrides.itemCap = true)
     (hT : ∀ body out, applyTransactions env body (txs.map Transaction.unsigned) overrides =
       .ok out → applyTransactions env body txs = .ok out ∨
         ∃ i e, applyTransactions env body txs = .error (.invalidTransaction i e) ∧
@@ -823,6 +803,7 @@ private theorem applyBody_signed {fork : Fork} {config : ChainConfig}
         ((∃ s, overrides.senders i = some s ∧ e = .senderNotEoa s)
           ∨ ∃ codeHash, e = .missingCode codeHash) := by
   unfold applyBody at h ⊢
+  rw [hCap] at h
   obtain ⟨state, hState, h⟩ := bind_ok_iff.mp h
   obtain ⟨body, hBody, h⟩ := bind_ok_iff.mp h
   obtain ⟨out, hOut, h⟩ := bind_ok_iff.mp h
@@ -857,7 +838,7 @@ private theorem simulateBlock_valid_spec {chain chain' : BlockChain} {base : Rec
              logs := result.output.logs }, filled.map (·.2), result.output.results⟩ := by
   have hState : overrideState fork chain.state [] = chain.state := by
     simp [overrideState, applyOverrides]
-  have hMoves : movedPrecompiles (precompileMoves []) = some := by
+  have hMoves : simulatedPrecompiles [] = some := by
     funext a
     rfl
   simp only [simulateBlock] at h
@@ -1044,7 +1025,7 @@ private theorem simulateBlock_valid_header {chain chain' : BlockChain} {base : R
              logs := result.output.logs }, filled.map (·.2), result.output.results⟩ := by
   have hState : overrideState fork chain.state [] = chain.state := by
     simp [overrideState, applyOverrides]
-  have hMoves : movedPrecompiles (precompileMoves []) = some := by
+  have hMoves : simulatedPrecompiles [] = some := by
     funext a
     rfl
   simp only [simulateBlock] at h
@@ -1081,31 +1062,27 @@ private theorem checkBlock_of_checkHeader {fork : Fork} {config : ChainConfig}
 
 /-- With validation and no overrides, a simulated block passes the checks of a block.
 
-Its calls must then be signed.
-
-The parent must be the last block of the chain, from London on, at a fork no later than the block's.
-
-The block must be from Paris on, one number above the parent, and later in time.
-
-Its time must fit the 256 bits of the header.
-
-The parent's gas limit must be at least 5,000, the least that the gas limit rule allows.
-
-The block takes the transactions `txs` and any root `root`, and must fit the size limit.
-
-Each of `txs` is the signed form of a call, with a gas limit of at most `2^32 - 1`. -/
+Its calls must then be signed. -/
 theorem checkBlock_simulateBlock {chain chain' : BlockChain} {base parent : RecentBlock}
     {fork : Fork} {number time budget budget' : Nat} {calls : List GenericTransaction}
     {b : SimulatedBlock} {txs : List Transaction} {root : Hash32}
     (h : simulateBlock chain base fork number time { calls } true budget =
       .ok (chain', budget', b))
+    -- The parent must be the last block of the chain.
     (hParent : chain.recent.getLast? = some parent)
+    -- The parent is from London on, at a fork no later than the block's, which is from Paris on.
     (hLondon : .london ≤ parent.fork) (hParentFork : parent.fork ≤ fork) (hParis : .paris ≤ fork)
+    -- The block is one number above the parent.
     (hNumber : number = parent.header.number + 1)
+    -- The block is later in time, and its time fits the 256 bits of the header.
     (hTime : parent.header.timestamp.toNat < time) (hTimeBits : time < 2 ^ 256)
+    -- The parent's gas limit must be at least 5,000, the least that the gas limit rule allows.
     (hGasLimit : Fees.GasLimit.LIMIT_MINIMUM ≤ parent.header.gasLimit)
+    -- Each transaction that the block takes is the signed form of a call.
     (hUnsigned : txs.map Transaction.unsigned = b.record.block.transactions)
+    -- Each transaction has a gas limit of at most `2^32 - 1`.
     (hGas : ∀ tx ∈ txs, tx.gas.toNat ≤ Evm.GasCosts.TX_MAX_TOTAL_GAS_LIMIT)
+    -- The block, with any transactions root, must fit the size limit.
     (hSize : (do validateBlockSize (← bodyItems (b.withTransactions txs root))) = .ok ()) :
     checkBlock chain.config false chain.recent (b.withTransactions txs root) = .ok () := by
   obtain ⟨parent', parentHash, filled, result, hash, hP, hph, hRun, rfl⟩ :=
@@ -1235,7 +1212,7 @@ private theorem stateTransition_of_simulateBlock_or {chain chain' : BlockChain} 
       rcases hP with rfl | hP
       · exact Or.inl ⟨_, hs, rfl⟩
       · exact Or.inr hP
-  rcases applyBody_signed hTxs hOutput with hReal | ⟨i, e, hErr, hP⟩
+  rcases applyBody_signed rfl hTxs hOutput with hReal | ⟨i, e, hErr, hP⟩
   · left
     have hBody : runBody chain (⟨header, txs, [], fun _ => []⟩ : Block fork Transaction) =
         .ok ⟨output, { roots with transactions := root }⟩ := by
@@ -1268,37 +1245,9 @@ private theorem stateTransition_of_simulateBlock_or {chain chain' : BlockChain} 
 
 /-- With validation and no overrides, a simulated block agrees with the state transition.
 
-The fork must be the active fork at the number and time of the block, and come before Hegotá.
-
-The calls must be the transactions `txs` without their signatures.
-
-Each signature must give the sender of its call and name the chain.
-
-Each gas limit must be at most `2^32 - 1`, the cap from Glamsterdam that a simulation lifts.
-
-The blob gas must fit the 64 bits of the header, which a large blob schedule of a chain allows.
-
-The parent must be the last block of the chain, from London on, at a fork no later than the block's.
-
-The block must be from Paris on, one number above the parent, and later in time.
-
-Its time must fit the 256 bits of the header.
-
-The parent's gas limit must be at least 5,000, the least that the gas limit rule allows.
-
-The block with `txs` and their root `root` must fit the size limit, which depends on the signatures.
-
-That block has the gas used, the other roots and the logs Bloom of the simulated block.
-
-The state must hold the code of each of its accounts.
-
-Then its transition gives the state after the simulated block.
+Its transition gives the state after the simulated block.
 
 Otherwise it fails at a sender with code, by [EIP-3607][eip-3607], which the simulation skips.
-
-The error names the sender of the failing transaction.
-
-That sender is the one that the simulated block records for the call.
 
 [eip-3607]: https://eips.ethereum.org/EIPS/eip-3607#specification -/
 theorem stateTransition_of_simulateBlock {chain chain' : BlockChain} {base : RecentBlock}
@@ -1306,23 +1255,47 @@ theorem stateTransition_of_simulateBlock {chain chain' : BlockChain} {base : Rec
     {b : SimulatedBlock} {txs : List Transaction} {root : Hash32}
     (h : simulateBlock chain base fork number time { calls } true budget =
       .ok (chain', budget', b))
+    -- The fork must be the active fork at the number and time of the block.
     (hFork : chain.config.activeFork b.record.block.header.number
       b.record.block.header.timestamp.toNat = some b.record.fork)
+    -- The fork must come before Hegotá.
     (hHegota : b.record.fork < .hegota)
+    -- The calls must be the transactions without their signatures.
     (hUnsigned : txs.map Transaction.unsigned = b.record.block.transactions)
+    -- Each signature must give the sender of its call and name the chain.
     (hSenders : ∀ p ∈ txs.zip b.senders, recoverSender b.record.fork p.1 = .ok p.2 ∧
       checkChainId b.record.fork chain.config.chainId p.1 = .ok ())
+    -- Each gas limit must be at most `2^32 - 1`, the cap from Glamsterdam that a simulation lifts.
     (hGas : ∀ tx ∈ txs, tx.gas.toNat ≤ Evm.GasCosts.TX_MAX_TOTAL_GAS_LIMIT)
+    -- The blob gas must fit the 64 bits of the header.
+    --
+    -- A large blob schedule of a chain allows more.
     (hBlob : (txs.map Fees.BlobBaseFee.calculateTotalBlobGas).sum < 2 ^ 64)
+    -- The root is that of the signed transactions.
     (hRoot : transactionsRoot txs = .ok root)
+    -- The parent must be the last block of the chain.
     {parent : RecentBlock} (hParent : chain.recent.getLast? = some parent)
+    -- The parent is from London on, at a fork no later than the block's, which is from Paris on.
     (hLondon : .london ≤ parent.fork) (hParentFork : parent.fork ≤ fork) (hParis : .paris ≤ fork)
+    -- The block is one number above the parent.
     (hNumber : number = parent.header.number + 1)
+    -- The block is later in time, and its time fits the 256 bits of the header.
     (hTime : parent.header.timestamp.toNat < time) (hTimeBits : time < 2 ^ 256)
+    -- The parent's gas limit must be at least 5,000, the least that the gas limit rule allows.
     (hGasLimit : Fees.GasLimit.LIMIT_MINIMUM ≤ parent.header.gasLimit)
+    -- The block with those transactions and that root must fit the size limit.
+    --
+    -- Whether it fits depends on the signatures.
     (hSize : (do validateBlockSize (← bodyItems (b.withTransactions txs root))) = .ok ())
+    -- The state must hold the code of each of its accounts.
     (available : chain.state.HasCodes) :
+    -- The block with those transactions has the gas used and other roots of the simulated block.
+    --
+    -- It also has the logs Bloom of the simulated block.
     stateTransition chain (b.withTransactions txs root) false = .ok b.record.state ∨
+      -- The error names the sender of the failing transaction.
+      --
+      -- That sender is the one that the simulated block records for the call.
       ∃ i s, b.senders[i]? = some s ∧ stateTransition chain (b.withTransactions txs root) false =
         .error (.invalidTransaction i (.senderNotEoa s)) := by
   have hCheck := checkBlock_simulateBlock h hParent hLondon hParentFork hParis hNumber hTime

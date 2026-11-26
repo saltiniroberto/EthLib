@@ -9,10 +9,6 @@ public import EthLib.Execution.Proofs.Evm.Logic.GasMono
 
 A step that fails halts the frame exceptionally, unless its error aborts the whole run.
 
-The halted frame has no output, holds the error, and keeps the state and substate it had.
-
-It holds no gas: the meter of one counter of gas is exhausted to 0, at every fork with that meter.
-
 The frame does not roll back the state itself.
 
 The caller discards the state of a frame that halts exceptionally.
@@ -24,8 +20,6 @@ The rules here cover a byte that is no opcode at the fork, such as `0xfe` at eve
 They also cover JUMP, and JUMPI on a nonzero condition, to an invalid jump destination.
 
 A tactic closes such a step in a code stored as one number.
-
-It proves a destination invalid when the byte there is not JUMPDEST.
 -/
 
 @[expose] public section
@@ -42,6 +36,7 @@ variable {fork : Fork}
 It holds the state and the substate that its frame had when it halted. -/
 def Faulted (error : EvmError) (state : State.TransactionState) (substate : Substate)
     (evm : Evm fork Nat) : Prop :=
+  -- The meter of one counter of gas is exhausted to 0, at every fork with that meter.
   evm.running = false ∧ evm.error = some error ∧ evm.output = .empty ∧ evm.gas = 0 ∧
     evm.state = state ∧ evm.substate = substate
 
@@ -135,6 +130,8 @@ macro_rules
        case byte => decide))
 
 /-- Closes a specification at an opcode that halts the frame exceptionally.
+
+The code is stored as one number.
 
 The opcode is a byte that is no opcode at the fork, or a jump to an invalid destination.
 

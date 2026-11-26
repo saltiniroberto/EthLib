@@ -117,7 +117,7 @@ def _account(entry: dict[str, Any]) -> dict[str, Any]:
 
 @pytest.mark.parametrize("number", range(57, 61))
 def test_pinned_access_lists(number: int, answers: dict[str, dict[str, Any]]) -> None:
-    # Source: execution-apis 3284ee80, tools/chain/bal/block-000NN.json, copied byte for byte.
+    # Source: execution-apis 166e334c, tools/chain/bal/block-000NN.json, copied byte for byte.
     pinned = json.loads((FIXTURES / "bal" / f"block-{number:05d}.json").read_text())
     decoded = answers[_request(METHODS[0], [hex(number)])]["result"]
     raw = bytes.fromhex(answers[_request(METHODS[1], [hex(number)])]["result"][2:])
@@ -347,7 +347,7 @@ CODE_CHANGE: dict[str, object] = {
 
 
 def test_code_change_encoding() -> None:
-    # Source: ethereum/EIPs 46976b2a9bf99f727fb87dc8c809e3a3cdc6b445, EIP-7928, RLP Encoding.
+    # Source: ethereum/EIPs b055feec322fbc37e9d77a393a50b3ff56b31c92, EIP-7928, RLP Encoding.
     # One account changes only its code to 0x6000 at index 0.
     # The change is c4 80 82 60 00; its list is c5 ..., the account df ..., the outer list e0 ... .
     expected = bytes.fromhex("e0df94" + "00" * 20 + "c0c0c0c0c5c480826000")
@@ -355,7 +355,7 @@ def test_code_change_encoding() -> None:
 
 
 def test_scalar_limits_and_bytecode_encoding() -> None:
-    # EIP-7928 at EIPs 46976b2a, RLP Encoding: integers are minimal; bytecode keeps its bytes.
+    # EIP-7928 at EIPs b055feec, RLP Encoding: integers are minimal; bytecode keeps its bytes.
     # One account changes slot 1 to zero and reads slot 2; indexes, balance and nonce are maximal.
     # Account contents are 101 bytes (f8 65); the outer contents are 103 bytes (f8 67).
     account = {

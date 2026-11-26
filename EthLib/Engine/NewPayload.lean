@@ -11,40 +11,23 @@ public import EthLib.Execution.Blocks.Transition
 
 The checks of `engine_newPayload`, versions 1 to 6, and the status that each payload gets.
 
-The Engine API calls the execution side of Glamsterdam by the name Amsterdam.
+Sources, at commit `1ca0818` of execution-apis:
 
-It calls that of Hegotá by the name Bogota.
+- versions [1][v1], [2][v2], [3][v3], [4][v4], [5][v5] and [6][v6] of the method
+- the updates of earlier versions by [Cancun][cancun], [Prague][prague] and [Osaka][osaka]
+- the updates of version 4 by [Amsterdam][amsterdam] and of version 5 by [Bogota][bogota]
 
-A step comment names the version of the method, as in version 3, step 2.
-
-The consensus layer writes the parameters of each version as JSON, in the order it takes them.
-
-These sources state the rules, at commit `3284ee8` of execution-apis and `46976b2` of EIPs:
-
-- [`engine_newPayloadV1`][v1], which also defines the statuses
-- [`engine_newPayloadV2`][v2], with the structure by fork
-- the update of version 2 by Cancun, in [`cancun.md`][v2-cancun]
-- [`engine_newPayloadV3`][v3], and its update by Pectra in [`prague.md`][v3-prague]
-- [`engine_newPayloadV4`][v4], and its update by Amsterdam in [`amsterdam.md`][v4-amsterdam]
-- [`engine_newPayloadV5`][v5]
-- [`engine_newPayloadV6`][v6], and its update of version 5, in [`bogota.md`][v5-bogota]
-- the [payload validation][validation] of Paris, with its terminal block check
-- the [transition block validity][eip3675] of EIP-3675
-
-The Bogota links are at commit `68d76a5`, the first where a list entry may be any byte string.
-
-[v1]: https://github.com/ethereum/execution-apis/blob/3284ee80c3da3e516c53782dde75157cccf1ebdc/src/engine/paris.md#engine_newpayloadv1
-[validation]: https://github.com/ethereum/execution-apis/blob/3284ee80c3da3e516c53782dde75157cccf1ebdc/src/engine/paris.md#payload-validation
-[eip3675]: https://github.com/ethereum/EIPs/blob/46976b2a9bf99f727fb87dc8c809e3a3cdc6b445/EIPS/eip-3675.md#transition-block-validity
-[v2]: https://github.com/ethereum/execution-apis/blob/3284ee80c3da3e516c53782dde75157cccf1ebdc/src/engine/shanghai.md#engine_newpayloadv2
-[v2-cancun]: https://github.com/ethereum/execution-apis/blob/3284ee80c3da3e516c53782dde75157cccf1ebdc/src/engine/cancun.md#update-the-methods-of-previous-forks
-[v3]: https://github.com/ethereum/execution-apis/blob/3284ee80c3da3e516c53782dde75157cccf1ebdc/src/engine/cancun.md#engine_newpayloadv3
-[v3-prague]: https://github.com/ethereum/execution-apis/blob/3284ee80c3da3e516c53782dde75157cccf1ebdc/src/engine/prague.md#update-the-methods-of-previous-forks
-[v4]: https://github.com/ethereum/execution-apis/blob/3284ee80c3da3e516c53782dde75157cccf1ebdc/src/engine/prague.md#engine_newpayloadv4
-[v4-amsterdam]: https://github.com/ethereum/execution-apis/blob/3284ee80c3da3e516c53782dde75157cccf1ebdc/src/engine/amsterdam.md#update-the-methods-of-previous-forks
-[v5]: https://github.com/ethereum/execution-apis/blob/3284ee80c3da3e516c53782dde75157cccf1ebdc/src/engine/amsterdam.md#engine_newpayloadv5
-[v6]: https://github.com/ethereum/execution-apis/blob/68d76a5b1c09dff023782d97eec6ce87a6f6505e/src/engine/bogota.md#engine_newpayloadv6
-[v5-bogota]: https://github.com/ethereum/execution-apis/blob/68d76a5b1c09dff023782d97eec6ce87a6f6505e/src/engine/bogota.md#update-the-methods-of-previous-forks
+[v1]: https://github.com/ethereum/execution-apis/blob/1ca0818569467cff85b7f41372f22e728d5daa14/src/engine/paris.md#engine_newpayloadv1
+[v2]: https://github.com/ethereum/execution-apis/blob/1ca0818569467cff85b7f41372f22e728d5daa14/src/engine/shanghai.md#engine_newpayloadv2
+[cancun]: https://github.com/ethereum/execution-apis/blob/1ca0818569467cff85b7f41372f22e728d5daa14/src/engine/cancun.md#update-the-methods-of-previous-forks
+[v3]: https://github.com/ethereum/execution-apis/blob/1ca0818569467cff85b7f41372f22e728d5daa14/src/engine/cancun.md#engine_newpayloadv3
+[prague]: https://github.com/ethereum/execution-apis/blob/1ca0818569467cff85b7f41372f22e728d5daa14/src/engine/prague.md#update-the-methods-of-previous-forks
+[v4]: https://github.com/ethereum/execution-apis/blob/1ca0818569467cff85b7f41372f22e728d5daa14/src/engine/prague.md#engine_newpayloadv4
+[osaka]: https://github.com/ethereum/execution-apis/blob/1ca0818569467cff85b7f41372f22e728d5daa14/src/engine/osaka.md#prague-api
+[amsterdam]: https://github.com/ethereum/execution-apis/blob/1ca0818569467cff85b7f41372f22e728d5daa14/src/engine/amsterdam.md#update-the-methods-of-previous-forks
+[v5]: https://github.com/ethereum/execution-apis/blob/1ca0818569467cff85b7f41372f22e728d5daa14/src/engine/amsterdam.md#engine_newpayloadv5
+[v6]: https://github.com/ethereum/execution-apis/blob/1ca0818569467cff85b7f41372f22e728d5daa14/src/engine/bogota.md#engine_newpayloadv6
+[bogota]: https://github.com/ethereum/execution-apis/blob/1ca0818569467cff85b7f41372f22e728d5daa14/src/engine/bogota.md#update-the-methods-of-previous-forks
 -/
 
 @[expose] public section
@@ -57,10 +40,14 @@ open EthLib.Execution.Blocks
 open EthLib.Execution.Transactions
 open EthLib.Engine.Json
 open EthLib.Serialization.JsonRpc
-open EthLib.Execution.Rpc (withdrawal)
+open EthLib.Execution.Rpc (withdrawal versionedHash versionedHashJson)
+open EthLib.Cryptography.Kzg (VersionedHash)
 
 /-- Whether a version of the method takes payloads of a fork. -/
 def acceptsFork (version : Nat) (fork : Fork) : Bool :=
+  -- A step names the version of the method, as in version 3, step 2.
+  --
+  -- The Engine API calls the execution side of Glamsterdam by the name Amsterdam.
   match version with
   -- Version 1 states no range of forks.
   --
@@ -74,16 +61,18 @@ def acceptsFork (version : Nat) (fork : Fork) : Bool :=
   | 3 => fork == .dencun
   -- Version 4, step 1: the time frame of Prague, here Pectra.
   --
-  -- Step 1 names Prague alone, and `osaka.md` does not update version 4.
+  -- The update by Osaka widens step 1 to the time frame of Prague or Osaka, here Fusaka too.
   --
-  -- The Osaka API update in `amsterdam.md` rejects only payloads from Amsterdam on, so Osaka too.
+  -- The update by Amsterdam rejects payloads from Amsterdam on.
   --
-  -- So here it takes every fork from Pectra before Glamsterdam: Fusaka and BPO1 to BPO5 too.
+  -- So here it takes every fork from Pectra before Glamsterdam, BPO1 to BPO5 included.
   | 4 => decide (.pectra ≤ fork) && decide (fork < .glamsterdam)
   -- Version 5, step 1: the time frame of Amsterdam, here Glamsterdam.
   --
-  -- The update in `bogota.md` ends it at Bogota, here Hegota.
+  -- The update by Bogota ends it at Bogota, here Hegota.
   | 5 => fork == .glamsterdam
+  -- The Engine API calls the execution side of Hegotá by the name Bogota.
+  --
   -- Version 6, step 1: the time frame of Bogota, here Hegota.
   | 6 => fork == .hegota
   -- No other version of the method exists.
@@ -132,8 +121,8 @@ def payloadParam (version : Nat) (j : Json) :
 
 /-- The parameters of a version of the method, each decoded. -/
 def newPayloadParams (version : Nat) (params : Json) :
-    Decode (AnyPayload × Option (ByteArray × UInt64) × Option (List Hash32) × Option Hash32 ×
-      Option (List ByteArray)) := do
+    Decode (AnyPayload × Option (ByteArray × UInt64) × Option (List VersionedHash) ×
+      Option Hash32 × Option (List ByteArray)) := do
   -- Version 3, step 1: the parameters strictly match those of the version, or `-32602`.
   --
   -- A `null` value counts as not provided, so it fails the match too.
@@ -152,7 +141,7 @@ def newPayloadParams (version : Nat) (params : Json) :
   let (any, amsterdam) ← payloadParam version (← param 0)
   -- Parameter 2, from version 3: `expectedBlobVersionedHashes`, an array of 32-byte data.
   let hashes ← if version ≥ 3 then
-    some <$> array "expectedBlobVersionedHashes" (fixed "versioned hash" 32) (← param 1)
+    some <$> array "expectedBlobVersionedHashes" (versionedHash "versioned hash") (← param 1)
     else pure none
   -- Parameter 3, from version 3: `parentBeaconBlockRoot`, 32 bytes of data.
   let beaconRoot ← if version ≥ 3 then
@@ -173,28 +162,30 @@ def newPayloadParams (version : Nat) (params : Json) :
     let _ ← inclusionListOfJson (← param 4)
   return (any, amsterdam, hashes, beaconRoot, requests)
 
-/-- The parameters of a version of the method as JSON, in the order that the version takes.
-
-A valid request gives the access list and the slot exactly from version 5.
-
-Its version must also take the fork of the payload. -/
+/-- The parameters of a version of the method as JSON, in the order that the version takes. -/
 def newPayloadParamsJson {fork : Fork} (version : Nat) (payload : ExecutionPayload fork)
-    (amsterdam : Option (ByteArray × UInt64)) (hashes : List Hash32) (beaconRoot : Hash32)
+    (amsterdam : Option (ByteArray × UInt64)) (hashes : List VersionedHash) (beaconRoot : Hash32)
     (requests : List ByteArray) : Json :=
+  -- The consensus layer writes the parameters of each version as JSON, in this order.
+  --
+  -- A valid request has a version that takes the fork of the payload.
+  --
+  -- It gives the access list and the slot exactly from version 5.
+  --
   -- Parameter 1: `ExecutionPayloadV4` with a list and a slot, else the structure of the fork.
   let payload := match amsterdam with
     | some (accessList, slot) => executionPayloadV4Json payload accessList slot
     | none => executionPayloadJson payload
   -- Parameters 2 and 3 from version 3, then parameter 4 from version 4.
   .arr ([payload] ++
-    (if 3 ≤ version then [listJson (dataJson ·.toList) hashes, dataJson beaconRoot.toList]
+    (if 3 ≤ version then [listJson versionedHashJson hashes, dataJson beaconRoot.toList]
       else []) ++
     (if 4 ≤ version then [listJson (dataJson ·.data.toList) requests] else [])).toArray
 
 /-- The parameters of version 6, from Bogota: those of version 5, then an inclusion list. -/
 def newPayloadV6Params (params : Json) :
-    Decode ((AnyPayload × Option (ByteArray × UInt64) × Option (List Hash32) × Option Hash32 ×
-      Option (List ByteArray)) × List ByteArray) := do
+    Decode ((AnyPayload × Option (ByteArray × UInt64) × Option (List VersionedHash) ×
+      Option Hash32 × Option (List ByteArray)) × List ByteArray) := do
   -- The five parameters of version 6, none of them `null`.
   let six ← newPayloadParams 6 params
   -- Parameter 5, the inclusion list, which the line above has read already.
@@ -205,7 +196,7 @@ def newPayloadV6Params (params : Json) :
 
 /-- The parameters of version 6 as JSON: those of version 5, then the inclusion list. -/
 def newPayloadV6ParamsJson {fork : Fork} (payload : ExecutionPayload fork)
-    (amsterdam : ByteArray × UInt64) (hashes : List Hash32) (beaconRoot : Hash32)
+    (amsterdam : ByteArray × UInt64) (hashes : List VersionedHash) (beaconRoot : Hash32)
     (requests : List ByteArray) (inclusionList : List ByteArray) : Json :=
   -- The parameters of version 5 are an array, and the inclusion list goes at its end.
   match newPayloadParamsJson 5 payload (some amsterdam) hashes beaconRoot requests with
@@ -216,7 +207,7 @@ def newPayloadV6ParamsJson {fork : Fork} (payload : ExecutionPayload fork)
 def validRequests : List ByteArray → Bool
   -- Version 4, parameter 4: with no element, the array is `[]`.
   | [] => true
-  -- An element of 1 byte or shorter is an invalid parameter.
+  -- Version 4, step 3: an element of 1 byte or shorter is an invalid parameter.
   | [r] => r.size > 1
   | r :: s :: rest =>
     match r[0]?, s[0]? with
@@ -238,18 +229,16 @@ structure CheckedBlock (version : Nat) where
 
 /-- The checks of a version of the method, under a chain configuration, before execution.
 
-An error is a JSON-RPC error.
-
-Otherwise the result is the invalid status with its reason, or the block of the payload. -/
+The result is a JSON-RPC error, the invalid status with its reason, or the block of the payload. -/
 def checkNewPayload (config : ChainConfig) (version : Nat) (params : Json) :
     Except EngineError (Except (PayloadStatus × PayloadError) (CheckedBlock version)) := do
   -- The parameters of the version, or `-32602`.
   let (any, amsterdam, hashes, beaconRoot, requests) ← newPayloadParams version params
-  -- Version 4, parameter 4: an element out of order, too short or of a repeated type is `-32602`.
+  -- Version 4, step 3: an element out of order, too short or of a repeated type is `-32602`.
   --
-  -- Version 5 does not restate the rule, and version 6 restates it without the error.
+  -- Versions 5 and 6 follow the specification of version 4, so the rule holds for them too.
   --
-  -- Both follow version 4, and EthLib keeps the rule for them.
+  -- Version 6 restates the order of the elements in its parameter 4, without the error.
   if let some requests := requests then
     unless validRequests requests do invalid "executionRequests: out of order or too short"
   -- The fork of the payload is the active fork at its number and its timestamp.
@@ -274,6 +263,8 @@ def checkNewPayload (config : ChainConfig) (version : Nat) (params : Json) :
     let requests ← since (f := .pectra) "executionRequests" requests
     let accessList ← since (f := .glamsterdam) "blockAccessList" (amsterdam.map (·.1))
     let slot ← since (f := .glamsterdam) "slotNumber" (amsterdam.map (·.2))
+    -- Version 1 defines the statuses.
+    --
     -- Version 1, step 6: a failed check of the payload alone is `INVALID`, with a null hash.
     let invalidStatus (e : PayloadError) : PayloadStatus × PayloadError :=
       match e with
@@ -312,7 +303,14 @@ def newPayloadWithoutState (config : ChainConfig) (version : Nat) (params : Json
   -- EthLib never answers `ACCEPTED` here, which needs the ancestors of the payload.
   | .ok _ => return (⟨.syncing, none⟩, none)
 
-/-- Whether the parent of a payload passes the terminal block check, given its total difficulty. -/
+/-- Whether the parent of a payload passes the terminal block check, given its total difficulty.
+
+The check is step 2 of the payload validation of Paris.
+
+It follows the [transition block validity][eip3675] of EIP-3675.
+
+[eip3675]: https://github.com/ethereum/EIPs/blob/46976b2a9bf99f727fb87dc8c809e3a3cdc6b445/EIPS/eip-3675.md#transition-block-validity
+-/
 def passesTerminalCheck (transition : TransitionConfiguration) (totalDifficulty : Nat)
     (parent : RecentBlock) : Bool :=
   -- A parent from Paris on is no block of proof of work, so it passes.
@@ -326,9 +324,10 @@ def passesTerminalCheck (transition : TransitionConfiguration) (totalDifficulty 
 
 /-- The status of `engine_newPayload` from an execution layer that holds the parent's state.
 
-The chain holds the state after its last recent block, whose total difficulty is given.
+It runs the [payload validation][validation] of Paris.
 
-A valid payload also gives its block, as the new last recent block, and the state after it. -/
+[validation]: https://github.com/ethereum/execution-apis/blob/1ca0818569467cff85b7f41372f22e728d5daa14/src/engine/paris.md#payload-validation
+-/
 def newPayloadOnChain (transition : TransitionConfiguration) (totalDifficulty : Nat)
     (chain : BlockChain) (version : Nat) (params : Json) :
     Except EngineError
@@ -338,6 +337,8 @@ def newPayloadOnChain (transition : TransitionConfiguration) (totalDifficulty : 
   | .error (status, reason) => return (status, some reason, none)
   | .ok checked =>
     let header := checked.block.header
+    -- The chain holds the state after its last recent block, whose total difficulty is given.
+    --
     -- Steps 3 and 6: without the parent's state, the payload is `SYNCING`.
     let some parent := chain.recent.getLast? | return (⟨.syncing, none⟩, none, none)
     -- The chain holds only the state after its last block, so another parent is `SYNCING` too.
@@ -361,6 +362,8 @@ def newPayloadOnChain (transition : TransitionConfiguration) (totalDifficulty : 
     -- No seal check: the block validity of EIP-3675 removes the Ethash checks.
     match stateTransition chain checked.block (checkSeal := false) with
     -- Payload validation, step 3: `VALID`, with the block hash of the payload as latest valid hash.
+    --
+    -- A valid payload also gives its block, as the new last recent block, and the state after it.
     | .ok post =>
       return (⟨.valid, header.hash.toOption⟩, none, some (⟨checked.fork, header, []⟩, post))
     -- An execution that aborts, such as on missing code, gives no verdict, so `SYNCING`.

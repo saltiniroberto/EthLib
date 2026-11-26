@@ -2,27 +2,21 @@ module
 
 public import EthLib.Base.Except
 public import EthLib.Execution.Network.Session
+import EthLib.Base.Proofs.List
+import Std.Data.TreeSet.Lemmas
 
 /-!
 # Proofs: the eth session
 
-Before the peer's Status, every other message is rejected.
-
-A Status is accepted then exactly when it passes the checks of a Status.
-
-An accepted response removes the oldest pending request that it answers, and only that one.
-
-A response that answers no pending request is rejected.
-
-Receiving never changes the hashes sent, and only appends the hashes it receives.
+Before the peer's Status, a session rejects every message other than Status.
 
 Before both Status messages, this node sends nothing but Status.
+
+After the peer's Status, a response must answer a pending request.
 
 Along any run of a session, a Transactions message sends no transaction that went out before.
 
 Nor does it send one back to the peer it came from.
-
-The eth requirement of snap holds exactly when some version of eth is a shared capability.
 -/
 
 @[expose] public section
@@ -191,7 +185,15 @@ private theorem sendEth_transactions (session next : EthSession) (txs : List Enc
   · cases h
   · -- The send goes through only when the hashes are fresh.
     split at h
-    · assumption
+    · rename_i fresh
+      obtain ⟨hne, hscan, hall⟩ := fresh
+      refine ⟨hne, ?_, fun x hx => ?_⟩
+      · simpa [Message.transactionHashes] using hscan
+      -- A hash outside the search tree is in neither list.
+      · have hx' := List.all_eq_true.mp hall x hx
+        simp only [Std.TreeSet.contains_ofList, Bool.not_eq_true', List.contains_eq_mem,
+          decide_eq_false_iff_not, List.mem_append, not_or] at hx'
+        exact hx'
     · cases h
 
 /-- Before the peer's Status, this node may send nothing but Status. -/

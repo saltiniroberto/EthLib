@@ -1,7 +1,7 @@
 module
 
 public import EthLib.Cryptography.Xmss.Ots
-public import EthLib.Base.Proofs.LittleEndian
+public import EthLib.Base.Proofs.ByteOrder
 public import EthLib.Base.Proofs.Bytes
 public import EthLib.Cryptography.Proofs.Hash.Keccak.Lanes
 
@@ -41,11 +41,25 @@ theorem bytesOfLane_seedTagLane : Hash.Keccak.Internal.bytesOfLane SEED_TAG_LANE
 
 /-- A number below `2^64` in the first of two lanes is its 16 little-endian bytes. -/
 theorem lanesBytes_index (n : Nat) (h : n < 2 ^ 64) :
-    lanesBytes (⟨n.toUInt64, 0⟩ : Lanes2).toArray = (uintToBytes 16 n).toList := by
-  rw [Hash.Keccak.lanesBytes_lanes2, Hash.Keccak.Lanes2.bytes_eq_uintToBytes]
+    lanesBytes (⟨n.toUInt64, 0⟩ : Lanes2).toArray = (Base.ByteOrder.toLE 16 n).toList := by
+  rw [Hash.Keccak.lanesBytes_lanes2, Hash.Keccak.Lanes2.bytes_eq_toLE]
   congr 2
   simp only [Hash.Keccak.Lanes2.toNat, Nat.toUInt64_eq, UInt64.toNat_ofNat', UInt64.toNat_zero]
   omega
+
+/-- The lanes of `n` digests are `2 n` lanes. -/
+theorem size_digestLanes {n : Nat} (ds : Vector Digest n) : (digestLanes ds).size = 2 * n := by
+  have key : ∀ (l : List Digest) (acc : Array UInt64),
+      (l.foldl (fun acc d => (acc.push d.lo).push d.hi) acc).size = acc.size + 2 * l.length := by
+    intro l
+    induction l with
+    | nil => simp
+    | cons d l ih =>
+      intro acc
+      simp only [List.foldl_cons, ih, Array.size_push, List.length_cons]
+      omega
+  rw [digestLanes, ← Array.foldl_toList, key]
+  simp
 
 /-- The lanes of a list of digests are, as bytes, the digests' bytes one after the other. -/
 theorem lanesBytes_digestLanes {n : Nat} (ds : Vector Digest n) :

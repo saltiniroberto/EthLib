@@ -47,7 +47,6 @@ extern size_t SECP256R1_SIGNATURE_LEN;
 
 extern size_t ENR_MAX_RECORD_SIZE;
 extern size_t RLPX_SECRETS_SIZE;
-extern size_t REQRESP_MAX_PAYLOAD_SIZE;
 extern size_t REQRESP_MAX_ERROR_MESSAGE_SIZE;
 
 /* ---- Lean ↔ C marshalling helpers ------------------------------------ */
@@ -266,6 +265,11 @@ PyObject* py_bls_pop_prove                                (PyObject* self, PyObj
 PyObject* py_bls_pop_verify                               (PyObject* self, PyObject* args);
 PyObject* py_bls_decode_g1                                (PyObject* self, PyObject* args);
 PyObject* py_bls_decode_g2                                (PyObject* self, PyObject* args);
+PyObject* py_bls_key_validate                             (PyObject* self, PyObject* args);
+PyObject* py_bls_sk_to_pk                                 (PyObject* self, PyObject* args);
+PyObject* py_bls_bytes48_to_g1                            (PyObject* self, PyObject* args);
+PyObject* py_bls_g1_add                                   (PyObject* self, PyObject* args);
+PyObject* py_bls_g1_neg                                   (PyObject* self, PyObject* args);
 PyObject* py_bls_expand_message_xmd                       (PyObject* self, PyObject* args);
 PyObject* py_bls_hash_to_g2                               (PyObject* self, PyObject* args);
 PyObject* py_bls_pairing                                  (PyObject* self, PyObject* args);
@@ -475,6 +479,7 @@ PyObject* py_consensus_builder_request_auth_failures (PyObject* self, PyObject* 
 PyObject* py_consensus_builder_preferences_failures (PyObject* self, PyObject* args);
 PyObject* py_consensus_default_auth_data (PyObject* self, PyObject* args);
 PyObject* py_consensus_relay_submission_bid (PyObject* self, PyObject* args);
+PyObject* py_consensus_relay_verify_bid_value (PyObject* self, PyObject* args);
 PyObject* py_consensus_relay_validators (PyObject* self, PyObject* args);
 PyObject* py_consensus_keymanager_json (PyObject* self, PyObject* args);
 PyObject* py_consensus_keymanager_run (PyObject* self, PyObject* args);
@@ -595,6 +600,7 @@ PyObject* py_consensus_compute_min_epochs_for_block_requests(PyObject* self, PyO
 PyObject* py_consensus_gossip_topics                      (PyObject* self, PyObject* args);
 PyObject* py_consensus_reqresp_request_bounds             (PyObject* self, PyObject* args);
 PyObject* py_consensus_reqresp_response_bounds            (PyObject* self, PyObject* args);
+PyObject* py_consensus_reqresp_decode_chunk               (PyObject* self, PyObject* args);
 PyObject* py_consensus_reqresp_response_valid             (PyObject* self, PyObject* args);
 PyObject* py_consensus_gossip_topic_bound                 (PyObject* self, PyObject* args);
 PyObject* py_consensus_compute_subnet_for_attestation     (PyObject* self, PyObject* args);
@@ -760,6 +766,8 @@ PyObject* py_state_rewards_root                           (PyObject* self, PyObj
 
 PyObject* py_mainnet_active_fork                          (PyObject* self, PyObject* args);
 PyObject* py_hoodi_active_fork                            (PyObject* self, PyObject* args);
+PyObject* py_sepolia_active_fork                          (PyObject* self, PyObject* args);
+PyObject* py_chain_config                                 (PyObject* self, PyObject* args);
 PyObject* py_active_fork                                  (PyObject* self, PyObject* args);
 PyObject* py_execution_blob_schedule                      (PyObject* self, PyObject* args);
 PyObject* py_write_execution_config                       (PyObject* self, PyObject* args);

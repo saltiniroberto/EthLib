@@ -14,13 +14,11 @@ import EthLib.Consensus.Proofs.Transition.Withdrawals
 /-!
 # Proofs: a block raises no balance of a validator it does not credit
 
-A block credits a balance in a few ways.
+A block credits a balance in a few ways:
 
-Its proposer earns the rewards of the attestations, of the slashings and of the sync aggregate.
-
-Each member of the sync committee that signs earns a reward.
-
-Before Electra a deposit adds its amount to the validator with its key.
+- Its proposer earns the rewards of the attestations, of the slashings and of the sync aggregate.
+- Each member of the sync committee that signs earns a reward.
+- Before Electra, a deposit adds its amount to the validator with its key.
 
 Every other step of a block lowers a balance or keeps it, at every fork.
 
@@ -28,7 +26,7 @@ So the balance of a validator that is not the proposer does not rise in the bloc
 
 From Altair this also needs the validator to sign no sync aggregate.
 
-Before Electra it also needs no deposit to carry its key.
+Before Heze it also needs no deposit of the block to carry its key.
 
 A block also keeps the inactivity score at each position of the registry before it.
 
@@ -250,56 +248,6 @@ private theorem down_processWithdrawals {capella : .shapella ≤ fork}
     · exact down_decreaseBalance step index
   exact processWithdrawals_of (BalanceDown index) (BalanceDown.refl _ _) (fun _ => applied)
     computed
-
-/-! ## The proposer along a block -/
-
-/-- The proposer search reads only the effective balances of the indices it draws from. -/
-private theorem proposerSearch_validators {old new : Array Validator}
-    {indices : Array ValidatorIndex} {order : Nat → Nat} {seed : Bytes32}
-    (agree : ∀ candidate ∈ indices, (new[candidate.toNat]?).map (·.effectiveBalance) =
-      (old[candidate.toNat]?).map (·.effectiveBalance))
-    (nonempty : 0 < indices.size) (positions : ∀ place < indices.size, order place < indices.size) :
-    ∀ {i : Nat}, proposerSearch preset fork new indices order seed i =
-      proposerSearch preset fork old indices order seed i := by
-  intro i
-  obtain ⟨left, leftEq⟩ : ∃ left, left = 2 ^ 64 - i := ⟨_, rfl⟩
-  induction left using Nat.strongRecOn generalizing i with
-  | _ left ih =>
-    have member : indices.getD (order (i % indices.size)) 0 ∈ indices := by
-      have lt := positions _ (Nat.mod_lt i nonempty)
-      rw [Array.getD_eq_getD_getElem?, Array.getElem?_eq_getElem lt, Option.getD_some]
-      exact Array.getElem_mem lt
-    have same := agree _ member
-    unfold proposerSearch
-    dsimp only
-    generalize new[(indices.getD (order (i % indices.size)) 0).toNat]? = atNew at same
-    generalize old[(indices.getD (order (i % indices.size)) 0).toNat]? = atOld at same
-    cases atNew <;> cases atOld <;>
-      simp only [Option.map_none, Option.map_some, reduceCtorEq, Option.some.injEq] at same
-    · rfl
-    · simp only [bind, Except.bind, same]
-      repeat' split
-      all_goals first | rfl | exact ih _ (by omega) rfl
-
-
-/-- The proposer draw reads only the effective balances of the indices it draws from. -/
-private theorem computeProposerIndex_validators {other : BeaconState preset fork}
-    {indices : Array ValidatorIndex} {seed : Bytes32}
-    (agree : ∀ candidate ∈ indices,
-      (other.validators.data[candidate.toNat]?).map (·.effectiveBalance) =
-        (state.validators.data[candidate.toNat]?).map (·.effectiveBalance)) :
-    computeProposerIndex other indices seed = computeProposerIndex state indices seed := by
-  unfold computeProposerIndex
-  by_cases empty : indices.size = 0
-  · simp [empty, bind, Except.bind, throw, throwThe, MonadExcept.throw, MonadExceptOf.throw]
-  by_cases fits : indices.size < 2 ^ 64
-  · by_cases large : 2 ^ 40 < indices.size
-    · simp [empty, fits, large, bind, Except.bind, throw, throwThe, MonadExcept.throw,
-        MonadExceptOf.throw]
-    simp only [empty, fits, large, ↓reduceIte]
-    exact proposerSearch_validators agree (Nat.pos_of_ne_zero empty)
-      (fun _ lt => Shuffle.shuffledIndex_lt lt)
-  · simp [empty, fits, bind, Except.bind, throw, throwThe, MonadExcept.throw, MonadExceptOf.throw]
 
 /-! ## Fields that a block keeps -/
 
@@ -694,36 +642,23 @@ private theorem Steady.proposer
     (steady : Steady state after) :
     getBeaconProposerIndex after = getBeaconProposerIndex state := by
   obtain ⟨⟨slot, lookahead, -⟩, early⟩ := steady
-  by_cases fulu : Fork.fusaka ≤ fork
-  · simp only [getBeaconProposerIndex, fulu, ↓reduceDIte, slot, lookahead]
-  obtain ⟨active, mixes, effective, grows⟩ := early (Nat.lt_of_not_le fulu)
-  have epoch : getCurrentEpoch after = getCurrentEpoch state := by
-    simp only [getCurrentEpoch, slot]
-  -- The seed reads the mix one epoch beyond the seed lookahead, never that of the write.
-  have seed : getSeed after (getCurrentEpoch state) DOMAIN_BEACON_PROPOSER =
-      getSeed state (getCurrentEpoch state) DOMAIN_BEACON_PROPOSER := by
+  refine getBeaconProposerIndex_congr_of_seed slot (fun _ => by rw [lookahead]) (fun before => ?_)
+    (fun before => (early before).1.getActiveValidatorIndicesChecked_eq (UInt64.le_refl _))
+    (fun before j inside => ?_)
+  · -- The seed reads the mix one epoch beyond the seed lookahead, never that of the write.
+    obtain ⟨-, mixes, -, -⟩ := early before
     refine getSeed_eq_of_mix _ fun shifted shiftedEq => mixes shifted fun same => ?_
     have same := congrArg UInt64.toNat same
     rw [UInt64.toNat_mod, UInt64.toNat_mod] at same
     exact Nat.mod_ne_of_sub_lt (low := (getCurrentEpoch state).toNat) (high := shifted.toNat)
       (length := preset.EPOCHS_PER_HISTORICAL_VECTOR.toNat) (by omega) (by omega) same
-  have checked := active.getActiveValidatorIndicesChecked_eq (UInt64.le_refl _)
-  simp only [getBeaconProposerIndex, fulu, ↓reduceDIte, epoch, slot, seed, checked]
-  cases getSeed state (getCurrentEpoch state) DOMAIN_BEACON_PROPOSER with
-  | error => simp only [bind, Except.bind]
-  | ok epochSeed =>
-    cases listed : getActiveValidatorIndicesChecked state (getCurrentEpoch state) with
-    | error => simp only [bind, Except.bind]
-    | ok indices =>
-      refine computeProposerIndex_validators fun candidate member => ?_
-      -- Each candidate names a validator of the state, whose effective balance stays.
-      obtain ⟨old, found, -⟩ :=
-        (mem_iff_of_getActiveValidatorIndicesChecked_ok listed).mp (by simpa using member)
-      have inside := (Array.getElem?_eq_some_iff.mp found).1
-      have same := effective _ inside
-      simp only [effectiveAt, found, Array.getElem?_eq_getElem (Nat.lt_of_lt_of_le inside grows),
-        Option.map_some, Option.getD_some] at same ⊢
-      rw [UInt64.toNat_inj.mp same]
+  · -- Each validator of the state keeps its effective balance.
+    obtain ⟨-, -, effective, grows⟩ := early before
+    have same := effective j inside
+    simp only [effectiveAt, Array.getElem?_eq_getElem inside,
+      Array.getElem?_eq_getElem (Nat.lt_of_lt_of_le inside grows), Option.map_some,
+      Option.getD_some] at same ⊢
+    rw [UInt64.toNat_inj.mp same]
 
 /-! ## The operations of a block -/
 
@@ -1461,29 +1396,47 @@ private theorem down_processBlock
 
 This holds when the block succeeds, at every fork.
 
-The validator has a balance, and it is not the proposer of the block.
+The conditions are these:
 
-From Altair, no member that signs the sync aggregate has its key.
+- The validator has a balance, and it is not the proposer of the block.
+- From Altair, no member that signs the sync aggregate has its key.
+- No deposit of the block carries its key.
 
-No deposit of the block carries its key; there are none from Heze.
-
-Only the deposits before Electra credit a balance at once.
+A block has no deposits from Heze.
 
 The mixes must span more than the seed lookahead plus two epochs. -/
 theorem balanceNotRaised_processBlock
+    -- The proposer is read at several steps of the block, and each read gives the same validator.
+    --
+    -- That holds when the mixes span more than the seed lookahead plus two epochs.
+    --
+    -- The mixes span that much on mainnet and on the minimal preset.
     (apart : preset.MIN_SEED_LOOKAHEAD.toNat + 2 < preset.EPOCHS_PER_HISTORICAL_VECTOR.toNat)
     {block : BeaconBlock preset fork}
     (computed : processBlock config checks engine state block = .ok after) {index : Nat}
     {validator : Validator} (found : state.validators.data[index]? = some validator)
+    -- The validator has a balance.
     (held : index < state.balances.data.size)
+    -- The proposer earns the rewards of the attestations, the slashings and the sync aggregate.
+    --
+    -- So the validator is not the proposer of the block.
     (notProposer : block.proposerIndex.toNat ≠ index)
+    -- From Altair, each member of the sync committee that signs earns a reward.
+    --
+    -- So no member that signs the sync aggregate has its key.
     (unsigned : ∀ altair : .altair ≤ fork,
       ∀ member ∈ ((state.currentSyncCommittee altair).value.pubkeys.toArray.zip
         (block.body.syncAggregate altair).syncCommitteeBits.bits.toArray).toList,
         member.2 = true → member.1 ≠ validator.pubkey)
+    -- Before Electra a deposit adds its amount to the validator with its key at once.
+    --
+    -- So no deposit of the block carries its key.
+    --
+    -- There are none from Heze.
     (undeposited : ∀ before : fork < .hegota, ∀ deposit ∈ (block.body.deposits before).data,
       deposit.data.pubkey ≠ validator.pubkey) :
     BalanceNotRaised index state after :=
+  -- Every other step of a block lowers a balance or keeps it, at every fork.
   (down_processBlock apart computed found notProposer unsigned undeposited).balanceNotRaised held
 
 /-- A block keeps a balance at the position of a validator that it does not credit.
@@ -1563,7 +1516,9 @@ theorem fixed_processOperations {body : BeaconBlockBody preset fork} {parentSlot
 
 /-- A block keeps the inactivity score at each position of the registry before it.
 
-This holds when the block succeeds; before Altair there are no scores.
+This holds when the block succeeds.
+
+Before Altair there are no scores.
 
 A new validator takes the position at the end of the registry, so it moves no earlier score.
 
@@ -1612,7 +1567,9 @@ theorem scoresKept_processBlock {block : BeaconBlock preset fork}
 
 /-- A block keeps the inactivity score at each position of the registry before it.
 
-This holds when the block succeeds; before Altair there are no scores.
+This holds when the block succeeds.
+
+Before Altair there are no scores.
 
 A new validator takes the position at the end of the registry, so it moves no earlier score. -/
 theorem scoreKept_processBlock {block : BeaconBlock preset fork}

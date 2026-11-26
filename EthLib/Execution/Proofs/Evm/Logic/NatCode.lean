@@ -15,38 +15,31 @@ On a literal array, such a fact costs time that grows with the position.
 
 Past a few hundred bytes, it runs out of the default limits.
 
-Here a code of `size` bytes is stored as one natural number `n`, the big-endian number of its bytes.
-
-The byte at a position is then one shift of `n`.
-
-The data of a PUSH is one shift and one remainder.
-
-The kernel and tactics such as `simp` and `decide` compute both on big numbers in one step.
-
-So a fact about one byte costs about the same at every position.
+Here a code is stored as one natural number, the big-endian number of its bytes.
 
 A position is a valid jump destination when a walk along the opcodes from 0 reaches it.
 
 Its byte must also be JUMPDEST.
-
-The walk reads each byte the same way.
-
-It takes at most one step per opcode before the position, and `decide +kernel` checks it.
 -/
 
 @[expose] public section
 
 namespace EthLib.Execution.Evm.Logic.NatCode
 
-open EthLib.Base (byteAt bytesToNat)
+open EthLib.Base (byteAtOrZero ByteOrder.ofBE)
 
 /-- The byte at index `i` of the code of `size` bytes stored in `n`, or 0 past its end.
 
 The first byte of the code is the highest byte of `n`. -/
 def natByte (n size i : Nat) : UInt8 :=
+  -- The byte is one shift of `n`.
+  --
+  -- The kernel and tactics such as `simp` and `decide` compute it on big numbers in one step.
+  --
+  -- So a fact about one byte costs about the same at every position.
   if i < size then UInt8.ofNat (n >>> (8 * (size - 1 - i))) else 0
 
-/-- The code of `size` bytes stored in `n`.
+/-- The code of `size` bytes stored in `n`, the big-endian number of its bytes.
 
 A number above `256 ^ size` keeps only its lowest `size` bytes. -/
 def ofNat (n size : Nat) : ByteArray := ⟨Array.ofFn (n := size) fun i => natByte n size i.val⟩
@@ -64,8 +57,8 @@ theorem getElem_ofNat (n size i : Nat) (h : i < (ofNat n size).size) :
     simpa [ofNat, ByteArray.size] using h) = _ from Array.getElem_ofFn ..
 
 /-- The byte at any index, 0 past the end, is the byte of the number at that index. -/
-theorem byteAt_ofNat (n size i : Nat) : byteAt (ofNat n size) i = natByte n size i := by
-  unfold byteAt
+theorem byteAtOrZero_ofNat (n size i : Nat) : byteAtOrZero (ofNat n size) i = natByte n size i := by
+  unfold byteAtOrZero
   split
   · exact getElem_ofNat n size i _
   · rename_i h
@@ -82,11 +75,11 @@ theorem pushData_ofNat (n size pc k : Nat) (h : pc + k < size) :
   rw [bufferRead_eq]
   congr 1
   induction k with
-  | zero => simp [bytesToNat, Nat.mod_one]
+  | zero => simp [EthLib.Base.ByteOrder.ofBE_eq_foldl, Nat.mod_one]
   | succ k ih =>
-    rw [List.range_succ, List.map_append, bytesToNat, List.foldl_append, ← bytesToNat,
-      ih (by omega)]
-    simp only [List.map_cons, List.map_nil, List.foldl_cons, List.foldl_nil, byteAt_ofNat,
+    rw [List.range_succ, List.map_append, EthLib.Base.ByteOrder.ofBE_eq_foldl, List.foldl_append,
+      ← EthLib.Base.ByteOrder.ofBE_eq_foldl, ih (by omega)]
+    simp only [List.map_cons, List.map_nil, List.foldl_cons, List.foldl_nil, byteAtOrZero_ofNat,
       natByte, show pc + 1 + k < size by omega, ↓reduceIte, UInt8.toNat_ofNat']
     -- The data before the last byte is the number shifted one byte further.
     have hs : 8 * (size - 1 - (pc + k)) = 8 * (size - 1 - (pc + 1 + k)) + 8 := by omega
@@ -105,11 +98,17 @@ def nextPc (n size pc : Nat) : Nat :=
 
 /-- The opcode after the one at `pc` sits where the number puts it. -/
 theorem nextOpcode_ofNat (n size pc : Nat) : nextOpcode (ofNat n size) pc = nextPc n size pc := by
-  rw [nextOpcode_eq, byteAt_ofNat, nextPc]
+  rw [nextOpcode_eq, byteAtOrZero_ofNat, nextPc]
 
 /-- Whether the opcodes from `pc` reach `target`, in at most `fuel` opcodes.
 
-The walk stops with false once it passes the target. -/
+The walk stops with false once it passes the target.
+
+It reads each byte the same way.
+
+It takes at most one step per opcode before the target.
+
+The kernel checks it with `decide +kernel`. -/
 def walk (n size : Nat) : (fuel pc target : Nat) → Bool
   | 0, _, _ => false
   | fuel + 1, pc, target =>
@@ -141,14 +140,14 @@ theorem valid_of_walk {n size d : Nat} (hw : walk n size size 0 d = true)
   have ht : d < size := Nat.lt_of_not_le fun h => by
     simp [natByte, Nat.not_lt.mpr h] at hb
   exact isValidJumpDest_iff_boundaryFrom.mpr
-    ⟨boundaryFrom_of_walk n size d ht _ _ hw, by rw [byteAt_ofNat, hb]; rfl⟩
+    ⟨boundaryFrom_of_walk n size d ht _ _ hw, by rw [byteAtOrZero_ofNat, hb]; rfl⟩
 
 /-- A position whose byte is not JUMPDEST is not a valid jump destination. -/
 theorem not_valid_of_natByte {n size d : Nat} (hb : natByte n size d ≠ 0x5b) :
     isValidJumpDest (validJumpDestinations (ofNat n size)) d = false := by
   cases h : isValidJumpDest (validJumpDestinations (ofNat n size)) d with
   | false => rfl
-  | true => exact absurd (by rw [← byteAt_ofNat]; exact byteAt_of_isValidJumpDest h) hb
+  | true => exact absurd (by rw [← byteAtOrZero_ofNat]; exact byteAtOrZero_of_isValidJumpDest h) hb
 
 /-- The `w` bits of a number from bit `s` depend only on its bits below bit `W`.
 

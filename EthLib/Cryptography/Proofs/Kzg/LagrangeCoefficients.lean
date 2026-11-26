@@ -10,17 +10,9 @@ Let `d` be a point of the blob domain, and let `n = 4096`.
 
 The Lagrange basis polynomial of `d` is `n⁻¹ * sum_{j < n} (X / d)^j`.
 
-At another domain point `e`, the sum is a geometric sum of the root of unity `e / d`, so it is `0`.
+So a setup can hold Lagrange points that are combinations of its monomial points.
 
-At `d` the sum is `n`, so the polynomial is `1` there.
-
-Its degree is below `n`, so it is the basis polynomial, and its coefficient `j` is `n⁻¹ * d⁻¹ ^ j`.
-
-A setup holds the Lagrange points of its monomial points when each Lagrange point `i` is a sum.
-
-Its term `j` is monomial point `j` times coefficient `j` of the basis polynomial of point `i`.
-
-Then a valid setup is well formed at any `τ` whose powers its monomial points represent.
+Such a valid setup is well formed at any `τ` whose powers its monomial points represent.
 -/
 
 @[expose] public section
@@ -58,10 +50,14 @@ private theorem eval_basisSum (i m : Fin FIELD_ELEMENTS_PER_BLOB) :
   rw [← Finset.mul_sum]
   simp only [← mul_pow, mul_comm _ (evalDomain m)]
   by_cases him : i = m
-  · subst him
+  · -- At `d` the sum is `n`, so the polynomial is `1` there.
+    subst him
     rw [mul_inv_cancel₀ hd, ite_eq_left rfl, EthLib.Cryptography.Kzg.geom_sum_one,
       inv_mul_cancel₀ hn]
-  · rw [ite_eq_right him]
+  · -- At another domain point `e`, the sum is a geometric sum of the root of unity `e / d`.
+    --
+    -- So it is `0`.
+    rw [ite_eq_right him]
     have hc : evalDomain m * (evalDomain i)⁻¹ ≠ 1 := by
       intro h
       exact him (evalDomain_injective ((mul_inv_eq_one₀ hd).mp h).symm)
@@ -72,6 +68,9 @@ private theorem eval_basisSum (i m : Fin FIELD_ELEMENTS_PER_BLOB) :
 /-- The Lagrange basis polynomial of a domain point `d` is `n⁻¹ * sum_{j < n} (X / d)^j`. -/
 theorem basis_eq_basisSum (i : Fin FIELD_ELEMENTS_PER_BLOB) :
     Lagrange.basis Finset.univ evalDomain i = basisSum i := by
+  -- The sum has degree below `n` and the values of the basis polynomial on the domain.
+  --
+  -- So it is the basis polynomial.
   refine eq_of_degrees_lt_of_eval_index_eq _ evalDomain_injective.injOn ?_
     (degree_basisSum_lt i) fun m _ => ?_
   · rw [Lagrange.degree_basis evalDomain_injective.injOn (Finset.mem_univ i), Finset.card_univ,
@@ -115,6 +114,8 @@ theorem eval_basis_eq_sum (i : Fin FIELD_ELEMENTS_PER_BLOB) (τ : Fr) :
 
 The monomial point `j` has the factor of coefficient `j` of the basis polynomial.
 
+That coefficient is `n⁻¹ * d⁻¹ ^ j`, for the domain point `d` of the Lagrange point.
+
 Lagrange point `i` belongs to domain point `i`, as in the decoded setup. -/
 def TrustedSetup.LagrangeOfMonomial (s : TrustedSetup) : Prop :=
   ∀ i : Fin FIELD_ELEMENTS_PER_BLOB, G1.toPoint s.g1LagrangeBrp[i] =
@@ -137,5 +138,13 @@ theorem TrustedSetup.WellFormed.of_lagrangeOfMonomial {s : TrustedSetup} {τ : F
       ((Lagrange.basis Finset.univ evalDomain i).coeff j).val • G1.ofFr (τ ^ j))]
   refine Finset.sum_congr rfl fun j _ => ?_
   rw [(hg1 j).2, G1.toPoint_mul_generator]
+
+/-- If each monomial point of `G1` has order dividing `r`, so does each Lagrange point. -/
+theorem TrustedSetup.LagrangeOfMonomial.torsion {s : TrustedSetup} (hl : s.LagrangeOfMonomial)
+    (hm : ∀ j : Fin FIELD_ELEMENTS_PER_BLOB, Fr.modulus • G1.toPoint s.g1Monomial[j] = 0)
+    (i : Fin FIELD_ELEMENTS_PER_BLOB) : Fr.modulus • G1.toPoint s.g1LagrangeBrp[i] = 0 := by
+  rw [hl i, Finset.smul_sum]
+  -- Each term is a multiple of a monomial point, which `r` sends to zero.
+  exact Finset.sum_eq_zero fun j _ => by rw [smul_comm, hm j, nsmul_zero]
 
 end EthLib.Cryptography.Kzg

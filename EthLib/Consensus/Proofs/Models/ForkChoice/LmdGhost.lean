@@ -12,16 +12,6 @@ The model follows Gasper §3.2, [arXiv 2003.03052v3](https://arxiv.org/abs/2003.
 
 The rule is Algorithm 3.1, and the weight is Definition 3.4.
 
-The rule starts at a block and moves to the heaviest child until it reaches a leaf.
-
-The weight of a block is the stake of the validators with a latest message in its subtree.
-
-Each block has a root, and a tie between two children goes to the greater root.
-
-The order on roots is a parameter.
-
-The beacon chain compares roots as byte strings, lexicographically.
-
 One validator set `V` and one stake function `w` hold throughout.
 -/
 
@@ -235,18 +225,17 @@ end BlockTree
 
 /-- A view of the fork choice: the blocks it holds, and the latest message of each validator.
 
-The view holds the parent of each block it holds.
-
-A validator without a message has none as its latest message.
-
-So does a validator whose votes the fork choice drops, such as one that has equivocated.
-
 A latest message can name a block outside the view. -/
 structure View (ν β : Type*) (T : BlockTree β) where
   /-- The blocks of the view. -/
   blocks : Finset β
+  -- The view holds the parent of each block it holds.
   parent_mem : ∀ b ∈ blocks, T.parent b ∈ blocks
-  /-- The block of the latest message of each validator. -/
+  /-- The block of the latest message of each validator.
+
+  A validator without a message has none as its latest message.
+
+  So does a validator whose votes the fork choice drops, such as one that has equivocated. -/
   latest : ν → Option β
 
 variable {ν β : Type*} {T : BlockTree β}
@@ -327,12 +316,18 @@ theorem height_lt_of_mem_children {b c : β} (hc : c ∈ children G b) :
   have h2 : T.height c ≤ G.blocks.sup T.height := Finset.le_sup hc.1
   omega
 
+-- Each block has a root.
+--
+-- The order on roots is a parameter.
+--
+-- The beacon chain compares roots as byte strings, lexicographically.
 variable {ρ : Type*} [LinearOrder ρ] (root : β → ρ) (V w G)
 
 /-- The child that the rule picks: the greatest by weight, then by root.
 
 Two children with one weight and one root leave the choice open. -/
 noncomputable def heaviestChild (b : β) (h : (children G b).Nonempty) : β :=
+  -- A tie between two children in weight goes to the greater root.
   Classical.choose ((children G b).exists_max_image (fun c => toLex (weight V w G c, root c)) h)
 
 theorem heaviestChild_spec (b : β) (h : (children G b).Nonempty) :
@@ -357,6 +352,7 @@ theorem heaviestChild_eq {b c : β} (hc : c ∈ children G b)
 
 /-- LMD-GHOST from the block `b`: move to the heaviest child until the block has no child. -/
 noncomputable def ghost (b : β) : β :=
+  -- The rule starts at a block and moves to the heaviest child until it reaches a leaf.
   if h : (children G b).Nonempty then ghost (heaviestChild V w G root b h) else b
 termination_by G.blocks.sup T.height - T.height b
 decreasing_by exact height_lt_of_mem_children (heaviestChild_spec V w G root b h).1
@@ -438,30 +434,30 @@ theorem ancestor_ghost_of_heavier {a b : β} (hb : b ∈ G.blocks) (hab : T.Ance
 
 The paper is [arXiv 2405.00549v4](https://arxiv.org/abs/2405.00549v4).
 
-Take a block `b` of the view, a block `a` in its chain, and any set `J` of validators.
-
-The paper takes `J` to be the honest validators.
-
-Each block of the chain of `b` above `a` comes with a bound, that of hypothesis 4 of the lemma.
-
-Assume that the bound caps the weight of the block together with any one of its siblings.
-
-The paper derives that cap from its vote filters and from honest validators never equivocating.
-
-Assume also that the validators of `J` that support the block hold more than half of the bound.
-
-Then LMD-GHOST from `a` returns a block in the subtree of `b`.
-
 The model has no time, so the paper's conditions on GST and on the slot of `b` have no part here.
 
 The majority lemma below is the case where `J` holds everyone and the bound is all the stake. -/
 theorem ancestor_ghost_of_honest_support {a b : β} (J : Set ν) [DecidablePred (· ∈ J)]
+    -- Take a block `b` of the view, a block `a` in its chain, and any set `J` of validators.
+    --
+    -- The paper takes `J` to be the honest validators.
+    --
+    -- Each block of the chain of `b` above `a` comes with a bound.
+    --
+    -- It is the bound of hypothesis 4 of the lemma.
     (Φ : β → ℕ) (hb : b ∈ G.blocks) (hab : T.Ancestor a b)
+    -- Assume that the bound caps the weight of the block together with any one of its siblings.
+    --
+    -- The paper derives that cap from its vote filters.
+    --
+    -- It also uses the fact that honest validators never equivocate.
     (fits : ∀ c, T.Ancestor a c → T.Ancestor c b → c ≠ a →
       ∀ c' ∈ children G (T.parent c), c' ≠ c →
         weight V w G c + weight V w G c' ≤ Φ c)
+    -- Assume also that the supporters of the block in `J` hold more than half of the bound.
     (honest : ∀ c, T.Ancestor a c → T.Ancestor c b → c ≠ a →
       Φ c < 2 * stake w {v ∈ supporters V G c | v ∈ J}) :
+    -- Then LMD-GHOST from `a` returns a block in the subtree of `b`.
     T.Ancestor b (ghost V w G root a) := by
   refine ancestor_ghost_of_heavier V w G root hb hab fun c hac hcb hca c' hc' hne => ?_
   -- The honest supporters of the block are some of its supporters.
@@ -495,44 +491,43 @@ theorem ancestor_ghost_of_majority {a b : β} (hb : b ∈ G.blocks) (hab : T.Anc
 The boost gives a timely block of the current slot the weight of an attestation of `W_p`.
 
 So the block and each of its ancestors gain `W_p` in weight.
+-/
+
+variable {V w G}
+
+/-- The stakes with the boost: the stake of each validator, and the score of the boost.
 
 The source is Buterin's [mitigation of balancing attacks][mitigation], "Proposed solution", step 3.
 
-Step 3 sets that weight to `W / 4`, and its section "Analysis" names it `W_p`.
+Step 3 sets the weight of the boost to `W / 4`, and its section "Analysis" names it `W_p`.
 
-Section 3 of [Three Attacks on Proof-of-Stake Ethereum][attacks] gives the ex ante reorg.
+[mitigation]: https://notes.ethereum.org/@vbuterin/lmd_ghost_mitigation -/
+def boostStake (w : ν → ℕ) (score : ℕ) : Option ν → ℕ
+  -- The boost is one more voter, `none`.
+  --
+  -- Its stake is the score of the boost.
+  | none => score
+  | some v => w v
+
+/-- The view with the boost: the same blocks, and the boosted block as the message of `none`.
 
 A [post on balancing and reorging attacks][post] gives the limits of the boost.
-
-Its section "Why change?" says that the boost fixes most ex ante reorgs, but not all.
 
 Its section "Boosting does not mitigate all ex ante reorgs" adds the boost to the votes.
 
 There the boost counts in the chain of the boosted block.
 
-The model follows that rule: the boost is one more voter, `none`.
+The model follows that rule.
 
-Its latest message is the boosted block, and its stake is the score of the boost.
-
-Without a boosted block, it has no latest message.
-
-[mitigation]: https://notes.ethereum.org/@vbuterin/lmd_ghost_mitigation
-[attacks]: https://arxiv.org/abs/2110.10086v1
 [post]: https://ethresear.ch/t/change-fork-choice-rule-to-mitigate-balancing-and-reorging-attacks/11127
 -/
-
-variable {V w G}
-
-/-- The stakes with the boost: the stake of each validator, and the score of the boost. -/
-def boostStake (w : ν → ℕ) (score : ℕ) : Option ν → ℕ
-  | none => score
-  | some v => w v
-
-/-- The view with the boost: the same blocks, and the boosted block as the message of `none`. -/
 def View.withBoost (G : View ν β T) (boosted : Option β) : View (Option ν) β T where
   blocks := G.blocks
   parent_mem := G.parent_mem
   latest
+    -- The latest message of the boost is the boosted block.
+    --
+    -- Without a boosted block, it has no latest message.
     | none => boosted
     | some v => G.latest v
 
@@ -602,5 +597,57 @@ theorem weight_withBoost_add_le {p c c' : β} (hc : T.IsChild c p) (hc' : T.IsCh
     cases hm'
     exact (hc.disjoint hc' hne hm hm'').elim
   all_goals omega
+
+variable (T V) in
+open scoped Classical in
+/-- The validators of `V` whose latest message conflicts with `b`, for the given latest messages.
+
+Their message is neither in the chain of `b` nor in its subtree. -/
+noncomputable def conflicting (latest : ν → Option β) (b : β) : Finset ν :=
+  {v ∈ V | ∃ m, latest v = some m ∧ ¬T.Ancestor m b ∧ ¬T.Ancestor b m}
+
+/-- The boost keeps LMD-GHOST in the subtree of the boosted block, against light conflicting votes.
+
+Section 3 of [Three Attacks on Proof-of-Stake Ethereum][attacks] gives the ex ante reorg.
+
+Section "Why change?" of the [post][post] says that the boost fixes most ex ante reorgs, not all.
+
+[attacks]: https://arxiv.org/abs/2110.10086v1
+[post]: https://ethresear.ch/t/change-fork-choice-rule-to-mitigate-balancing-and-reorging-attacks/11127
+-/
+theorem ancestor_ghost_withBoost {a b : β} {score : ℕ} (hb : b ∈ G.blocks) (hab : T.Ancestor a b)
+    -- Take a block `b` of the view, and a block `a` in its chain.
+    --
+    -- The conflicting votes weigh less than the score of the boost.
+    (light : stake w (conflicting T V G.latest b) < score) :
+    -- The boost goes to `b`.
+    --
+    -- Then LMD-GHOST from `a` returns a block in the subtree of `b`.
+    T.Ancestor b (ghost V.insertNone (boostStake w score) (G.withBoost (some b)) root a) := by
+  classical
+  -- At each fork on the way, the child towards `b` weighs at least the score.
+  --
+  -- Each other child weighs only conflicting votes.
+  refine ancestor_ghost_of_heavier _ _ _ root hb hab fun c hac hcb hca c' hc' hne => ?_
+  have hc := hac.isChild_parent hca
+  have hc'' := (mem_children.mp hc').2
+  -- No message in the subtree of the sibling is in the chain or in the subtree of `b`.
+  have off : ∀ {m}, T.Ancestor c' m → ¬T.Ancestor m b ∧ ¬T.Ancestor b m := fun hm =>
+    ⟨fun hmb => hc.disjoint hc'' hne.symm hcb (hm.trans hmb),
+      fun hbm => hc.disjoint hc'' hne.symm (hcb.trans hbm) hm⟩
+  -- So the sibling gets no boost, and its supporters all conflict with `b`.
+  have sibling : weight V.insertNone (boostStake w score) (G.withBoost (some b)) c' ≤
+      stake w (conflicting T V G.latest b) := by
+    rw [weight_withBoost, ite_eq_right fun ⟨m, hm, hc'm⟩ => (off (Option.some.inj hm ▸ hc'm)).1
+      (.refl _), Nat.add_zero]
+    refine stake_mono fun v hv => ?_
+    simp only [supporters, conflicting, Finset.mem_filter] at hv ⊢
+    obtain ⟨hv, m, hm, hc'm⟩ := hv
+    exact ⟨hv, m, hm, off hc'm⟩
+  -- The child towards `b` gets the boost.
+  have towards : score ≤ weight V.insertNone (boostStake w score) (G.withBoost (some b)) c := by
+    rw [weight_withBoost, ite_eq_left ⟨b, rfl, hcb⟩]
+    exact Nat.le_add_left _ _
+  omega
 
 end EthLib.Consensus.Models.ForkChoice

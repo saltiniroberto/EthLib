@@ -1,5 +1,6 @@
 module
 
+public import EthLib.Base.List
 public import EthLib.Networking.Quic.Tls.Wire
 
 /-!
@@ -49,20 +50,19 @@ def readExtension : Reader Extension := do
 /-- Encode an extension without selecting an algorithm (§4.3). -/
 def encodeExtension (extension : Extension) : Except Error (List UInt8) := do
   -- `ExtensionType extension_type;` in two bytes, then `opaque extension_data<0..2^16-1>;`.
-  return Base.natToBytes 2 extension.kind.val ++ (← encodeBlob 2 0 65535 extension.data.data.toList)
+  return (Base.ByteOrder.toBE 2 extension.kind.val).toList
+    ++ (← encodeBlob 2 0 65535 extension.data.data.toList)
 
 /-- No extension type occurs twice in one block, RFC 9846 §4.3. -/
 def uniqueExtensions (extensions : List Extension) : Bool :=
   -- There MUST NOT be more than one extension of the same type in a given extension block.
   --
-  -- So removing the repeated types leaves the list as long as it was.
-  (extensions.map (·.kind)).eraseDups.length == extensions.length
+  -- So no type of the block occurs again later in it.
+  (Base.firstRepeated (extensions.map (·.kind))).isNone
 
 /-- The first extension type that occurs again later in a block, or 0 when none does. -/
-def repeatedKind : List Extension → CodePoint
-  | [] => ⟨0, by decide⟩
-  | extension :: rest =>
-    if rest.any (·.kind == extension.kind) then extension.kind else repeatedKind rest
+def repeatedKind (extensions : List Extension) : CodePoint :=
+  (Base.firstRepeated (extensions.map (·.kind))).getD ⟨0, by decide⟩
 
 /-- Read an extension block, preserving its order and rejecting duplicate types (§4.3). -/
 def readExtensions (minimum : Nat) : Reader (List Extension) := do
@@ -152,7 +152,7 @@ def Message.type : Message → UInt8
 /-- Encode a list of two-byte identifiers without narrowing their values. -/
 def encodeCodePoints (width minimum maximum : Nat) (values : List CodePoint) :
     Except Error (List UInt8) :=
-  encodeItems width minimum maximum (fun n => .ok (Base.natToBytes 2 n.val)) values
+  encodeItems width minimum maximum (fun n => .ok ((Base.ByteOrder.toBE 2 n.val).toList)) values
 
 /-- Read a certificate entry, keeping its DER bytes opaque (§4.5.1). -/
 def readCertificateEntry : Reader CertificateEntry := do
@@ -193,7 +193,7 @@ def encodeBody (hashLength : Nat) : Message → Except Error (List UInt8)
     -- `ProtocolVersion legacy_version = 0x0303;`, `Random random;`, then the session ID echo.
     return [3, 3] ++ h.random.toList ++ session ++
       -- `CipherSuite cipher_suite;`, `uint8 legacy_compression_method = 0;`, the extensions.
-      Base.natToBytes 2 h.cipherSuite.val ++ [0] ++ extensions
+      (Base.ByteOrder.toBE 2 h.cipherSuite.val).toList ++ [0] ++ extensions
   -- §4.4.1: `Extension extensions<0..2^16-1>;`.
   | .encryptedExtensions extensions => encodeExtensions 0 extensions
   -- §4.4.2, CertificateRequest.
@@ -213,7 +213,8 @@ def encodeBody (hashLength : Nat) : Message → Except Error (List UInt8)
       encodeCertificateEntry certificate.entries)
   -- §4.5.2: `SignatureScheme algorithm;`, then `opaque signature<0..2^16-1>;`.
   | .certificateVerify algorithm signature => do
-    return Base.natToBytes 2 algorithm.val ++ (← encodeBlob 2 0 65535 signature.data.toList)
+    return (Base.ByteOrder.toBE 2 algorithm.val).toList
+      ++ (← encodeBlob 2 0 65535 signature.data.toList)
   -- §4.5.3: `opaque verify_data[Hash.length];`, with no length prefix.
   | .finished verifyData => do
     Base.ensure (verifyData.size = hashLength) .length

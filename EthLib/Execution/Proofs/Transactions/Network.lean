@@ -7,19 +7,7 @@ public import EthLib.Execution.Transactions.Network
 /-!
 # Proofs: the network form of blob transactions
 
-The network form reads back from its bytes, at each fork from Dencun.
-
-Bytes that decode to a network form are its encoding.
-
-So bytes decode to a network form exactly when they encode it and the fork is Dencun or later.
-
-The transaction it carries is the first item of its RLP list, so its hash ignores the blobs.
-
-The check of the blobs succeeds exactly when three conditions hold.
-
-The counts match, each commitment hashes to its versioned hash, and the proofs verify.
-
-Two errors with one code come from one constructor.
+These proofs cover the bytes of the network form, the check of its blobs and its error codes.
 -/
 
 @[expose] public section
@@ -31,6 +19,14 @@ open EthLib.Cryptography.Kzg
 open EthLib.Serialization.Rlp
 
 /-! ## Bytes -/
+
+/-- A KZG commitment keeps the laws of the RLP string of its 48 bytes. -/
+instance : LawfulCodec KZGCommitment :=
+  .wrapper KZGCommitment.mk KZGCommitment.bytes (fun _ => rfl) (fun _ => rfl)
+
+/-- A KZG proof keeps the laws of the RLP string of its 48 bytes. -/
+instance : LawfulCodec KZGProof :=
+  .wrapper KZGProof.mk KZGProof.bytes (fun _ => rfl) (fun _ => rfl)
 
 /-- The network form reads back from its RLP list, at every fork. -/
 theorem NetworkBlobTransaction.ofItem_toItem (fork : Fork) (w : NetworkBlobTransaction) :
@@ -164,11 +160,11 @@ theorem tx_of_decodeNetwork {fork : Fork} {bytes : ByteArray} {w : NetworkBlobTr
 /-! ## The check of the blobs -/
 
 /-- The commitments match exactly when each one hashes to the versioned hash at its position. -/
-theorem hashesMatch_iff {hashes : List Bytes32} {commitments : List KZGCommitment}
+theorem hashesMatch_iff {hashes : List VersionedHash} {commitments : List KZGCommitment}
     (hlen : hashes.length = commitments.length) :
     hashesMatch hashes commitments = true ↔
       ∀ (i : Nat) (hi : i < hashes.length),
-        versionedHash (commitments[i]'(hlen ▸ hi)) = hashes[i] := by
+        kzgCommitmentToVersionedHash (commitments[i]'(hlen ▸ hi)) = hashes[i] := by
   simp only [hashesMatch, List.all_eq_true, decide_eq_true_eq, Prod.forall]
   constructor
   · intro H i hi
@@ -181,9 +177,10 @@ theorem hashesMatch_iff {hashes : List Bytes32} {commitments : List KZGCommitmen
     exact H i hi.1
 
 /-- With one commitment per hash, the commitments match exactly when they hash to the list. -/
-theorem hashesMatch_iff_map {hashes : List Bytes32} {commitments : List KZGCommitment}
+theorem hashesMatch_iff_map {hashes : List VersionedHash} {commitments : List KZGCommitment}
     (hlen : hashes.length = commitments.length) :
-    hashesMatch hashes commitments = true ↔ commitments.map versionedHash = hashes := by
+    hashesMatch hashes commitments = true ↔
+      commitments.map kzgCommitmentToVersionedHash = hashes := by
   rw [hashesMatch_iff hlen, List.ext_getElem_iff]
   simp only [List.length_map, List.getElem_map]
   constructor
@@ -197,7 +194,7 @@ The check of blobs succeeds exactly when three conditions hold.
 
 The counts match, each commitment hashes to its versioned hash, and the proofs verify.
 -/
-theorem validateBlobs_eq_ok_iff (setup : TrustedSetup) (fork : Fork) (hashes : List Bytes32)
+theorem validateBlobs_eq_ok_iff (setup : TrustedSetup) (fork : Fork) (hashes : List VersionedHash)
     (blobs : List Blob) (commitments : List KZGCommitment) (proofs : List KZGProof) :
     validateBlobs setup fork hashes blobs commitments proofs = .ok () ↔
       blobCountsMatch fork hashes blobs commitments proofs = true ∧
@@ -211,7 +208,7 @@ theorem validateBlobs_eq_ok_iff (setup : TrustedSetup) (fork : Fork) (hashes : L
       MonadExceptOf.throw]
 
 /-- The counts match exactly with one hash and one commitment per blob, and the fork's proofs. -/
-theorem blobCountsMatch_iff (fork : Fork) (hashes : List Bytes32) (blobs : List Blob)
+theorem blobCountsMatch_iff (fork : Fork) (hashes : List VersionedHash) (blobs : List Blob)
     (commitments : List KZGCommitment) (proofs : List KZGProof) :
     blobCountsMatch fork hashes blobs commitments proofs = true ↔
       hashes.length = blobs.length ∧ commitments.length = blobs.length ∧

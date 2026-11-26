@@ -246,7 +246,7 @@ private theorem selectedInputs_of_history {g x y : ForkedBeaconState preset}
     have lifecycle : ∀ e ∈ events, RegistryLifecycle x.state e.before.state := fun e member =>
       (replay_event_provenance shared tail genesis early high endEpoch events replayed e
         member).1
-    have notInitial := history.fresh_not_initial shared genesis electra xEarly delay lifecycle
+    have notInitial := history.fresh_not_initial shared genesis electra delay lifecycle
     have covered := history.actual_payment_coverage electra notInitial
     rw [show (((payments.zip allocations).filter fun pair =>
         pair.1.1.tag.isFresh).map
@@ -270,7 +270,6 @@ private theorem epochInput_facts {g x u : ForkedBeaconState preset}
     (genesis : Genesis (config := config) (checks := checks) g) (caps : CapOrder preset)
     (delay : 0 < config.MIN_VALIDATOR_WITHDRAWABILITY_DELAY.toNat)
     (twoSlots : 2 ≤ preset.SLOTS_PER_EPOCH.toNat)
-    (early : u.fork < .glamsterdam)
     (cached : processSlot u.state = .ok s) :
     BalancesMatch s ∧ ExitsOrdered s ∧
       PendingConsolidationsOrdered config (getCurrentEpoch s).toNat s ∧
@@ -291,11 +290,11 @@ private theorem epochInput_facts {g x u : ForkedBeaconState preset}
   have bounded := getCurrentEpoch_succ_lt_farFuture twoSlots u.state
   obtain ⟨_, _, _, _, rfl⟩ := processSlot_ok cached
   exact ⟨invariant.balancesMatch, invariant.exitsOrdered,
-    run.pendingConsolidationsOrdered genesis early delay,
+    run.pendingConsolidationsOrdered genesis delay,
     run.exit_withdrawable_delay genesis,
     run.activationExitOrder genesis,
-    run.effectiveBalance_capped genesis caps.activation caps.compounding early,
-    run.pendingConsolidations_apart genesis early delay,
+    run.effectiveBalance_capped genesis caps,
+    run.pendingConsolidations_apart genesis delay,
     pre.registryLifecycle.trans (.of_data rfl), start,
     UInt64.lt_iff_toNat_lt.mpr (by
       change (getCurrentEpoch u.state).toNat < FAR_FUTURE_EPOCH.toNat
@@ -454,7 +453,7 @@ private theorem reservedReplay_slot_last {g x : ForkedBeaconState preset} {fork 
     Nat.lt_of_le_of_lt (fork_le_of_chainSteps pre.chainSteps) early
   obtain ⟨matched, exits, ordered, delayed, activationOrder, capped, apartAll, startLife,
     startCurrent, finite⟩ :=
-    epochInput_facts (u := ⟨fork, s⟩) shared pre genesis caps delay twoSlots early cachedOk
+    epochInput_facts (u := ⟨fork, s⟩) shared pre genesis caps delay twoSlots cachedOk
   -- The cache keeps the registry, the balances, the slot and the queue.
   obtain ⟨_, _, _, _, cachedEq⟩ := processSlot_ok cachedOk
   have sameEpoch : getCurrentEpoch cached = getCurrentEpoch s := by
@@ -465,10 +464,8 @@ private theorem reservedReplay_slot_last {g x : ForkedBeaconState preset} {fork 
     exact reservedFrame_cache cachedOk reserve assignment erasure
   obtain ⟨_, _, _, _, _, _, cachedErasure, _, cachedReserve⟩ := id cacheFrame
   -- The stages before the payments, as the replay records them.
-  obtain ⟨justified, scored, rewarded, registered, slashed, reset, deposited, rewardEvents,
-    limit, prefixTrace, justifiedOk, scoredOk, rewardsOk, registry, slashings, limitOk, resetOk,
-    depositsOk, consolidationsOk, replay, recordedEq⟩ :=
-    funding_epoch_site_limit middleOk recordOk
+  obtain ⟨reset, deposited, epoch, depositsOk, consolidationsOk, recordedEq⟩ :=
+    funding_epoch_site middleOk recordOk
   -- The epoch's own trace runs the same prefix, so its suffix starts at `middle`.
   have suffixTrace : EpochTrace (EpochStage.action config checks)
       (EpochStage.middleStages ++ EpochStage.tailStages) middle epoched := by
@@ -520,8 +517,8 @@ private theorem reservedReplay_slot_last {g x : ForkedBeaconState preset} {fork 
     refine ⟨w, found, fun far' => ?_⟩
     rw [far'] at activated
     exact absurd (UInt64.lt_of_le_of_lt activated finite) (UInt64.lt_irrefl _)
-  have slashedSpan := epochPrefix_slashedSpan pre caps.activation caps.compounding early
-    cachedOk justifiedOk scoredOk rewardsOk registry slashings resetOk depositsOk
+  have slashedSpan := epochPrefix_slashedSpan pre caps
+    cachedOk epoch.toEpochPrefix depositsOk
   have horizon : next.toNat ≤ horizonEnd x high := by
     have epochs : (getCurrentEpoch cached).toNat = (getCurrentEpoch s).toNat := by
       rw [sameEpoch]
@@ -531,13 +528,12 @@ private theorem reservedReplay_slot_last {g x : ForkedBeaconState preset} {fork 
     retiredEnd, coverEnd, futureEnd, effectiveBound⟩ :=
     reservedReplay_epochNext_lowered (x := x) (high := high) (rounding := rounding)
       (eventPosition := eventPosition) (paymentPosition := paymentPosition)
-      (callPosition := callPosition) electra early matched justifiedOk scoredOk rewardsOk replay
-      registry slashings limitOk resetOk depositsOk consolidationsOk suffixTrace cachedReserve
-      assignment cachedErasure prior cachedRetired cachedCover cachedFuture startLife
-      (UInt64.lt_of_le_of_lt startCurrent finite) startCurrent ordered exits finite delayed
-      delayTwo activationOrder nextOk twoSlots capped unique apart sources initialZero
-      slashedSpan horizon (Run.pendingConsolidationsOrdered shared genesis earlyX delay)
-      (run_slashed_exit_assigned shared genesis caps.activation caps.compounding earlyX delay)
+      (callPosition := callPosition) electra early matched epoch depositsOk consolidationsOk
+      suffixTrace cachedReserve assignment cachedErasure prior cachedRetired cachedCover
+      cachedFuture startLife (UInt64.lt_of_le_of_lt startCurrent finite) startCurrent ordered
+      exits finite delayed delayTwo activationOrder nextOk twoSlots capped unique apart sources
+      initialZero slashedSpan horizon (Run.pendingConsolidationsOrdered shared genesis delay)
+      (run_slashed_exit_assigned shared genesis caps delay)
       provenance
   -- The pass keeps a sublist of the queue, and pays from states with the pass input's registry.
   have shape := pass.pass_shape
@@ -547,10 +543,9 @@ private theorem reservedReplay_slot_last {g x : ForkedBeaconState preset} {fork 
   obtain ⟨_, _, _, _, _, _, _, _, _, _, depositedLife, _, depositedDelay, _⟩ :=
     reservedReplay_epochPrefixDeposits_facts (x := x) (high := high) (rounding := rounding)
       (eventPosition := eventPosition) (paymentPosition := paymentPosition)
-      (callPosition := callPosition) electra early matched justifiedOk scoredOk rewardsOk replay
-      registry slashings limitOk resetOk deposits cachedReserve assignment cachedErasure prior
-      cachedRetired startLife (UInt64.lt_of_le_of_lt startCurrent finite) ordered exits finite
-      delayed delayTwo
+      (callPosition := callPosition) electra early matched epoch deposits cachedReserve assignment
+      cachedErasure prior cachedRetired startLife (UInt64.lt_of_le_of_lt startCurrent finite)
+      ordered exits finite delayed delayTwo
   have freshDeposited : FreshExits deposited queue :=
     fresh.lifecycle ((RegistryLifecycle.of_data (congrArg (·.data) cachedValidators)).trans
       depositedLife) (fun _ member => member)
@@ -571,7 +566,7 @@ private theorem reservedReplay_slot_last {g x : ForkedBeaconState preset} {fork 
   have orderedDeposited : PendingConsolidationsOrdered config
       (getCurrentEpoch deposited).toNat deposited :=
     depositsOk.pendingConsolidationsOrdered
-      (epochTrace_pendingConsolidationsOrdered prefixTrace ordered)
+      (epochTrace_pendingConsolidationsOrdered epoch.trace ordered)
   have recordStep : ∀ (source : BalanceSource)
       (limits : BeaconState preset fork → Except TransitionError (Nat × Nat))
       (action : BeaconState preset fork → Except TransitionError (BeaconState preset fork))
@@ -588,13 +583,13 @@ private theorem reservedReplay_slot_last {g x : ForkedBeaconState preset} {fork 
     · simp only [List.mem_singleton] at added
       subst added
       exact notTransfer
-  have rewardSources : ∀ e ∈ rewardEvents, e.source ≠ .consolidations :=
+  have rewardSources : ∀ e ∈ epoch.recorded, e.source ≠ .consolidations :=
     replayRewards_induction (config := config)
       (fun pre : BalanceReplay preset fork => ∀ e ∈ pre.2, e.source ≠ .consolidations)
       (fun prior ok => recordStep _ _ _ ok (by simp) prior)
       (fun which prior ok => recordStep _ _ _ ok
         (by rcases which with rfl | rfl <;> simp) prior)
-      (by simp) replay
+      (by simp) epoch.replay
   have consolidationEvents : ∀ e ∈ recorded, e.source = .consolidations →
       PendingConsolidationInvariant config e.before.state := by
     intro e member transfer
@@ -608,7 +603,7 @@ private theorem reservedReplay_slot_last {g x : ForkedBeaconState preset} {fork 
     · exact orderedDeposited.1
   -- The stages before the payments record exactly the replay's events.
   rw [← recordedEq] at replayed
-  have recordedLength : recorded.length = rewardEvents.length + 3 := by
+  have recordedLength : recorded.length = epoch.recorded.length + 3 := by
     simp [recordedEq, electra]
   -- The epoch keeps the slot, so the slot write lands on the first slot of the next epoch.
   obtain ⟨justifiedState, justifiedStep, epochFrame⟩ := processEpoch_frame epochOk
@@ -909,23 +904,7 @@ theorem reservedReplay_switchToCompounding {fork : Fork} {s t : BeaconState pres
 
 /-- The reserved replay of a tail from Electra, built step by step.
 
-The replay starts at `x` with the initial ownership and its initial reserved frame.
-
-A slot step extends it by the replay of a slot step, and a block step by the replay of a block.
-
-Each step reads the queue provenance and the zero originals of initial tags from the replay so far.
-
-It reads the run facts at its input from `shared` and the prefix.
-
-This is the one run-level replay walk, and it follows the recursion of the run's balance events.
-
-The funding bound of a run cannot carry the step.
-
-Its motive is a fixed number.
-
-Its step bound sees neither the replay so far nor the prefix events.
-
-The floor induction recurses on epochs and sees no events. -/
+This is the one run-level replay walk, and it follows the recursion of the run's balance events. -/
 private theorem reservedReplay_run {g x y : ForkedBeaconState preset}
     (shared : Run config checks g x) (tail : Run config checks x y) (high : Nat)
     (supported : Supported shared tail high) (twoSlots : 2 ≤ preset.SLOTS_PER_EPOCH.toNat)
@@ -979,11 +958,27 @@ private theorem reservedReplay_run {g x y : ForkedBeaconState preset}
     exact increment
   have xEarly : x.fork < .glamsterdam :=
     Nat.lt_of_le_of_lt (fork_le_of_chainSteps tail.chainSteps) early
+  -- The replay starts at `x` with the initial ownership and its initial reserved frame.
   obtain ⟨initialOwned, initial, frame, cover, future⟩ :=
     reservedFrame_initial shared genesis xEarly high electraX rounding
   -- The sources of the queue at `x` have their exits assigned there.
-  have initialSources := (shared.pendingConsolidation_invariant genesis xEarly electraX delay).2
+  have initialSources := (shared.pendingConsolidation_invariant genesis electraX delay).2
   revert early endEpoch roundingAt
+  -- A slot step extends the replay by the replay of a slot step.
+  --
+  -- A block step extends it by the replay of a block.
+  --
+  -- Each step reads the queue provenance and the zero originals of initial tags from the replay.
+  --
+  -- It reads the run facts at its input from the shared run and the prefix.
+  --
+  -- The funding bound of a run cannot carry the step.
+  --
+  -- Its motive is a fixed number.
+  --
+  -- Its step bound sees neither the replay so far nor the prefix events.
+  --
+  -- The floor induction recurses on epochs and sees no events.
   induction tail generalizing events with
   | nil =>
     intro _ _ _
@@ -1038,7 +1033,7 @@ private theorem reservedReplay_run {g x y : ForkedBeaconState preset}
     -- The run facts at the step input.
     have invariant := (run_justified_separated whole genesis).1
     have slashedExit : SlashedExitAssigned middle.state := fun i v found flag =>
-      run_slashed_exit_assigned whole genesis caps.activation caps.compounding middleEarly delay
+      run_slashed_exit_assigned whole genesis caps delay
         i v found flag
     have finite : getCurrentEpoch middle.state < FAR_FUTURE_EPOCH := by
       have ne := getCurrentEpoch_ne_farFuture twoSlots middle.state
@@ -1097,7 +1092,7 @@ private theorem reservedReplay_run {g x y : ForkedBeaconState preset}
         erasure', by simpa only [List.length_append, List.length_nil, Nat.add_zero] using
           counted', retired', cover', future', fresh', ?_, ?_, ?_, fun electraY => ?_, ?_,
         originalDown_block pre (Step.block engine signed due ok) down
-          (effectiveKept_block middleEarly (applySignedBlock_ok ok).2.1)
+          (effectiveKept_processBlock (applySignedBlock_ok ok).2.1)
           replay.counters_original.2.2.1⟩
       · intro pair member
         rw [List.append_nil] at member
@@ -1119,21 +1114,20 @@ private theorem reservedReplay_run {g x y : ForkedBeaconState preset}
 
 /-- From Electra a block deposit keeps every validator and every balance.
 
-It changes no validator, or it appends one new validator.
-
-The new validator has balance 0, effective balance 0, and no activation, exit or withdrawal epoch.
-
-The amount waits in the pending deposits.
-
-The slot, the pending consolidations and the consolidation churn are unchanged. -/
+The amount waits in the pending deposits. -/
 private theorem processDeposit_electra_shape {fork : Fork} {a b : BeaconState preset fork}
     (electra : .pectra ≤ fork) {before : fork < .hegota} {dep : Deposit}
     (ok : processDeposit config checks before a dep = .ok b) (matched : BalancesMatch a) :
+    -- The slot, the pending consolidations and the consolidation churn are unchanged.
     b.slot = a.slot ∧
       b.pendingConsolidations electra = a.pendingConsolidations electra ∧
       b.earliestConsolidationEpoch electra = a.earliestConsolidationEpoch electra ∧
       b.consolidationBalanceToConsume electra = a.consolidationBalanceToConsume electra ∧
+      -- It changes no validator, or it appends one new validator.
       ((b.validators.data = a.validators.data ∧ b.balances.data = a.balances.data) ∨
+        -- The new validator has balance 0 and effective balance 0.
+        --
+        -- It has no activation, exit or withdrawal epoch.
         ∃ w : Validator, b.validators.data = a.validators.data.push w ∧
           b.balances.data = a.balances.data.push 0 ∧ w.effectiveBalance = 0 ∧
           w.slashed = false ∧ w.activationEpoch = FAR_FUTURE_EPOCH ∧
@@ -1156,18 +1150,11 @@ private theorem processDeposit_electra_shape {fork : Fork} {a b : BeaconState pr
     simp [getValidatorFromDeposit, Uint64.toNat_min]
   · exact absurd (Nat.lt_of_lt_of_le early electra) (Nat.lt_irrefl _)
 
-/-- One block deposit from Electra replays as its recorded event, with the same queue and ownership.
-
-Its credit is 0: the amount waits in the pending deposits.
-
-Every existing validator and balance is unchanged.
-
-A validator the deposit appends has balance 0 and effective balance 0.
-
-So every reserve and cover clause holds for it with no token. -/
+/-- A block deposit from Electra replays as its recorded event, keeping the queue and ownership. -/
 theorem operationReplay_deposit {x : ForkedBeaconState preset} {high : Nat}
     {rounding : Nat → Nat} {fork : Fork} (electra : .pectra ≤ fork) {before : fork < .hegota}
     (dep : Deposit) (a b : BeaconState preset fork) (credit debit : Nat)
+    -- Its credit is 0: the amount waits in the pending deposits.
     (_limits : (pure (if fork < .pectra then dep.data.amount.toNat else 0, 0) :
       Except TransitionError (Nat × Nat)) = .ok (credit, debit))
     (ok : processDeposit config checks before a dep = .ok b)
@@ -1188,6 +1175,11 @@ theorem operationReplay_deposit {x : ForkedBeaconState preset} {high : Nat}
     ⟨step.balancesMatch matched, step.exitsOrdered exits, life.trans lifeStep⟩⟩
   intro queue owned eventPosition paymentPosition callPosition reserve assignment erasure _
     retired cover future matched _ life _ _ slashed fresh
+  -- Every existing validator and balance is unchanged.
+  --
+  -- A validator the deposit appends has balance 0 and effective balance 0.
+  --
+  -- So every reserve and cover clause holds for it with no token.
   obtain ⟨_, pending, earliest, consume, shape⟩ := processDeposit_electra_shape electra ok matched
   have sizes : a.balances.data.size = a.validators.data.size := matched
   -- Every existing index keeps its validator and its balance.
@@ -1469,19 +1461,10 @@ section
 
 open Cryptography.Bls Uint64
 
-/-- The selected-release statement from the run's reserved replay.
-
-The run replay rounds with the ledger's source-falling keys.
-
-The given fresh coverage replays the same tags.
-
-A tag replay is determined by its events, start position and initial queue.
-
-So its queue, calls and payments are the replay's own.
-
-The deposit funding and the selected capacity are taken as hypotheses. -/
+/-- The selected-release statement from the run's reserved replay. -/
 private theorem selectedReleaseProducer_of_run {g x y : ForkedBeaconState preset}
     (block : BlockReplay (preset := preset) (config := config) (checks := checks))
+    -- The deposit funding is taken as a hypothesis.
     (deposits : ∀ (shared : Run config checks g x) (tail : Run config checks x y) high,
       Supported shared tail high → 2 ≤ preset.SLOTS_PER_EPOCH.toNat → .pectra ≤ x.fork →
       ∀ events, tail.balanceEvents high = .ok events →
@@ -1489,6 +1472,7 @@ private theorem selectedReleaseProducer_of_run {g x y : ForkedBeaconState preset
           fundingCarry x +
               ((List.range (driftHorizon x high + 1)).map
                 (exitFlowAt (config := config) x high)).sum)
+    -- The selected capacity is taken as a hypothesis.
     (capacity : ∀ (shared : Run config checks g x) (tail : Run config checks x y) high,
       Supported shared tail high → 2 ≤ preset.SLOTS_PER_EPOCH.toNat →
       ∀ events, tail.balanceEvents high = .ok events →
@@ -1517,10 +1501,13 @@ private theorem selectedReleaseProducer_of_run {g x y : ForkedBeaconState preset
         ite_eq_left (ledger.sourceFalling_of_firstDown shared supported delay pre step rest split
           i v w found next unset assigned reference drop))
       reservedReplay_slotStep block replayed
-  -- The given coverage replays the same tags, so it names the replay's queue, calls and payments.
+  -- The given fresh coverage replays the same tags.
+  --
+  -- So it names the replay's queue, calls and payments.
   obtain ⟨_, _, _, _, _, _, _, _, _, tagReplay, _⟩ := history.counters_original
   obtain ⟨allPaid, coverReplay, named⟩ := coverage
   obtain ⟨tagsEq, paymentsEq⟩ := named
+  -- A tag replay is determined by its events, start position and initial queue.
   obtain ⟨rfl, _, rfl, rfl⟩ := TagReplay.unique tagReplay coverReplay
   have lengths := history.paired_rounds.length_eq
   let pairs := (allPayments.zip allAllocations).filter fun pair =>

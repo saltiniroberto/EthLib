@@ -4,17 +4,16 @@ public import EthLib.Networking.Discv5.Message
 public import EthLib.Networking.Discv5.Packet
 public import EthLib.Serialization.Proofs.Rlp.Codec
 public import EthLib.Serialization.Proofs.Rlp.RoundTrip
+import EthLib.Base.Proofs.CodeInjective
 
 /-!
 # `Networking.Proofs.Discv5.Message`
 
 Properties of the discv5 messages.
 
-- The fields of each message read back as the message.
-- A valid message decodes back from its plaintext.
-- A message that decodes is valid.
-- A plaintext that decodes is the encoding of its message.
-- So a message has at most one plaintext that decodes to it.
+A valid message decodes back from its plaintext.
+
+A message that decodes is valid.
 -/
 
 @[expose] public section
@@ -128,7 +127,9 @@ theorem encode_of_decodeFields {bytes : ByteArray} {m : Message}
             simp [ByteArray.data_append, hbytes]
   · simp [throw, throwThe, MonadExceptOf.throw] at h
 
-/-- A plaintext that decodes is the encoding of its message. -/
+/-- A plaintext that decodes is the encoding of its message.
+
+So a message has at most one plaintext that decodes to it. -/
 theorem encode_of_decode {bytes : ByteArray} {m : Message} (h : Message.decode bytes = .ok m) :
     m.encode = .ok bytes := by
   unfold Message.decode at h
@@ -151,9 +152,7 @@ theorem decode_eq_ok_iff (bytes : ByteArray) (m : Message) :
 theorem _root_.EthLib.Networking.Discv5.MessageError.code_injective
     (e₁ e₂ : MessageError) (h : e₁.code = e₂.code) :
     e₁.ctorIdx = e₂.ctorIdx := by
-  -- Two distinct constructors have two distinct literal codes, which `decide` separates.
-  cases e₁ <;> cases e₂ <;>
-    first | rfl | (simp only [MessageError.code] at h; exact absurd h (by decide))
+  code_injective MessageError.code
 
 /-- A message error never has the code of a packet error, so one Python class carries both. -/
 theorem _root_.EthLib.Networking.Discv5.MessageError.code_ne_packet

@@ -333,9 +333,12 @@ def validateConfig (config : Config) : Except Error Unit := do
   -- RFC 9846 §4.3.8: the shares follow the order of the groups, with at most one per group.
   --
   -- EthLib's check: no group is listed twice, and no group has two ephemeral keys.
+  --
+  -- Each list is checked for a repeat in one pass.
   ensure (config.initialShares.Sublist config.policy.groups ∧
-    config.policy.groups.Nodup ∧ config.initialShares.Nodup ∧
-    (config.ephemeralKeys.map (·.group)).Nodup) .configuration
+    (Base.firstRepeated config.policy.groups).isNone ∧
+    (Base.firstRepeated config.initialShares).isNone ∧
+    (Base.firstRepeated (config.ephemeralKeys.map (·.group))).isNone) .configuration
   -- Each group of the policy has an ephemeral key, for a first share or after a retry.
   config.policy.groups.forM fun group => do
     let _ ← ephemeral config group
@@ -587,8 +590,10 @@ def checkClientHello (config : Config) (hello : ClientHello) : Except Error Unit
   -- §4.3.8: each share is for a supported group, in the same order, and no group twice.
   --
   -- Servers MAY abort with illegal_parameter on a violation, and this server does.
+  --
+  -- The groups are checked for a repeat in one pass, since a peer can send many shares.
   ensure ((keyShares.map (·.group)).Sublist offeredGroups ∧
-    (keyShares.map (·.group)).Nodup) .illegalParameter
+    (Base.firstRepeated (keyShares.map (·.group))).isNone) .illegalParameter
   -- §4.3.3: a server that authenticates with a certificate needs signature algorithms.
   --
   -- Without them it MUST abort with missing_extension.

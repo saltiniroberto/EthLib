@@ -1,5 +1,7 @@
 module
 
+public import EthLib.Execution.Proofs.Evm.Call.AccessesGrow
+public import EthLib.Execution.Proofs.Evm.Call.AccessesRun
 public import EthLib.Execution.Proofs.Evm.Call.Burn
 public import EthLib.Execution.Proofs.Evm.Call.BurnRun
 public import EthLib.Execution.Proofs.Evm.Call.Candidate
@@ -46,6 +48,7 @@ public import EthLib.Execution.Proofs.Evm.Call.SlotSurplusParts
 public import EthLib.Execution.Proofs.Evm.Call.SlotSurplusRun
 public import EthLib.Execution.Proofs.Evm.Call.SlotSurplusSteps
 public import EthLib.Execution.Proofs.Evm.Call.SimulatedLogs
+public import EthLib.Execution.Proofs.Evm.Call.SimulatedLogsErase
 public import EthLib.Execution.Proofs.Evm.Call.StateAborts
 public import EthLib.Execution.Proofs.Evm.Call.StateErrors
 public import EthLib.Execution.Proofs.Evm.Call.StaticMessage

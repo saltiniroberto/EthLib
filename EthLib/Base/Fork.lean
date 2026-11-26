@@ -16,11 +16,13 @@ The cases run in the order in which the forks activate on mainnet.
 
 Before the Merge the two layers forked apart, so their forks interleave by date.
 
-[EIP-7568](https://eips.ethereum.org/EIPS/eip-7568#specification) orders them up to Shapella.
+[EIP-7568][eip-7568] orders them up to Shapella.
 
 From Shapella on, one upgrade changes both layers, and it is one fork.
 
-When a fork activates is chain configuration, so the type holds only the order. -/
+When a fork activates is chain configuration, so the type holds only the order.
+
+[eip-7568]: https://eips.ethereum.org/EIPS/eip-7568#specification -/
 inductive Fork where
   /-- Frontier: the execution layer at its launch. -/
   | frontier
@@ -54,13 +56,15 @@ inductive Fork where
   | byzantium
   /-- Constantinople changes the execution layer.
 
-  [EIP-1013](https://eips.ethereum.org/EIPS/eip-1013) lists its EIPs.
+  [EIP-1013][eip-1013] lists its EIPs.
 
   They are EIP-145, EIP-1014, EIP-1052, EIP-1234 and EIP-1283.
 
   Mainnet never ran EIP-1283, because Petersburg removed it at the same block.
 
-  So EthLib gives Constantinople the rules of Petersburg, without EIP-1283. -/
+  So EthLib gives Constantinople the rules of Petersburg, without EIP-1283.
+
+  [eip-1013]: https://eips.ethereum.org/EIPS/eip-1013 -/
   | constantinople
   /-- Petersburg removes EIP-1283 from the execution layer.
 
@@ -150,17 +154,19 @@ inductive Fork where
   | bpo5
   /-- Glamsterdam, Gloas with Amsterdam, changes both layers.
 
-  [EIP-7773](https://eips.ethereum.org/EIPS/eip-7773) lists its EIPs.
+  [EIP-7773][eip-7773] lists its EIPs.
 
   They include EIP-7732 and EIP-7928.
 
   EthLib does not hold all its rules yet.
 
-  An export whose rules at this fork are missing rejects it as not yet specified. -/
+  An export whose rules at this fork are missing rejects it as not yet specified.
+
+  [eip-7773]: https://eips.ethereum.org/EIPS/eip-7773 -/
   | glamsterdam
   /-- Hegotá, Heze with Bogotá, changes both layers.
 
-  [EIP-8081](https://eips.ethereum.org/EIPS/eip-8081) lists its EIPs.
+  [EIP-8081][8081] lists its EIPs.
 
   It schedules EIP-7805 and EIP-8141.
 
@@ -170,7 +176,9 @@ inductive Fork where
 
   EthLib holds only some of its rules.
 
-  An export whose rules at this fork are missing rejects it as not yet specified. -/
+  An export whose rules at this fork are missing rejects it as not yet specified.
+
+  [8081]: https://eips.ethereum.org/EIPS/eip-8081 -/
   | hegota
   deriving DecidableEq, Ord, Repr
 
@@ -218,10 +226,25 @@ def name : Fork → String
   | glamsterdam => "glamsterdam"
   | hegota => "hegota"
 
+/-- The last fork, in the order of the cases.
+
+The lookup of a fork by its name and the termination measures of the fork upgrades read it.
+
+So they name no case, and a new fork at the end leaves them as they are. -/
+def last : Fork :=
+  -- A new fork at the end moves this definition to it.
+  --
+  -- Until it does, the proofs that every fork is at or before it fail.
+  --
+  -- So do the proofs that each name reads back, and those that the fork upgrades stop.
+  --
+  -- Then the library does not build.
+  hegota
+
 /-- The fork with a name, if one has it. -/
 def ofName? (s : String) : Option Fork :=
-  -- Every fork from Frontier to Hegotá, in order, then the first whose name matches.
-  ((List.range (hegota.ctorIdx + 1)).map Fork.ofNat).find? (·.name == s)
+  -- Every fork from Frontier to the last one, in order, then the first whose name matches.
+  ((List.range (last.ctorIdx + 1)).map Fork.ofNat).find? (·.name == s)
 
 end Fork
 

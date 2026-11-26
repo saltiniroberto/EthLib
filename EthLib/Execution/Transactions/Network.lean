@@ -9,18 +9,14 @@ public import EthLib.Execution.Transactions.Validity
 
 The network form of a blob transaction, which peers send in answer to a request for it.
 
-From Dencun, it is the type byte `0x03`, then the RLP list of four items.
-
-They are the payload body of the transaction, the blobs, the commitments and the proofs.
-
-It has one proof per blob, by [EIP-4844](https://eips.ethereum.org/EIPS/eip-4844#networking).
-
-From Fusaka, the wrapper version 1 comes after the payload body, by [EIP-7594][eip7594].
-
-It has one proof per cell of each extended blob.
+It carries the payload body of the transaction with its blobs, commitments and proofs.
 
 A block holds only the payload body, so the hash of the transaction ignores the rest.
 
+- [EIP-4844][eip4844] gives the form from Dencun, with one proof per blob.
+- [EIP-7594][eip7594] gives the form from Fusaka, with one proof per cell of each extended blob.
+
+[eip4844]: https://eips.ethereum.org/EIPS/eip-4844#networking
 [eip7594]: https://eips.ethereum.org/EIPS/eip-7594#networking
 -/
 
@@ -32,6 +28,16 @@ open EthLib.Base
 open EthLib.Cryptography.Kzg
 open EthLib.Cryptography.Kzg.Constants
 open EthLib.Serialization.Rlp
+
+/-- A KZG commitment is the RLP string of its 48 bytes.
+
+Source: "Networking" of [EIP-4844](https://eips.ethereum.org/EIPS/eip-4844#networking). -/
+instance : Codec KZGCommitment := .wrapper KZGCommitment.mk KZGCommitment.bytes
+
+/-- A KZG proof is the RLP string of its 48 bytes.
+
+Source: "Networking" of [EIP-4844](https://eips.ethereum.org/EIPS/eip-4844#networking). -/
+instance : Codec KZGProof := .wrapper KZGProof.mk KZGProof.bytes
 
 /-- The version of the network form from Fusaka on. -/
 def WRAPPER_VERSION : Nat := 1
@@ -59,7 +65,7 @@ inductive NetworkError where
   /-- The commitment at `index`, counted from 0, hashes to `expected`, not to its versioned hash.
 
   That versioned hash, at the same position, is `actual`. -/
-  | versionedHashMismatch (index : Nat) (expected actual : Bytes32)
+  | versionedHashMismatch (index : Nat) (expected actual : VersionedHash)
   /-- A blob, a commitment or a proof is not a valid KZG input. -/
   | kzg (error : KzgError)
   /-- The proofs do not show that the commitments match the blobs. -/
@@ -88,7 +94,9 @@ def toItem (fork : Fork) (w : NetworkBlobTransaction) : Item :=
   if fork ≥ .fusaka then
     .list [Codec.toItem w.tx, Codec.toItem WRAPPER_VERSION, Codec.toItem w.blobs,
       Codec.toItem w.commitments, Codec.toItem w.proofs]
-  -- EIP-4844: the payload body, the blobs, the commitments and the proofs.
+  -- EIP-4844, from Dencun: four items.
+  --
+  -- They are the payload body, the blobs, the commitments and the proofs.
   else
     .list [Codec.toItem w.tx, Codec.toItem w.blobs, Codec.toItem w.commitments,
       Codec.toItem w.proofs]
@@ -140,17 +148,12 @@ def decodeNetwork (fork : Fork) (bytes : ByteArray) :
       NetworkBlobTransaction.ofItem fork item
     else .error (.transaction (.unsupportedType type))
 
-/-- The versioned hash of a commitment: `0x01`, then the last 31 bytes of its SHA-256 hash. -/
-def versionedHash (commitment : KZGCommitment) : Bytes32 :=
-  -- EIP-4844: the version `0x01`, then the last 31 bytes of the SHA-256 hash of the commitment.
-  Cryptography.Kzg.kzgCommitmentToVersionedHash commitment
-
 /-- Whether each commitment hashes to the versioned hash at its position. -/
-def hashesMatch (hashes : List Bytes32) (commitments : List KZGCommitment) : Bool :=
+def hashesMatch (hashes : List VersionedHash) (commitments : List KZGCommitment) : Bool :=
   -- EIP-4844: the versioned hash at index `i` is the versioned hash of commitment `i`.
   --
   -- The pairs stop at the shorter list, and the counts are checked apart.
-  (hashes.zip commitments).all fun (h, c) => decide (versionedHash c = h)
+  (hashes.zip commitments).all fun (h, c) => decide (kzgCommitmentToVersionedHash c = h)
 
 /-- The number of proofs at `fork` for `count` blobs: one per blob, or one per cell from Fusaka. -/
 def proofCount (fork : Fork) (count : Nat) : Nat :=
@@ -160,7 +163,7 @@ def proofCount (fork : Fork) (count : Nat) : Nat :=
   if fork ≥ .fusaka then CELLS_PER_EXT_BLOB * count else count
 
 /-- Whether the counts of versioned hashes, commitments and proofs match the count of blobs. -/
-def blobCountsMatch (fork : Fork) (hashes : List Bytes32) (blobs : List Blob)
+def blobCountsMatch (fork : Fork) (hashes : List VersionedHash) (blobs : List Blob)
     (commitments : List KZGCommitment) (proofs : List KZGProof) : Bool :=
   -- One blob and one commitment per versioned hash, and the proofs that the fork asks per blob.
   hashes.length == blobs.length && commitments.length == blobs.length &&
@@ -190,11 +193,13 @@ def verifyBlobBundle (setup : TrustedSetup) (fork : Fork) (blobs : List Blob)
     -- The batch check of cells verifies all of them at once.
     let indices := (List.range CELLS_PER_EXT_BLOB).toArray
     verifyCellKzgProofBatch setup
-      (commitments.toArray.flatMap fun c => Array.replicate CELLS_PER_EXT_BLOB c)
+      (commitments.toArray.flatMap fun c => Array.replicate CELLS_PER_EXT_BLOB c.bytes)
       (Array.flatten (Array.replicate blobs.length indices))
-      cells.toArray.flatten proofs.toArray
+      cells.toArray.flatten (proofs.toArray.map (·.bytes))
   -- EIP-4844: the batch check of blobs, one proof per blob.
-  else verifyBlobKzgProofBatch setup blobs.toArray commitments.toArray proofs.toArray
+  else
+    verifyBlobKzgProofBatch setup blobs.toArray (commitments.toArray.map (·.bytes))
+      (proofs.toArray.map (·.bytes))
 
 /-- Whether the network form's proofs show that its commitments match its blobs. -/
 def proofsVerify (setup : TrustedSetup) (fork : Fork) (w : NetworkBlobTransaction) :
@@ -206,17 +211,20 @@ Check blobs, commitments and proofs at `fork` against the versioned hashes they 
 
 The counts match, each commitment hashes to its versioned hash, and the proofs verify.
 -/
-def validateBlobs (setup : TrustedSetup) (fork : Fork) (hashes : List Bytes32) (blobs : List Blob)
-    (commitments : List KZGCommitment) (proofs : List KZGProof) : Except NetworkError Unit := do
+def validateBlobs (setup : TrustedSetup) (fork : Fork) (hashes : List VersionedHash)
+    (blobs : List Blob) (commitments : List KZGCommitment) (proofs : List KZGProof) :
+    Except NetworkError Unit := do
   -- EIP-4844 and EIP-7594: the counts of versioned hashes, blobs, commitments and proofs match.
   unless blobCountsMatch fork hashes blobs commitments proofs do
     throw (.countMismatch hashes.length blobs.length commitments.length proofs.length)
   -- Commitment `i` hashes to versioned hash `i`.
   unless hashesMatch hashes commitments do
     -- Some pair does not match, so the first such pair has an index below both lengths.
-    let index := (hashes.zip commitments).findIdx fun (h, c) => !decide (versionedHash c = h)
-    let commitment := commitments.getD index (Vector.replicate 48 0)
-    throw (.versionedHashMismatch index (versionedHash commitment) (hashes.getD index 0))
+    let index := (hashes.zip commitments).findIdx fun (h, c) =>
+      !decide (kzgCommitmentToVersionedHash c = h)
+    let commitment := commitments.getD index ⟨Vector.replicate 48 0⟩
+    throw (.versionedHashMismatch index (kzgCommitmentToVersionedHash commitment)
+      (hashes.getD index ⟨0⟩))
   -- The commitments match the blobs and the proofs.
   unless ← (verifyBlobBundle setup fork blobs commitments proofs).mapError .kzg do
     throw .proofRejected

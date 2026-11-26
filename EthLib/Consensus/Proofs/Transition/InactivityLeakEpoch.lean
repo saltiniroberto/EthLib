@@ -21,7 +21,9 @@ So does the state after one slot, which ends at a later slot.
 
 In [Pavloff et al.][pat], Section 4, the leak starts after four epochs without finalization.
 
-Their Section 5.1 ends it at the next finalization; that direction is not proved here.
+Their Section 5.1 ends it at the next finalization.
+
+That direction is not proved here.
 
 The balance, score and effective-balance traces of the leak bounds are not derived here.
 
@@ -41,6 +43,7 @@ theorem isInInactivityLeak_of_slot_le (leak : isInInactivityLeak state = .ok tru
     (later : state.slot.toNat ≤ after.slot.toNat)
     (finalized : after.finalizedCheckpoint.epoch ≤ state.finalizedCheckpoint.epoch) :
     isInInactivityLeak after = .ok true := by
+  -- The leak test reads only the slot and the finalized epoch.
   obtain ⟨delay, delayOk, big⟩ := isInInactivityLeak_ok_iff.mp leak
   obtain ⟨settled, value⟩ := getFinalityDelay_ok_iff.mp delayOk
   have before := getPreviousEpoch_toNat state
@@ -76,6 +79,7 @@ theorem processEpoch_finalized_lt_or_isInInactivityLeak {config : Config}
   rw [frame.finalized]
   by_cases advanced : state.finalizedCheckpoint.epoch < justified.finalizedCheckpoint.epoch
   · exact .inl advanced
+  -- Justification and finalization keep the slot.
   exact .inr (isInInactivityLeak_of_slot_le leak
     (by rw [processJustificationAndFinalization_slot justifiedOk]; exact Nat.le_refl _)
     (UInt64.not_lt.mp advanced))
@@ -88,6 +92,7 @@ theorem advanceSlot_finalized_lt_or_isInInactivityLeak {config : Config}
       isInInactivityLeak after = .ok true := by
   by_cases advanced : state.finalizedCheckpoint.epoch < after.finalizedCheckpoint.epoch
   · exact .inl advanced
+  -- The state after the slot is at a later slot.
   exact .inr (isInInactivityLeak_of_slot_le leak
     (by have := advanceSlot_slot computed; omega) (UInt64.not_lt.mp advanced))
 

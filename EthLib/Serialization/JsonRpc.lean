@@ -7,28 +7,19 @@ public import EthLib.Base.Hex
 /-!
 # `Serialization.JsonRpc`
 
-The JSON form of the base types that the Ethereum JSON-RPC APIs exchange.
+The JSON form of the base types that the Engine API and the execution JSON-RPC API share.
 
-The Engine API and the execution JSON-RPC API share these types.
+Sources:
 
-The step comments quote the patterns of the base types in [`base-types.yaml`][types].
+- [`base-types.yaml`][types], at commit `1ca0818` of execution-apis: the patterns the steps quote
+- step 1 of [`engine_newPayloadV3`][v3], at the same commit: the rules of the object readers
+- section 4.2 of [JSON-RPC 2.0][params]: the parameters of a request
+- section 5.1 of [JSON-RPC 2.0][rpc]: the error object of a failed request
 
-The object readers follow step 1 of [`engine_newPayloadV3`][v3].
-
-The parameters of a request follow section 4.2 of [JSON-RPC 2.0][params].
-
-A reader that rejects its input gives the reason as a string.
-
-A caller turns that reason into its own error, such as an invalid parameter of the Engine API.
-
-A failed request answers with the error object of section 5.1 of [JSON-RPC 2.0][rpc].
-
-JSON-RPC 2.0 reserves the codes from `-32768` to `-32000`; each API keeps its own table of the rest.
-
-[v3]: https://github.com/ethereum/execution-apis/blob/3284ee80c3da3e516c53782dde75157cccf1ebdc/src/engine/cancun.md#specification
+[v3]: https://github.com/ethereum/execution-apis/blob/1ca0818569467cff85b7f41372f22e728d5daa14/src/engine/cancun.md#specification
 [params]: https://www.jsonrpc.org/specification#parameter_structures
 [rpc]: https://www.jsonrpc.org/specification#error_object
-[types]: https://github.com/ethereum/execution-apis/blob/3284ee80c3da3e516c53782dde75157cccf1ebdc/src/schemas/base-types.yaml
+[types]: https://github.com/ethereum/execution-apis/blob/1ca0818569467cff85b7f41372f22e728d5daa14/src/schemas/base-types.yaml
 -/
 
 @[expose] public section
@@ -38,7 +29,9 @@ namespace EthLib.Serialization.JsonRpc
 open Lean (Json)
 open EthLib.Base
 
-/-- A reading that fails with a reason. -/
+/-- A reading that fails with a reason, given as a string.
+
+A caller turns that reason into its own error, such as an invalid parameter of the Engine API. -/
 abbrev Read := Except String
 
 /-- Reject the input, for a reason. -/
@@ -47,10 +40,7 @@ def reject {α : Type} (reason : String) : Read α := throw reason
 /-- The value of a hex digit, given as its ASCII byte; uppercase only when `upper` allows it. -/
 def hexValue (upper : Bool) (c : UInt8) : Option UInt8 :=
   -- The base types: the digits `0-9` and `a-f`, and `A-F` only in the address pattern.
-  if 48 ≤ c ∧ c ≤ 57 then some (c - 48)
-  else if 97 ≤ c ∧ c ≤ 102 then some (c - 87)
-  else if upper ∧ 65 ≤ c ∧ c ≤ 70 then some (c - 55)
-  else none
+  Base.hexValue? (Char.ofUInt8 c) upper
 
 /-- The ASCII bytes of a JSON string after its `0x` marker. -/
 def hexDigits (what : String) : Json → Read ByteArray
@@ -68,17 +58,13 @@ def bytesOf (what : String) (upper : Bool) (j : Json) : Read ByteArray := do
   --
   -- EthLib also refuses an odd count of digits, which the pattern admits but no byte string has.
   if digits.size % 2 ≠ 0 then reject s!"{what}: odd number of hex digits" else
-  let mut out := ByteArray.emptyWithCapacity (digits.size / 2)
-  for i in [0:digits.size / 2] do
-    match digits[2 * i]?, digits[2 * i + 1]? with
-    | some c, some d =>
-      match hexValue upper c, hexValue upper d with
-      -- Byte `i` is `16 * d_(2i) + d_(2i+1)`, the high digit first.
-      | some high, some low => out := out.push (16 * high + low)
-      | _, _ => reject s!"{what}: not a hex digit"
-    -- The count is even, so both digits of each byte exist and this case never happens.
-    | _, _ => reject s!"{what}: odd number of hex digits"
-  return out
+  let chars := digits.data.toList.map Char.ofUInt8
+  -- Where the pattern refuses `A-F`, any uppercase letter is not a hex digit.
+  if !upper && chars.any Char.isUpper then reject s!"{what}: not a hex digit" else
+  -- Byte `i` is `16 * d_(2i) + d_(2i+1)`, the high digit first, as Base reads hex.
+  match Base.hexBytes? chars with
+  | some out => pure out
+  | none => reject s!"{what}: not a hex digit"
 
 /-- A byte string of any length. -/
 def bytes (what : String) (j : Json) : Read ByteArray := bytesOf what false j
@@ -219,6 +205,9 @@ Section 5.1 of [JSON-RPC 2.0][rpc] defines it.
 
 [rpc]: https://www.jsonrpc.org/specification#error_object -/
 structure RpcError where
+  -- JSON-RPC 2.0 reserves the codes from `-32768` to `-32000`.
+  --
+  -- Each API keeps its own table of the rest.
   /-- The code: the kind of the error. -/
   code : Int
   /-- A short description of the error. -/

@@ -4,50 +4,20 @@ public import EthLib.Engine.NewPayload
 public import EthLib.Engine.Proofs.Block
 public import EthLib.Engine.Proofs.Json
 import EthLib.Base.Proofs.Toolchain.JsonBasic
+import EthLib.Execution.Proofs.Rpc.Json
 import EthLib.Execution.Proofs.Blocks.Transition
+import EthLib.Base.Proofs.CodeInjective
 
 /-!
 # Proofs: the checks of `engine_newPayload`
 
-Each fork from Paris to Glamsterdam has a version of the method, and no other fork has one.
+A fork has a version of the method exactly when it is from Paris on.
 
-A version takes exactly the forks whose parameters are its own.
+The decoders read back its parameters at a version that takes their fork, within their bounds.
 
-Version 5 takes Glamsterdam alone.
+Without its parent's state, a payload is never valid.
 
-Below version 5 the payload decodes exactly as a structure of a version that the method takes.
-
-From version 5 it decodes exactly as a payload of version 4, with its access list and its slot.
-
-From version 4, a request list passes its check exactly when two conditions hold.
-
-Each request has more than one byte, so its first byte is its type.
-
-The types strictly increase along the list.
-
-Without a JSON-RPC error, the parameters are an array of the values of the version, none null.
-
-The decoder reads back the parameters that the writer writes, at a version that takes the fork.
-
-The decoder of version 6 reads back its parameters too, with their inclusion list.
-
-A payload that fails the checks is invalid, or has an invalid block hash at version 1.
-
-It has an invalid block hash exactly when its block hash is wrong and the version is 1.
-
-Its latest valid hash is null.
-
-So without the parent's state a payload is never valid: it is syncing, or it failed the checks.
-
-If the last block of a chain is not the parent, a payload that passes the checks is syncing.
-
-If it is the parent, a payload whose block passes the state transition is valid.
-
-A block that fails it without an abort makes the payload invalid, with the block error.
-
-A block and a state come back exactly for a valid payload.
-
-Decoded parameters whose payload gives a block at the active fork pass the checks.
+With it, a payload is valid exactly when the method gives back its block and the state after it.
 -/
 
 public section
@@ -57,18 +27,17 @@ namespace EthLib.Engine
 open EthLib.Base
 open EthLib.Execution.Blocks (BlockChain RecentBlock stateTransition MAX_EXTRA_DATA_BYTES)
 open EthLib.Serialization.JsonRpc (fields hasExactly)
+open EthLib.Cryptography.Kzg (VersionedHash)
 
 /-- Two errors with one code come from one constructor. -/
 theorem EngineError.code_injective (e₁ e₂ : EngineError) (h : e₁.code = e₂.code) :
     e₁.ctorIdx = e₂.ctorIdx := by
-  cases e₁ <;> cases e₂ <;>
-    first | rfl | (simp only [EngineError.code] at h; exact absurd h (by decide))
+  code_injective EngineError.code
 
 /-- Two reasons with one code come from one constructor. -/
 theorem PayloadError.code_injective (e₁ e₂ : PayloadError) (h : e₁.code = e₂.code) :
     e₁.ctorIdx = e₂.ctorIdx := by
-  cases e₁ <;> cases e₂ <;>
-    first | rfl | (simp only [PayloadError.code] at h; exact absurd h (by decide))
+  code_injective PayloadError.code
 
 /-- Some version of the method takes a fork exactly when the fork is from Paris on. -/
 theorem exists_acceptsFork_iff (fork : Fork) :
@@ -242,8 +211,8 @@ theorem nodup_types_of_validRequests {requests : List ByteArray}
 
 /-- Decoded parameters are an array of as many values as the version takes, none of them null. -/
 private theorem params_of_newPayloadParams_ok {version : Nat} {params : Lean.Json}
-    {x : Json.AnyPayload × Option (ByteArray × UInt64) × Option (List Hash32) × Option Hash32 ×
-      Option (List ByteArray)}
+    {x : Json.AnyPayload × Option (ByteArray × UInt64) × Option (List VersionedHash) ×
+      Option Hash32 × Option (List ByteArray)}
     (h : newPayloadParams version params = .ok x) :
     ∃ items : Array Lean.Json, params = .arr items ∧ items.size = paramCount version ∧
       ∀ j ∈ items, j.isNull = false := by
@@ -583,16 +552,15 @@ theorem newPayloadOnChain_six_ne_valid {transition : TransitionConfiguration}
 open EthLib.Serialization.JsonRpc (listJson dataJson array fixed bytes array_listJson
   fixed_dataJson bytes_hexString) in
 /-- The hashes, the root and the requests read back from their JSON. -/
-private theorem params_read_back (hashes : List Hash32) (beaconRoot : Hash32)
+private theorem params_read_back (hashes : List VersionedHash) (beaconRoot : Hash32)
     (requests : List ByteArray) :
-    array "expectedBlobVersionedHashes" (fun j => fixed "versioned hash" 32 j)
-        (listJson (dataJson ·.toList) hashes) = .ok hashes ∧
+    array "expectedBlobVersionedHashes" (Execution.Rpc.versionedHash "versioned hash")
+        (listJson Execution.Rpc.versionedHashJson hashes) = .ok hashes ∧
       fixed "parentBeaconBlockRoot" 32 (dataJson beaconRoot.toList) = .ok beaconRoot ∧
       array "executionRequests" (bytes "request")
         (listJson (dataJson ·.data.toList) requests) = .ok requests := by
-  refine ⟨?_, fixed_dataJson _ beaconRoot false, ?_⟩
-  · rw [array_listJson]
-    simpa using mapM_eq_ok_map (g := id) fun x _ => fixed_dataJson "versioned hash" x false
+  refine ⟨Execution.Rpc.array_versionedHash_listJson _ _ hashes,
+    fixed_dataJson _ beaconRoot false, ?_⟩
   · rw [array_listJson]
     refine (mapM_eq_ok_map (g := id) fun r _ => ?_).trans (by simp)
     rw [dataJson, bytes_hexString]
@@ -604,9 +572,10 @@ open EthLib.Serialization.JsonRpc (listJson dataJson array fixed bytes array_lis
 private theorem newPayloadParams_arr {version : Nat} {pj : Lean.Json} {any : Json.AnyPayload}
     {amsterdam : Option (ByteArray × UInt64)} (hv : 1 ≤ version ∧ version ≤ 5)
     (hnull : pj.isNull = false) (hp : payloadParam version pj = .ok (any, amsterdam))
-    (hashes : List Hash32) (beaconRoot : Hash32) (requests : List ByteArray) :
+    (hashes : List VersionedHash) (beaconRoot : Hash32) (requests : List ByteArray) :
     newPayloadParams version (.arr ([pj] ++
-      (if 3 ≤ version then [listJson (dataJson ·.toList) hashes, dataJson beaconRoot.toList]
+      (if 3 ≤ version then
+          [listJson Execution.Rpc.versionedHashJson hashes, dataJson beaconRoot.toList]
         else []) ++
       (if 4 ≤ version then [listJson (dataJson ·.data.toList) requests] else [])).toArray) =
       .ok (any, amsterdam, if 3 ≤ version then some hashes else none,
@@ -614,7 +583,8 @@ private theorem newPayloadParams_arr {version : Nat} {pj : Lean.Json} {any : Jso
         if 4 ≤ version then some requests else none) := by
   -- Each value after the payload reads back, and none of them is null.
   obtain ⟨hh, hb, hr⟩ := params_read_back hashes beaconRoot requests
-  have nh : (listJson (dataJson ·.toList) hashes).isNull = false := Base.Toolchain.Json.isNull_arr _
+  have nh : (listJson Execution.Rpc.versionedHashJson hashes).isNull = false :=
+    Base.Toolchain.Json.isNull_arr _
   have nr : (listJson (dataJson ·.data.toList) requests).isNull = false :=
     Base.Toolchain.Json.isNull_arr _
   have nb : (dataJson beaconRoot.toList).isNull = false := Base.Toolchain.Json.isNull_str _
@@ -660,7 +630,7 @@ The hashes and the root read back from version 3, and the requests from version 
 The payload reads back as one whose form at its fork is the given payload. -/
 theorem newPayloadParams_json_of_structure {fork : Fork} {version : Nat}
     (payload : ExecutionPayload fork) (amsterdam : Option (ByteArray × UInt64))
-    (hashes : List Hash32) (beaconRoot : Hash32) (requests : List ByteArray)
+    (hashes : List VersionedHash) (beaconRoot : Hash32) (requests : List ByteArray)
     (hv : 1 ≤ version ∧ version ≤ 5)
     (layout : version < 5 → acceptsStructure version
       (if .dencun ≤ fork then 3 else if .shapella ≤ fork then 2 else 1) = true)
@@ -712,7 +682,7 @@ The hashes and the root read back from version 3, and the requests from version 
 
 The payload reads back as one whose form at its fork is the given payload. -/
 theorem newPayloadParams_json {fork : Fork} {version : Nat} (payload : ExecutionPayload fork)
-    (amsterdam : Option (ByteArray × UInt64)) (hashes : List Hash32) (beaconRoot : Hash32)
+    (amsterdam : Option (ByteArray × UInt64)) (hashes : List VersionedHash) (beaconRoot : Hash32)
     (requests : List ByteArray) (accepts : acceptsFork version fork = true)
     (below : version < 6) (extra : payload.extraData.size ≤ MAX_EXTRA_DATA_BYTES)
     (five : amsterdam.isSome ↔ 5 ≤ version) :
@@ -746,7 +716,7 @@ The first four values read back as those of version 5, and the fifth as the incl
 
 The payload reads back as one whose form at its fork is the given payload. -/
 theorem newPayloadV6Params_json {fork : Fork} (payload : ExecutionPayload fork)
-    (amsterdam : ByteArray × UInt64) (hashes : List Hash32) (beaconRoot : Hash32)
+    (amsterdam : ByteArray × UInt64) (hashes : List VersionedHash) (beaconRoot : Hash32)
     (requests : List ByteArray) (inclusionList : List ByteArray) (dencun : .dencun ≤ fork)
     (extra : payload.extraData.size ≤ MAX_EXTRA_DATA_BYTES) :
     ∃ any, newPayloadV6Params
@@ -765,7 +735,8 @@ theorem newPayloadV6Params_json {fork : Fork} (payload : ExecutionPayload fork)
   obtain ⟨hh, hb, hr⟩ := params_read_back hashes beaconRoot requests
   have np : (Json.executionPayloadV4Json payload accessList slot).isNull = false :=
     Base.Toolchain.Json.isNull_mkObj _
-  have nh : (listJson (dataJson ·.toList) hashes).isNull = false := Base.Toolchain.Json.isNull_arr _
+  have nh : (listJson Execution.Rpc.versionedHashJson hashes).isNull = false :=
+    Base.Toolchain.Json.isNull_arr _
   have nr : (listJson (dataJson ·.data.toList) requests).isNull = false :=
     Base.Toolchain.Json.isNull_arr _
   have nb : (dataJson beaconRoot.toList).isNull = false := Base.Toolchain.Json.isNull_str _
@@ -778,8 +749,8 @@ theorem newPayloadV6Params_json {fork : Fork} (payload : ExecutionPayload fork)
 /-- Decoded parameters whose first value is a payload decode that payload. -/
 private theorem payloadParam_of_newPayloadParams {version : Nat} {pj : Lean.Json}
     {rest : List Lean.Json}
-    {x : Json.AnyPayload × Option (ByteArray × UInt64) × Option (List Hash32) × Option Hash32 ×
-      Option (List ByteArray)}
+    {x : Json.AnyPayload × Option (ByteArray × UInt64) × Option (List VersionedHash) ×
+      Option Hash32 × Option (List ByteArray)}
     (h : newPayloadParams version (.arr (pj :: rest).toArray) = .ok x) :
     ∃ a, payloadParam version pj = .ok a := by
   unfold newPayloadParams at h
@@ -799,10 +770,10 @@ private theorem payloadParam_of_newPayloadParams {version : Nat} {pj : Lean.Json
 The structure of version 4 must come exactly from version 5, and only from Dencun on. -/
 theorem extraData_le_of_newPayloadParams_json {fork : Fork} {version : Nat}
     {payload : ExecutionPayload fork} {amsterdam : Option (ByteArray × UInt64)}
-    {hashes : List Hash32} {beaconRoot : Hash32} {requests : List ByteArray}
+    {hashes : List VersionedHash} {beaconRoot : Hash32} {requests : List ByteArray}
     (five : amsterdam.isSome ↔ 5 ≤ version) (dencun : amsterdam.isSome → .dencun ≤ fork)
-    {x : Json.AnyPayload × Option (ByteArray × UInt64) × Option (List Hash32) × Option Hash32 ×
-      Option (List ByteArray)}
+    {x : Json.AnyPayload × Option (ByteArray × UInt64) × Option (List VersionedHash) ×
+      Option Hash32 × Option (List ByteArray)}
     (h : newPayloadParams version
       (newPayloadParamsJson version payload amsterdam hashes beaconRoot requests) = .ok x) :
     payload.extraData.size ≤ MAX_EXTRA_DATA_BYTES := by
@@ -840,7 +811,7 @@ The block comes from the payload at that fork, with the decoded root, requests, 
 Its blob transactions must carry the decoded versioned hashes, when they are given. -/
 theorem checkNewPayload_eq_ok {config : ChainConfig} {version : Nat}
     {params : Lean.Json} {any : Json.AnyPayload} {amsterdam : Option (ByteArray × UInt64)}
-    {hashes : Option (List Hash32)} {beaconRoot : Option Hash32}
+    {hashes : Option (List VersionedHash)} {beaconRoot : Option Hash32}
     {requests : Option (List ByteArray)}
     (hDecode : newPayloadParams version params =
       .ok (any, amsterdam, hashes, beaconRoot, requests))

@@ -2,27 +2,14 @@ module
 
 public import EthLib.Networking.Devp2p.Session
 public import EthLib.Networking.Proofs.Devp2p.P2p
+import EthLib.Base.Proofs.CodeInjective
 
 /-!
 # Proofs: the session of an RLPx connection
 
-Before the peer's Hello, every frame other than Hello and Disconnect is rejected.
-
 The peer's Hello opens the session.
 
-The session then holds the shared capabilities and the Snappy flag of both Hello messages.
-
-Each ID that a shared capability holds routes to that capability, at its relative ID.
-
-Two IDs never route to one place, and both peers route every ID the same way.
-
-No ID below `0x10` routes to a capability.
-
-In an active session, a Ping asks for exactly one Pong and leaves the session as it was.
-
-After a Disconnect, every frame is rejected.
-
-The reasons of Disconnect read back from their numbers.
+Each ID that a shared capability holds then routes to that capability, at its relative ID.
 -/
 
 @[expose] public section
@@ -53,7 +40,7 @@ theorem receive_beforeHello {length : Capability → Nat} {ours : Hello} {frameD
 
 /-- Before the peer's Hello, the peer's Hello opens the session.
 
-The session then holds the Snappy flag of both versions and the IDs of the shared capabilities. -/
+The session holds the shared capabilities with their IDs, and the Snappy flag of both versions. -/
 theorem receive_hello_active {length : Capability → Nat} {ours theirs : Hello}
     {data frame : ByteArray} (encoded : encode (Message.hello theirs).toItem = .ok data)
     (framed : encodeMessage false (.hello theirs) = .ok frame) :
@@ -159,7 +146,6 @@ theorem SessionError.code_injective (e₁ e₂ : SessionError) (h : e₁.code = 
 theorem SessionError.code_message {e₁ e₂ : P2pError}
     (h : (SessionError.message e₁).code = (SessionError.message e₂).code) :
     e₁.ctorIdx = e₂.ctorIdx := by
-  cases e₁ <;> cases e₂ <;>
-    first | rfl | (simp only [SessionError.code, P2pError.code] at h; exact absurd h (by decide))
+  code_injective SessionError.code, P2pError.code
 
 end EthLib.Networking.Devp2p

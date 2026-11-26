@@ -9,37 +9,11 @@ public import EthLib.Cryptography.Proofs.Bls.SignaturesCorrect
 /-!
 # Proofs: the bid, the envelope and the signatures of an honest builder
 
-A bid is built exactly when its fields are those of its payload, its state and its inputs.
+It states what a bid and an envelope hold when they are built.
 
-A self-built bid is from the reserved builder index, with no value and the signature at infinity.
-
-It passes the checks of the builder of a bid, on every state.
-
-An envelope is built exactly when it reveals its payload and requests, and names its block.
-
-It must also name the parent of the block and the builder of the bid of the block.
-
-From Gloas, take a block that passes its steps, with a bid that a builder built from a payload.
-
-The block must also commit to the root of the state after it.
-
-The envelope of that payload then passes the checks of the block root and the parent root.
-
-It also passes the checks of the builder, the mix, the gas limit and the block hash.
-
-It passes the check of the root of the requests, and builds on the latest block hash.
-
-The slot of the bid is the slot of that state.
-
-A bid is signed under the domain of the epoch of its slot, and checked under the current one.
-
-The two domains agree when the bid is for a slot of the current epoch.
-
-An envelope is signed and checked under the domain of the current epoch.
+From Gloas, the envelope of a bid passes most checks against the state after the block of that bid.
 
 A bid or an envelope signed with the key of its signer passes its check.
-
-For a self-build, the signer of an envelope is the proposer of the latest block.
 -/
 
 @[expose] public section
@@ -140,17 +114,7 @@ theorem getExecutionPayloadEnvelope_eq_ok_iff {block : BeaconBlock preset fork}
 
 The block carries a bid that a builder built from the payload and its requests.
 
-The block passes its steps, and commits to the root of the state after it.
-
-The envelope then names that block, by the root that the check computes, and its parent.
-
-It agrees with the bid that the state keeps on the builder, the mix, the gas limit and the hash.
-
-It also agrees with that bid on the root of the requests.
-
-The slot of the bid is the slot of the state, so a payload for that slot passes the slot check.
-
-The payload also builds on the latest block hash of the state. -/
+The block passes its steps, and commits to the root of the state after it. -/
 theorem getExecutionPayloadEnvelope_checks {config : Config} {checks : SignatureChecks}
     {engine : ExecutionEngine preset fork} {pre post : BeaconState preset fork}
     (gloas : .glamsterdam ≤ fork) {block : BeaconBlock preset fork} {slot : Slot}
@@ -163,14 +127,21 @@ theorem getExecutionPayloadEnvelope_checks {config : Config} {checks : Signature
     (committed : SszType.hashTreeRoot post = .ok block.stateRoot)
     (enveloped : getExecutionPayloadEnvelope block gloas payload requests = .ok envelope) :
     let bid := post.latestExecutionPayloadBid gloas
+    -- The envelope then names that block, by the root that the check computes, and its parent.
     (∃ stateRoot, SszType.hashTreeRoot post = .ok stateRoot ∧
       SszType.hashTreeRoot { post.latestBlockHeader with stateRoot } =
         .ok envelope.beaconBlockRoot) ∧
     envelope.parentBeaconBlockRoot = post.latestBlockHeader.parentRoot ∧
+    -- It agrees with the state's bid on the builder, the mix, the gas limit and the block hash.
     envelope.builderIndex = bid.builderIndex ∧ envelope.payload.prevRandao = bid.prevRandao ∧
     envelope.payload.gasLimit = bid.gasLimit ∧ envelope.payload.blockHash = bid.blockHash ∧
+    -- It also agrees with that bid on the root of the requests.
     SszType.hashTreeRoot envelope.executionRequests = .ok bid.executionRequestsRoot ∧
+    -- The slot of the bid is the slot of the state.
+    --
+    -- So a payload for that slot passes the slot check.
     slot = post.slot ∧
+    -- The payload also builds on the latest block hash of the state.
     envelope.payload.parentHash = post.latestBlockHash gloas := by
   obtain ⟨blockRoot, rfl, rfl, builder, parentRoot⟩ :=
     getExecutionPayloadEnvelope_eq_ok_iff.mp enveloped
@@ -193,19 +164,20 @@ theorem getExecutionPayloadEnvelope_checks {config : Config} {checks : Signature
 
 end Build
 
-/-- The domain of the current epoch is the default domain of a state. -/
-theorem getDomain_currentEpoch (config : Config) (domainType : DomainType) :
-    getDomain config state domainType (some (getCurrentEpoch state)) =
-      getDomain config state domainType :=
-  rfl
+/-- The root that a builder signs for a bid is the root of its check in a scheduled state.
 
-/-- A bid for a slot of the current epoch is signed under the domain of its check. -/
-theorem builderSigningRoot_bid {config : Config} {bid : ExecutionPayloadBid preset fork}
-    (current : computeEpochAtSlot preset bid.slot = getCurrentEpoch state) :
-    builderSigningRoot config state bid (some (computeEpochAtSlot preset bid.slot)) =
-      builderSigningRoot config state bid := by
-  rw [current]
-  rfl
+The checking state must give its current epoch the version that the schedule gives the bid. -/
+theorem builderSigningRoot_bid {config : Config} {signerFork : Base.Fork}
+    {signer : BeaconState preset signerFork} {bid : ExecutionPayloadBid preset fork} {root : Root}
+    (chain : signer.genesisValidatorsRoot = state.genesisValidatorsRoot)
+    (scheduled : state.forkVersions.versionAt (getCurrentEpoch state) =
+      config.computeForkVersion (computeEpochAtSlot preset bid.slot))
+    (rooted : executionPayloadBidSigningRoot config signer bid = .ok root) :
+    builderSigningRoot config state bid = .ok root := by
+  unfold executionPayloadBidSigningRoot at rooted
+  obtain ⟨domain, domained, rooted⟩ := bind_ok_iff.mp rooted
+  simp [builderSigningRoot, getDomain, liftAccessor, liftSsz, scheduled, ← chain, domained,
+    rooted, bind, Except.bind, Except.mapError]
 
 /-- A signature by a secret key, of a root that has a value, verifies under its public key.
 
@@ -228,22 +200,28 @@ private theorem verify_of_signed {key : Signatures.SecretKey}
 
 /-- A bid signed with the key of its builder passes the check of its signature.
 
-The bid must be for a slot of the current epoch, and its builder must have the public key. -/
+The builder may sign from a state of any fork on the chain, such as the last state before Gloas.
+
+The checking state must give its current epoch the version that the schedule gives the bid. -/
 theorem verifyExecutionPayloadBidSignature_of_sign {config : Config}
-    (gloas : .glamsterdam ≤ fork) {signed : SignedExecutionPayloadBid preset fork}
-    {key : Signatures.SecretKey} {builder : Builder}
+    (gloas : .glamsterdam ≤ fork) {signerFork : Base.Fork} {signer : BeaconState preset signerFork}
+    {signed : SignedExecutionPayloadBid preset fork} {key : Signatures.SecretKey}
+    {builder : Builder}
     (registered : getBuilder state gloas signed.message.builderIndex = .ok builder)
     (owned : builder.pubkey = Signatures.skToPk key)
-    (current : computeEpochAtSlot preset signed.message.slot = getCurrentEpoch state)
-    (signedBy : getExecutionPayloadBidSignature config state signed.message key =
+    (chain : signer.genesisValidatorsRoot = state.genesisValidatorsRoot)
+    (scheduled : state.forkVersions.versionAt (getCurrentEpoch state) =
+      config.computeForkVersion (computeEpochAtSlot preset signed.message.slot))
+    (signedBy : getExecutionPayloadBidSignature config signer signed.message key =
       .ok signed.signature) :
     verifyExecutionPayloadBidSignature config .bls state gloas signed = .ok true := by
   unfold getExecutionPayloadBidSignature at signedBy
-  rw [builderSigningRoot_bid current] at signedBy
   obtain ⟨root, rooted, verifies⟩ := verify_of_signed signedBy
+  -- The bid is signed under the scheduled version, and checked under the version of the state.
+  have checked := builderSigningRoot_bid chain scheduled (liftSsz_ok.mp rooted)
   unfold verifyExecutionPayloadBidSignature
   rw [show liftAccessor (getBuilder state gloas signed.message.builderIndex) = .ok builder by
-    rw [registered]; rfl, rooted]
+    rw [registered]; rfl, checked]
   show Except.ok (Signatures.verify builder.pubkey (packBytes root)
     signed.signature) = .ok true
   rw [owned]
@@ -276,6 +254,7 @@ theorem verifyExecutionPayloadEnvelopeSignature_of_sign {config : Config}
     (signedBy : getExecutionPayloadEnvelopeSignature config state signed.message key =
       .ok signed.signature) :
     verifyExecutionPayloadEnvelopeSignature config .bls state gloas signed = .ok true := by
+  -- An envelope is signed and checked under the domain of the current epoch.
   unfold getExecutionPayloadEnvelopeSignature at signedBy
   obtain ⟨root, rooted, verifies⟩ := verify_of_signed signedBy
   unfold verifyExecutionPayloadEnvelopeSignature

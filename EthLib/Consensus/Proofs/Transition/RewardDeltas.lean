@@ -12,13 +12,9 @@ For each validator of a registry within its limit, these proofs state its reward
 
 They cover the flag and inactivity deltas from Altair, and the attestation deltas before Altair.
 
-Each eligible validator appears once among the eligible indices, so a fold touches its entry once.
+Every quotient rounds down.
 
-The proposer of the earliest inclusion of a signer earns a share of the signer's base reward.
-
-The signer earns the rest, divided by its inclusion delay.
-
-Every quotient rounds down, and no sum or product overflows.
+No sum or product overflows.
 
 No EIP specifies these Phase 0 and Altair rules, so the theorems below state them.
 -/
@@ -40,6 +36,9 @@ A position is listed exactly when its validator is eligible.
 The eligibility of every validator of the registry is decided without an error. -/
 theorem getEligibleValidatorIndices_ok {eligible : List ValidatorIndex}
     (computed : getEligibleValidatorIndices state = .ok eligible) :
+    -- Each eligible validator appears once among the eligible indices.
+    --
+    -- So a fold over them touches its entry once.
     (eligible.map UInt64.toNat).Nodup ∧
       ∀ j (inside : j < state.validators.data.size), ∃ decided,
         isEligibleValidator (getPreviousEpoch state) state.validators.data[j] = .ok decided ∧
@@ -129,16 +128,6 @@ theorem foldlM_entry {σ ε β : Type} {step : σ → ValidatorIndex → Except 
 
 /-- One step of the flag deltas, read at the index of its own validator.
 
-For a validator that set the flag, the reward depends on the leak.
-
-In a leak it earns nothing; otherwise it earns the rounded share of the weighted base reward.
-
-That share is the participating increments over the active increments.
-
-A validator that did not set the flag pays the rounded weight of its base reward.
-
-It pays nothing for the head flag.
-
 Each amount is added to the entry, without overflow, and the other kind of delta stays. -/
 theorem addFlagDelta_getD_self {flagIndex : Fin PARTICIPATION_FLAG_WEIGHTS.length}
     {participated : Array Bool} {total participatingIncrements activeIncrements : Gwei}
@@ -146,11 +135,20 @@ theorem addFlagDelta_getD_self {flagIndex : Fin PARTICIPATION_FLAG_WEIGHTS.lengt
     (computed : addFlagDelta state flagIndex participated total participatingIncrements
       activeIncrements deltas index = .ok next) :
     ∃ base, getBaseReward state total index = .ok base ∧
+      -- For a validator that set the flag, the reward depends on the leak.
       (participated.getD index.toNat false = true → ∃ leak, isInInactivityLeak state = .ok leak ∧
+        -- In a leak it earns nothing.
+        --
+        -- Otherwise it earns the rounded share of the weighted base reward.
+        --
+        -- That share is the participating increments over the active increments.
         (next.1.getD index.toNat 0).toNat = (deltas.1.getD index.toNat 0).toNat +
           (if leak then 0 else base.toNat * PARTICIPATION_FLAG_WEIGHTS[flagIndex].toNat *
             participatingIncrements.toNat / (activeIncrements.toNat * WEIGHT_DENOMINATOR.toNat)) ∧
         next.2.getD index.toNat 0 = deltas.2.getD index.toNat 0) ∧
+      -- A validator that did not set the flag pays the rounded weight of its base reward.
+      --
+      -- It pays nothing for the head flag.
       (participated.getD index.toNat false = false →
         next.1.getD index.toNat 0 = deltas.1.getD index.toNat 0 ∧
         (next.2.getD index.toNat 0).toNat = (deltas.2.getD index.toNat 0).toNat +
@@ -223,24 +221,6 @@ theorem markIndices_getD_iff (within : state.RegistryWithinLimit) {j : Nat}
 
 /-- For a registry within its limit, the flag deltas of each validator, from Altair.
 
-A validator that is not eligible has no reward and no penalty.
-
-An eligible validator among the unslashed participants pays no penalty.
-
-Its reward depends on the leak.
-
-In a leak it earns nothing.
-
-Otherwise it earns its base reward times the weight of the flag times the participating increments.
-
-That product is divided by the active increments times the weight denominator, rounding down.
-
-An eligible validator that is not among them earns nothing.
-
-It pays its base reward times the weight of the flag, over the weight denominator, rounding down.
-
-For the head flag it pays nothing.
-
 The increments are the balances divided by the effective balance increment, rounding down. -/
 theorem getFlagIndexDeltas_getD {altair : .altair ≤ fork}
     {flagIndex : Fin PARTICIPATION_FLAG_WEIGHTS.length} {rewards penalties : Array Gwei}
@@ -253,15 +233,35 @@ theorem getFlagIndexDeltas_getD {altair : .altair ≤ fork}
       getTotalActiveBalance state = .ok total ∧
       ∀ j (inside : j < state.validators.data.size), ∃ eligible,
         isEligibleValidator (getPreviousEpoch state) state.validators.data[j] = .ok eligible ∧
+        -- A validator that is not eligible has no reward and no penalty.
         (eligible = false → rewards.getD j 0 = 0 ∧ penalties.getD j 0 = 0) ∧
         (eligible = true → ∃ base, getBaseReward state total j.toUInt64 = .ok base ∧
+          -- An eligible validator among the unslashed participants pays no penalty.
+          --
+          -- Its reward depends on the leak.
           (j.toUInt64 ∈ participating → ∃ leak, isInInactivityLeak state = .ok leak ∧
+            -- In a leak it earns nothing.
+            --
+            -- Otherwise multiply its base reward by the weight of the flag.
+            --
+            -- Multiply that product by the participating increments.
+            --
+            -- It earns that product divided by the active increments times the weight denominator.
+            --
+            -- The quotient rounds down.
             (rewards.getD j 0).toNat = (if leak then 0 else
               base.toNat * PARTICIPATION_FLAG_WEIGHTS[flagIndex].toNat *
                 (participatingBalance.toNat / preset.EFFECTIVE_BALANCE_INCREMENT.toNat) /
                 (total.toNat / preset.EFFECTIVE_BALANCE_INCREMENT.toNat *
                   WEIGHT_DENOMINATOR.toNat)) ∧
             penalties.getD j 0 = 0) ∧
+          -- An eligible validator that is not among them earns nothing.
+          --
+          -- It pays its base reward times the weight of the flag, over the weight denominator.
+          --
+          -- That quotient rounds down.
+          --
+          -- For the head flag it pays nothing.
           (j.toUInt64 ∉ participating → rewards.getD j 0 = 0 ∧
             (penalties.getD j 0).toNat = (if flagIndex.val.toUInt64 = TIMELY_HEAD_FLAG_INDEX then 0
               else base.toNat * PARTICIPATION_FLAG_WEIGHTS[flagIndex].toNat /
@@ -311,6 +311,87 @@ theorem getFlagIndexDeltas_getD {altair : .altair ≤ fork}
         absent (UInt64.toNat_inj.mp (named.trans small.symm) ▸ member), ?_⟩
       simp only [Array.getD_eq_getD_getElem?, result.2, penalty, start.2]
       simp
+
+/-- One step of the flag deltas adds less than `2^58` to both deltas of its validator.
+
+A reward is a 64-bit product over a nonzero multiple of the weight denominator, 64.
+
+A penalty is a 64-bit product over that denominator. -/
+theorem addFlagDelta_getD_self_lt {flagIndex : Fin PARTICIPATION_FLAG_WEIGHTS.length}
+    {participated : Array Bool} {total participatingIncrements activeIncrements : Gwei}
+    {deltas next : Array Gwei × Array Gwei} {index : ValidatorIndex}
+    (computed : addFlagDelta state flagIndex participated total participatingIncrements
+      activeIncrements deltas index = .ok next) :
+    (next.1.getD index.toNat 0).toNat < (deltas.1.getD index.toNat 0).toNat + 2 ^ 58 ∧
+      (next.2.getD index.toNat 0).toNat < (deltas.2.getD index.toNat 0).toNat + 2 ^ 58 := by
+  have weight : WEIGHT_DENOMINATOR.toNat = 64 := rfl
+  obtain ⟨rewards, penalties⟩ := deltas
+  simp only [addFlagDelta, bind_ok_iff] at computed
+  obtain ⟨_, _, computed⟩ := computed
+  split at computed
+  · simp only [bind_ok_iff] at computed
+    obtain ⟨_, _, computed⟩ := computed
+    split at computed
+    -- In a leak the step keeps both entries.
+    · simp only [pure, Except.pure, Except.ok.injEq] at computed
+      subst computed
+      omega
+    · simp only [bind_ok_iff, liftAccessor_ok, liftArith, mapError_ok_iff, pure, Except.pure,
+        Except.ok.injEq] at computed
+      obtain ⟨numerator, -, denominator, denominatorOk, reward, rewardOk, added, addedOk, rfl⟩ :=
+        computed
+      rw [mulChecked_ok_iff, weight] at denominatorOk
+      rw [divChecked_ok_iff] at rewardOk
+      -- The denominator is not zero, so it is at least the weight denominator.
+      have nonzero : denominator.toNat ≠ 0 := fun zero =>
+        rewardOk.1 (UInt64.toNat_inj.mp (by rw [zero, UInt64.toNat_zero]))
+      have least : 64 ≤ denominator.toNat := by omega
+      have quotient : reward.toNat ≤ numerator.toNat / 64 := by
+        rw [rewardOk.2]
+        exact Nat.div_le_div_left least (by decide)
+      have wide := numerator.toNat_lt_size
+      simp only [UInt64.size] at wide
+      dsimp only
+      rw [addDelta_getD_self addedOk]
+      omega
+  · split at computed
+    -- A validator that did not set the head flag pays no penalty.
+    · simp only [pure, Except.pure, Except.ok.injEq] at computed
+      subst computed
+      omega
+    · simp only [bind_ok_iff, liftAccessor_ok, liftArith, mapError_ok_iff, pure, Except.pure,
+        Except.ok.injEq] at computed
+      obtain ⟨scaled, -, added, addedOk, rfl⟩ := computed
+      have wide := scaled.toNat_lt_size
+      simp only [UInt64.size] at wide
+      dsimp only
+      rw [addDelta_getD_self addedOk, UInt64.toNat_div, weight]
+      omega
+
+/-- Each reward and each penalty of the flag deltas from Altair is below `2^58`. -/
+theorem getFlagIndexDeltas_getD_lt {altair : .altair ≤ fork}
+    {flagIndex : Fin PARTICIPATION_FLAG_WEIGHTS.length} {rewards penalties : Array Gwei}
+    (computed : getFlagIndexDeltas state altair flagIndex = .ok (rewards, penalties)) (j : Nat) :
+    (rewards.getD j 0).toNat < 2 ^ 58 ∧ (penalties.getD j 0).toNat < 2 ^ 58 := by
+  simp only [getFlagIndexDeltas, bind_ok_iff, liftAccessor_ok] at computed
+  obtain ⟨_, -, _, -, _, -, eligible, eligibleOk, folded⟩ := computed
+  -- Only the step of the validator at the position changes its entries, and they start at zero.
+  have entry := foldlM_entry (entry := fun deltas : Array Gwei × Array Gwei =>
+      (deltas.1.getD j 0, deltas.2.getD j 0)) (j := j)
+    (fun _ _ _ step other => addFlagDelta_getD_of_ne step (Ne.symm other))
+    (getEligibleValidatorIndices_ok eligibleOk).1 folded
+  simp only [replicate_getD_zero] at entry
+  by_cases named : ∃ index ∈ eligible, index.toNat = j
+  · obtain ⟨index, member, same⟩ := named
+    obtain ⟨last, next, start, step, ended⟩ := entry.2 index member same
+    simp only [Prod.mk.injEq] at start ended
+    have bound := addFlagDelta_getD_self_lt step
+    rw [same, start.1, start.2, UInt64.toNat_zero, Nat.zero_add, ← ended.1, ← ended.2] at bound
+    exact bound
+  · have kept := entry.1 fun index member same => named ⟨index, member, same⟩
+    simp only [Prod.mk.injEq] at kept
+    rw [kept.1, kept.2, UInt64.toNat_zero]
+    omega
 
 /-! ## The inactivity deltas from Altair -/
 
@@ -371,16 +452,6 @@ theorem getValidator_toUInt64 (within : state.RegistryWithinLimit) {j : Nat}
 
 /-- For a registry within its limit, the inactivity deltas of each validator, from Altair.
 
-They hold no reward.
-
-A validator pays no inactivity penalty if it is not eligible.
-
-Neither does one among the unslashed validators with a timely target.
-
-Any other eligible validator pays its effective balance times its inactivity score.
-
-That product is divided by the score bias times the penalty quotient, rounding down.
-
 This holds in a leak and outside one. -/
 theorem getInactivityPenaltyDeltas_getD_of_altair {config : Config} (altair : .altair ≤ fork)
     {rewards penalties : Array Gwei} (within : state.RegistryWithinLimit)
@@ -389,8 +460,15 @@ theorem getInactivityPenaltyDeltas_getD_of_altair {config : Config} (altair : .a
         (getPreviousEpoch state) = .ok matching ∧
       ∀ j (inside : j < state.validators.data.size), ∃ eligible,
         isEligibleValidator (getPreviousEpoch state) state.validators.data[j] = .ok eligible ∧
+        -- The deltas hold no reward.
         rewards.getD j 0 = 0 ∧
+        -- A validator pays no inactivity penalty if it is not eligible.
+        --
+        -- Neither does one among the unslashed validators with a timely target.
         (eligible = false ∨ j.toUInt64 ∈ matching → penalties.getD j 0 = 0) ∧
+        -- Any other eligible validator pays its effective balance times its inactivity score.
+        --
+        -- That product is divided by the score bias times the penalty quotient, rounding down.
         (eligible = true → j.toUInt64 ∉ matching → ∃ score,
           (state.inactivityScores altair).data[j]? = some score ∧
           (penalties.getD j 0).toNat = state.validators.data[j].effectiveBalance.toNat *
@@ -436,20 +514,81 @@ theorem getInactivityPenaltyDeltas_getD_of_altair {config : Config} (altair : .a
     rw [result, penalty, start]
     simp
 
+/-- One step of the inactivity penalties from Altair adds at most a bound to its validator.
+
+That bound is `floor((2^64 - 1) / (B * Q))`, for score bias `B` and penalty quotient `Q`. -/
+private theorem addInactivityScorePenalty_getD_self_le {config : Config}
+    {altair : .altair ≤ fork} {targetMatched : Array Bool} {penalties next : Array Gwei}
+    {index : ValidatorIndex}
+    (computed : addInactivityScorePenalty config state altair targetMatched penalties index =
+      .ok next) :
+    (next.getD index.toNat 0).toNat ≤ (penalties.getD index.toNat 0).toNat +
+      (2 ^ 64 - 1) / (config.INACTIVITY_SCORE_BIAS.toNat *
+        (parameters preset fork).INACTIVITY_PENALTY_QUOTIENT.toNat) := by
+  unfold addInactivityScorePenalty at computed
+  split at computed
+  -- A validator that hit the target pays nothing.
+  · cases computed
+    exact Nat.le_add_right _ _
+  · simp only [bind_ok_iff] at computed
+    obtain ⟨_, _, computed⟩ := computed
+    split at computed
+    · simp only [bind_ok_iff, liftAccessor_ok, liftArith, mapError_ok_iff] at computed
+      obtain ⟨numerator, -, denominator, denominatorOk, penalty, penaltyOk, added⟩ := computed
+      rw [mulChecked_ok_iff] at denominatorOk
+      rw [divChecked_ok_iff] at penaltyOk
+      rw [addDelta_getD_self added, penaltyOk.2, ← denominatorOk.2]
+      -- The numerator has 64 bits, so it is at most `2^64 - 1`.
+      have wide := numerator.toNat_lt_size
+      simp only [UInt64.size] at wide
+      exact Nat.add_le_add_left (Nat.div_le_div_right (by omega)) _
+    · cases computed
+
+/-- From Altair, each inactivity penalty is at most `floor((2^64 - 1) / (B * Q))`.
+
+Here `B` is the inactivity score bias and `Q` the inactivity penalty quotient of the fork. -/
+theorem getInactivityPenaltyDeltas_getD_le_of_altair {config : Config} (altair : .altair ≤ fork)
+    {rewards penalties : Array Gwei}
+    (computed : getInactivityPenaltyDeltas config state = .ok (rewards, penalties)) (j : Nat) :
+    (penalties.getD j 0).toNat ≤ (2 ^ 64 - 1) / (config.INACTIVITY_SCORE_BIAS.toNat *
+      (parameters preset fork).INACTIVITY_PENALTY_QUOTIENT.toNat) := by
+  unfold getInactivityPenaltyDeltas at computed
+  dsimp only at computed
+  simp only [altair, ↓reduceDIte, bind_ok_iff, liftAccessor_ok, pure, Except.pure,
+    Except.ok.injEq, Prod.mk.injEq] at computed
+  obtain ⟨_, -, eligible, eligibleOk, final, folded, -, rfl⟩ := computed
+  -- Only the step of the validator at the position changes its entry, and it starts at zero.
+  have entry := foldlM_entry (entry := fun deltas : Array Gwei => deltas.getD j 0) (j := j)
+    (fun _ _ _ step other => addInactivityScorePenalty_getD_of_ne step (Ne.symm other))
+    (getEligibleValidatorIndices_ok eligibleOk).1 folded
+  rw [replicate_getD_zero] at entry
+  by_cases named : ∃ index ∈ eligible, index.toNat = j
+  · obtain ⟨index, member, same⟩ := named
+    obtain ⟨last, next, start, step, ended⟩ := entry.2 index member same
+    have bound := addInactivityScorePenalty_getD_self_le step
+    rw [same, start, UInt64.toNat_zero, Nat.zero_add] at bound
+    rw [ended]
+    exact bound
+  · rw [entry.1 fun index member same => named ⟨index, member, same⟩, UInt64.toNat_zero]
+    exact Nat.zero_le _
+
 /-! ## The deltas of each kind of vote before Altair -/
 
 /-- A validator whose vote matches pays no penalty for that kind of vote.
 
-Its reward depends on the leak.
-
-In a leak it earns its base reward.
-
-Otherwise it earns its base reward times the attesting increments, over the active increments.
-
-That quotient rounds down, and so do the increments. -/
+Its reward depends on the leak. -/
 theorem componentDelta_matched {base attestingBalance total reward penalty : Gwei}
     (computed : componentDelta state true base attestingBalance total = .ok (reward, penalty)) :
     ∃ leak, isInInactivityLeak state = .ok leak ∧ penalty = 0 ∧
+      -- In a leak it earns its base reward.
+      --
+      -- Otherwise it earns its base reward times the attesting increments.
+      --
+      -- That product is divided by the active increments.
+      --
+      -- That quotient rounds down.
+      --
+      -- The increments round down too.
       reward.toNat = if leak then base.toNat else
         base.toNat * (attestingBalance.toNat / preset.EFFECTIVE_BALANCE_INCREMENT.toNat) /
           (total.toNat / preset.EFFECTIVE_BALANCE_INCREMENT.toNat) := by
@@ -468,21 +607,7 @@ theorem componentDelta_matched {base attestingBalance total reward penalty : Gwe
 
 /-- For a registry within its limit, the deltas of each validator for one kind of vote.
 
-The matching votes are those of some pending attestations.
-
-A validator that is not eligible has no reward and no penalty.
-
-An eligible validator among the unslashed signers pays no penalty.
-
-Its reward depends on the leak.
-
-In a leak it earns its base reward.
-
-Otherwise it earns its base reward times the attesting increments, over the active increments.
-
-That quotient rounds down, and so do the increments.
-
-An eligible validator that is not among them earns nothing and pays its base reward. -/
+The matching votes are those of some pending attestations. -/
 theorem getAttestationComponentDeltas_getD {attestations : Array (PendingAttestation preset)}
     {rewards penalties : Array Gwei} (within : state.RegistryWithinLimit)
     (computed : getAttestationComponentDeltas state attestations = .ok (rewards, penalties)) :
@@ -491,13 +616,27 @@ theorem getAttestationComponentDeltas_getD {attestations : Array (PendingAttesta
       getTotalBalance state attesters = .ok attestingBalance ∧
       ∀ j (inside : j < state.validators.data.size), ∃ eligible,
         isEligibleValidator (getPreviousEpoch state) state.validators.data[j] = .ok eligible ∧
+        -- A validator that is not eligible has no reward and no penalty.
         (eligible = false → rewards.getD j 0 = 0 ∧ penalties.getD j 0 = 0) ∧
         (eligible = true → ∃ base, getBaseReward state total j.toUInt64 = .ok base ∧
+          -- An eligible validator among the unslashed signers pays no penalty.
+          --
+          -- Its reward depends on the leak.
           (j.toUInt64 ∈ attesters → ∃ leak, isInInactivityLeak state = .ok leak ∧
+            -- In a leak it earns its base reward.
+            --
+            -- Otherwise it earns its base reward times the attesting increments.
+            --
+            -- That product is divided by the active increments.
+            --
+            -- That quotient rounds down.
+            --
+            -- The increments round down too.
             (rewards.getD j 0).toNat = (if leak then base.toNat else
               base.toNat * (attestingBalance.toNat / preset.EFFECTIVE_BALANCE_INCREMENT.toNat) /
                 (total.toNat / preset.EFFECTIVE_BALANCE_INCREMENT.toNat)) ∧
             penalties.getD j 0 = 0) ∧
+          -- An eligible validator that is not among them earns nothing and pays its base reward.
           (j.toUInt64 ∉ attesters → rewards.getD j 0 = 0 ∧ penalties.getD j 0 = base)) := by
   have whole := computed
   simp only [getAttestationComponentDeltas, bind_ok_iff, liftAccessor_ok] at computed
@@ -573,21 +712,19 @@ theorem addInactivityPenalty_getD_of_ne {total : Gwei} {delay : Epoch}
 
 /-- One step of the inactivity penalties before Altair, read at the index of its own validator.
 
-The validator pays four base rewards less the proposer share of one.
-
-If it missed the target, it also pays its effective balance times the finality delay.
-
-That product is divided by the penalty quotient, rounding down.
-
 The amounts are added to the entry, without overflow or underflow. -/
 theorem addInactivityPenalty_getD_self {total : Gwei} {delay : Epoch}
     {targetMatched : Array Bool} {penalties next : Array Gwei} {index : ValidatorIndex}
     (computed : addInactivityPenalty state total delay targetMatched penalties index = .ok next) :
     ∃ base, getBaseReward state total index = .ok base ∧
+      -- The validator pays four base rewards less the proposer share of one.
       (targetMatched.getD index.toNat false = true →
         (next.getD index.toNat 0).toNat = (penalties.getD index.toNat 0).toNat +
           (BASE_REWARDS_PER_EPOCH.toNat * base.toNat -
             base.toNat / preset.PROPOSER_REWARD_QUOTIENT.toNat)) ∧
+      -- If it missed the target, it also pays its effective balance times the finality delay.
+      --
+      -- That product is divided by the penalty quotient, rounding down.
       (targetMatched.getD index.toNat false = false → ∃ validator,
         getValidator state index = .ok validator ∧
         (next.getD index.toNat 0).toNat = (penalties.getD index.toNat 0).toNat +
@@ -615,21 +752,13 @@ theorem addInactivityPenalty_getD_self {total : Gwei} {delay : Epoch}
 
 /-- For a registry within its limit, the inactivity deltas of each validator, before Altair.
 
-They hold no reward, and outside a leak no penalty.
-
-In a leak, a validator that is not eligible pays nothing.
-
-An eligible validator pays four base rewards less the proposer share of one.
-
-If it is not among the unslashed signers of the target, it also pays more.
-
-That amount is its effective balance times the finality delay, over the penalty quotient.
-
 The quotients round down. -/
 theorem getInactivityPenaltyDeltas_getD_of_lt_altair {config : Config} (before : fork < .altair)
     {rewards penalties : Array Gwei} (within : state.RegistryWithinLimit)
     (computed : getInactivityPenaltyDeltas config state = .ok (rewards, penalties)) :
+    -- The deltas hold no reward.
     (∀ j, rewards.getD j 0 = 0) ∧ ∃ leak, isInInactivityLeak state = .ok leak ∧
+      -- Outside a leak they hold no penalty.
       (leak = false → ∀ j, penalties.getD j 0 = 0) ∧
       (leak = true → ∃ attestations attesters total delay,
         getMatchingTargetAttestations state before (getPreviousEpoch state) = .ok attestations ∧
@@ -637,8 +766,16 @@ theorem getInactivityPenaltyDeltas_getD_of_lt_altair {config : Config} (before :
         getTotalActiveBalance state = .ok total ∧ getFinalityDelay state = .ok delay ∧
         ∀ j (inside : j < state.validators.data.size), ∃ eligible,
           isEligibleValidator (getPreviousEpoch state) state.validators.data[j] = .ok eligible ∧
+          -- In a leak, a validator that is not eligible pays nothing.
           (eligible = false → penalties.getD j 0 = 0) ∧
           (eligible = true → ∃ base, getBaseReward state total j.toUInt64 = .ok base ∧
+            -- An eligible validator pays four base rewards less the proposer share of one.
+            --
+            -- If it is not among the unslashed signers of the target, it also pays more.
+            --
+            -- Divide its effective balance times the finality delay by the penalty quotient.
+            --
+            -- The result is that extra amount.
             (penalties.getD j 0).toNat = BASE_REWARDS_PER_EPOCH.toNat * base.toNat -
               base.toNat / preset.PROPOSER_REWARD_QUOTIENT.toNat +
               (if j.toUInt64 ∈ attesters then 0 else
@@ -940,19 +1077,17 @@ theorem inclusionAttesterReward_ok_iff {base reward : Gwei} {inclusionDelay : Sl
 
 /-- One step of the inclusion rewards, for one attester.
 
-The attester has an earliest inclusion, with a nonzero inclusion delay.
-
-The proposer of that inclusion earns the proposer share of the base reward of the attester.
-
-The attester earns the rest of its base reward, divided by the inclusion delay, rounding down.
-
 The amounts are added to the entries, without overflow or underflow. -/
 theorem addInclusionReward_getD {total : Gwei}
     {earliest : Array (Option (PendingAttestation preset))} {rewards next : Array Gwei}
     {index : ValidatorIndex}
     (computed : addInclusionReward state total earliest rewards index = .ok next) :
+    -- The attester has an earliest inclusion, with a nonzero inclusion delay.
     ∃ attestation base, earliest.getD index.toNat none = some attestation ∧
       getBaseReward state total index = .ok base ∧ attestation.inclusionDelay ≠ 0 ∧
+      -- The proposer of that inclusion earns the proposer share of the base reward of the attester.
+      --
+      -- The attester earns the rest of its base reward over the inclusion delay, rounding down.
       ∀ j, (next.getD j 0).toNat = (rewards.getD j 0).toNat +
         ((if attestation.proposerIndex.toNat = j then
             base.toNat / preset.PROPOSER_REWARD_QUOTIENT.toNat else 0) +
@@ -1008,23 +1143,10 @@ theorem foldlM_addInclusionReward_getD {total : Gwei}
       · exact facts share member
     · rw [sums j, added j, List.map_cons, List.sum_cons, Nat.add_assoc]
 
-/-- The inclusion rewards before Altair, at each entry.
-
-They hold no penalty.
-
-Each unslashed signer of the matching source attestations has an earliest inclusion.
-
-That inclusion has a nonzero inclusion delay, and the signer has a base reward.
-
-The proposer of that inclusion earns the proposer share of that base reward.
-
-The signer earns the rest of its base reward, divided by the inclusion delay, rounding down.
-
-So a reward entry is the sum of these amounts over the signers, for the validator of that entry.
-
-A proposer earns the shares of every signer whose earliest inclusion it proposed. -/
+/-- The inclusion rewards before Altair, at each entry. -/
 theorem getInclusionDelayDeltas_getD (before : fork < .altair) {rewards penalties : Array Gwei}
     (computed : getInclusionDelayDeltas state before = .ok (rewards, penalties)) :
+    -- They hold no penalty.
     (∀ j, penalties.getD j 0 = 0) ∧
     ∃ attestations signers attesters total,
       getMatchingSourceAttestations state before (getPreviousEpoch state) = .ok attestations ∧
@@ -1033,9 +1155,21 @@ theorem getInclusionDelayDeltas_getD (before : fork < .altair) {rewards penaltie
       getTotalActiveBalance state = .ok total ∧
       ∃ shares : List (ValidatorIndex × PendingAttestation preset × Gwei),
         shares.map (·.1) = attesters ∧
+        -- Each unslashed signer of the matching source attestations has an earliest inclusion.
+        --
+        -- That inclusion has a nonzero inclusion delay.
+        --
+        -- The signer has a base reward.
         (∀ share ∈ shares, (earliestInclusions state.validators.data.size
             (attestations.zip signers.toArray)).getD share.1.toNat none = some share.2.1 ∧
           getBaseReward state total share.1 = .ok share.2.2 ∧ share.2.1.inclusionDelay ≠ 0) ∧
+        -- The proposer of that inclusion earns the proposer share of that base reward.
+        --
+        -- The signer earns the rest of its base reward over the inclusion delay, rounding down.
+        --
+        -- So a reward entry sums, over the signers, the amounts for the validator of that entry.
+        --
+        -- A proposer earns the shares of every signer whose earliest inclusion it proposed.
         ∀ j, (rewards.getD j 0).toNat = (shares.map fun share =>
           (if share.2.1.proposerIndex.toNat = j then
             share.2.2.toNat / preset.PROPOSER_REWARD_QUOTIENT.toNat else 0) +
@@ -1178,13 +1312,9 @@ theorem toNat_getBaseReward_le (altair : .altair ≤ fork) {base : Gwei}
 
 They are its entries in the deltas of the source, target and head flags and of inactivity.
 
-Either they are all zero, or the key is eligible and has a base reward at the total `T`.
+Either they are all zero, or their sum is at most a bound.
 
-Their sum is then at most the weights of the source and target flags in that base reward.
-
-The inactivity penalty of its score, or of a zero score when it has none, adds to that sum.
-
-The two weights are applied together, which rounds down once and so can only raise the bound. -/
+That bound comes from its base reward and its inactivity score. -/
 theorem penaltyEntries_le (altair : .altair ≤ fork) (within : state.RegistryWithinLimit)
     (active : getTotalActiveBalance state = .ok total)
     {source target head inactivity : Array Gwei × Array Gwei}
@@ -1193,10 +1323,18 @@ theorem penaltyEntries_le (altair : .altair ≤ fork) (within : state.RegistryWi
     (headOk : getFlagIndexDeltas state altair ⟨2, by decide⟩ = .ok head)
     (inactivityOk : getInactivityPenaltyDeltas config state = .ok inactivity)
     {j : Nat} (inside : j < state.validators.data.size) :
+    -- Either they are all zero, or the key is eligible and has a base reward at the total `T`.
     (source.2.getD j 0).toNat + (target.2.getD j 0).toNat + (head.2.getD j 0).toNat +
         (inactivity.2.getD j 0).toNat = 0 ∨
       ∃ base, isEligibleValidator (getPreviousEpoch state) state.validators.data[j] = .ok true ∧
         getBaseReward state total j.toUInt64 = .ok base ∧
+        -- Their sum is then at most the weights of the source and target flags in that base reward.
+        --
+        -- The inactivity penalty of its score adds to that sum, with a zero score when it has none.
+        --
+        -- The two weights are applied together, which rounds down once.
+        --
+        -- So applying them together can only raise the bound.
         (source.2.getD j 0).toNat + (target.2.getD j 0).toNat + (head.2.getD j 0).toNat +
             (inactivity.2.getD j 0).toNat ≤
           base.toNat * (TIMELY_SOURCE_WEIGHT.toNat + TIMELY_TARGET_WEIGHT.toNat) /

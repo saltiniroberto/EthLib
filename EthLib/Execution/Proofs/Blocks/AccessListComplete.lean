@@ -9,21 +9,11 @@ public import EthLib.Execution.Proofs.Blocks.Transition
 
 The body of a block runs system calls, transactions, withdrawals and calls to request contracts.
 
-Each of them ends with a state that records what it read and what it wrote.
-
-When one of these states joins the body, the builder records it.
-
-So the builder at the end of the body covers every one of them.
+The builder at the end of the body covers every one of them.
 
 That is, it records each account that one of them read or wrote.
 
 It also names each storage key that one of them read or wrote, as a change or as a read.
-
-The list of a builder that covers a call covers that call too, and the block commits to that list.
-
-A header commits to that list from Glamsterdam, so a block that passes the transition names them.
-
-Completeness is relative to the reads and writes that the state of each call records.
 
 The DAO transfer and the block rewards write the state without a call.
 
@@ -55,6 +45,9 @@ variable {fork : Fork}
 /-- A call that joins the body extends the builder, and the builder then covers the call. -/
 theorem BodyState.join_covers {body body' : BodyState} {tx : State.TransactionState}
     (h : body.join tx = .ok body') :
+    -- The state of a call records what it read and wrote.
+    --
+    -- Coverage is relative to that record.
     body.builder.Extends body'.builder ∧ body'.builder.Covers tx := by
   obtain ⟨b, hb, rfl⟩ := BodyState.join_eq_ok h
   exact AccessListBuilder.recordTransaction_covers hb
@@ -185,22 +178,14 @@ theorem blockRequests_covers {depositContract : Address} {env : BlockEnvironment
 
 /-! ## The body -/
 
-/-- The builder at the end of a body covers every call of the body.
-
-The system calls at the start run on the block state after the DAO transfer.
-
-From Paris that transfer leaves the state as it was.
-
-The transactions then run, and the builder after them keeps every record to the end.
-
-From Shapella, the withdrawals then join as one state at the position after the transactions.
-
-From Pectra, each request contract is then called, from the body after the withdrawals. -/
+/-- The builder at the end of a body covers every call of the body. -/
 theorem applyBody_covers {config : ChainConfig} {env : BlockEnvironment fork}
     {block : Block fork Transaction} {start : BlockState} {output : BlockOutput fork}
     (h : applyBody config env block start = .ok output) :
     ∃ state body txOutput withdrawn,
+      -- From Paris the DAO transfer leaves the state as it was.
       daoTransfer config fork block.header.number start = .ok state ∧
+      -- The system calls at the start run on the block state after the DAO transfer.
       startSystemCalls env block.header.parentHash (.init state) = .ok body ∧
       (BodyState.init state).builder.Extends output.body.builder ∧
       (∀ hDencun : .dencun ≤ fork, ∃ out mid,
@@ -211,13 +196,19 @@ theorem applyBody_covers {config : ChainConfig} {env : BlockEnvironment fork}
           systemCall env mid.block HISTORY_STORAGE_ADDRESS
             ⟨block.header.parentHash.toArray⟩ = .ok out' ∧
           output.body.builder.Covers out'.state)) ∧
+      -- The transactions then run.
       applyTransactions env body block.transactions = .ok txOutput ∧
+      -- The builder after them keeps every record to the end.
       txOutput.body.builder.Extends output.body.builder ∧
+      -- From Shapella, the withdrawals then join as one state.
+      --
+      -- They join at the position after the transactions.
       (∀ hShapella : .shapella ≤ fork, ∃ tx,
         withdrawalState fork txOutput.body.block (block.withdrawals hShapella) = .ok tx ∧
         (txOutput.body.beginIndex (block.transactions.length + 1)).join tx = .ok withdrawn ∧
         output.body.builder.Covers tx) ∧
       (¬.shapella ≤ fork → withdrawn = txOutput.body.beginIndex (block.transactions.length + 1)) ∧
+      -- From Pectra, each request contract is then called, from the body after the withdrawals.
       (.pectra ≤ fork → ∀ j (hj : j < (requestContracts fork).length), ∃ mid out,
         ((requestContracts fork).take j).foldlM (readRequest env) (withdrawn, []) = .ok mid ∧
         checkedSystemCall env mid.1.block (requestContracts fork)[j].2 .empty = .ok out ∧
@@ -292,16 +283,6 @@ theorem stateTransition_accessList {chain : BlockChain} {block : Block fork Tran
 
 /-- From Glamsterdam, a block that passes the transition commits to a list that covers its body.
 
-The hash in its header is the hash of the list that the builder built after the body.
-
-The body starts from the state after the parent, since the DAO transfer runs only before Paris.
-
-The list covers the beacon roots call there, and the history storage call after it.
-
-It covers the run of each transaction, from the body after the transactions before it.
-
-It covers the withdrawals, and then each call to a request contract.
-
 From Hegota the transition is not yet specified, so this holds from Glamsterdam up to Hegota. -/
 theorem stateTransition_accessList_covers {chain : BlockChain} {block : Block fork Transaction}
     {checkSeal : Bool} {post : State} (hFork : .glamsterdam ≤ fork)
@@ -310,8 +291,10 @@ theorem stateTransition_accessList_covers {chain : BlockChain} {block : Block fo
       recentHashes chain.recent = .ok hashes ∧
       env = blockEnvironment chain.config hashes block.header ∧
       applyBody chain.config env block ⟨chain.state, ∅, ∅, ∅, ∅⟩ = .ok output ∧
+      -- The hash in its header is the hash of the list that the builder built after the body.
       BlockAccessList.hash output.body.builder.build =
         .ok (block.header.blockAccessListHash hFork) ∧
+      -- The body starts from the state after the parent.
       (∃ out mid out',
         systemCall env ⟨chain.state, ∅, ∅, ∅, ∅⟩ BEACON_ROOTS_ADDRESS
           ⟨(block.header.parentBeaconBlockRoot (Nat.le_trans (by decide) hFork)).toArray⟩ =
@@ -319,21 +302,25 @@ theorem stateTransition_accessList_covers {chain : BlockChain} {block : Block fo
         (BodyState.init ⟨chain.state, ∅, ∅, ∅, ∅⟩).join out.state = .ok mid ∧
         systemCall env mid.block HISTORY_STORAGE_ADDRESS ⟨block.header.parentHash.toArray⟩ =
           .ok out' ∧
+        -- The list covers the beacon roots call there, and the history storage call after it.
         output.body.builder.build.Covers out.state ∧
         output.body.builder.build.Covers out'.state) ∧
       startSystemCalls env block.header.parentHash (.init ⟨chain.state, ∅, ∅, ∅, ∅⟩) = .ok body ∧
       applyTransactions env body block.transactions = .ok txOutput ∧
+      -- It covers the run of each transaction, from the body after the transactions before it.
       (∀ i (hi : i < block.transactions.length), ∃ before included out,
         applyTransactions env body (block.transactions.take i) = .ok before ∧
         checkInclusion env.chainId env before.gas (.ofBlock before.block)
           block.transactions[i] = .ok included ∧
         processTransaction env before.block included block.transactions[i] = .ok out ∧
         output.body.builder.build.Covers out.state) ∧
+      -- It covers the withdrawals.
       (∃ tx,
         withdrawalState fork txOutput.body.block
           (block.withdrawals (Nat.le_trans (by decide) hFork)) = .ok tx ∧
         (txOutput.body.beginIndex (block.transactions.length + 1)).join tx = .ok withdrawn ∧
         output.body.builder.build.Covers tx) ∧
+      -- It then covers each call to a request contract.
       ∀ j (hj : j < (requestContracts fork).length), ∃ mid out,
         ((requestContracts fork).take j).foldlM (readRequest env) (withdrawn, []) = .ok mid ∧
         checkedSystemCall env mid.1.block (requestContracts fork)[j].2 .empty = .ok out ∧
@@ -344,11 +331,13 @@ theorem stateTransition_accessList_covers {chain : BlockChain} {block : Block fo
   have hPectra : Fork.pectra ≤ fork := Nat.le_trans (by decide) hFork
   obtain ⟨state, body, txOutput, withdrawn, hState, hBody, -, hStart, hTx, hExt, hWithdrawn, -,
     hRequests⟩ := applyBody_covers hOutput
+  -- The DAO transfer runs only before Paris, so the body starts from the state after the parent.
   rw [daoTransfer_of_paris_le (Nat.le_trans (by decide) hFork)] at hState
   cases hState
   obtain ⟨out, mid, hOut, hMid, hCovers, hSecond⟩ := hStart hDencun
   obtain ⟨out', hOut', hCovers'⟩ := hSecond hPectra
   obtain ⟨tx, hTxState, hJoin, hCoversTx⟩ := hWithdrawn hShapella
+  -- The list of a builder that covers a call covers that call too.
   refine ⟨hashes, _, output, body, txOutput, withdrawn, hHashes, rfl, hOutput, hHash,
     ⟨out, mid, out', hOut, hMid, hOut', hCovers.build, hCovers'.build⟩, hBody, hTx,
     fun i hi => ?_, ⟨tx, hTxState, hJoin, hCoversTx.build⟩, fun j hj => ?_⟩

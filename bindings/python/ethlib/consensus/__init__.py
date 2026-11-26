@@ -19,6 +19,7 @@ from ethlib.errors import (
     ValidatorDutyError,
     WeakSubjectivityError,
 )
+from ethlib.networking.reqresp import ResponseChunk
 
 
 def preset(name: str) -> dict[str, int]:
@@ -224,10 +225,11 @@ def builder_preferences_failures(
     data: bytes,
     # `Any`, because `dict` is invariant in its values.
     config: dict[str, Any] | None = None,
+    state: bytes | None = None,
 ) -> list[str]:
     """The names of the checks that fail on a Gloas request that submits preferences, in order."""
     return _native.consensus_builder_preferences_failures(
-        name, fork, config, agreed, current_slot, pubkey, version_header, data
+        name, fork, config, agreed, current_slot, state, pubkey, version_header, data
     )
 
 
@@ -239,6 +241,20 @@ def default_auth_data(url: str) -> bytes:
 def relay_submission_bid(name: str, fork: str, data: bytes, pubkey: bytes) -> bytes:
     """The SSZ bytes of the bid that a relay serves from an SSZ block submission, with the key."""
     return _native.consensus_relay_submission_bid(name, fork, data, pubkey)
+
+
+def relay_verify_bid_value(
+    name: str,
+    fork: str,
+    payload: bytes,
+    fee_recipient: bytes,
+    bid_value: int,
+    balance_difference: int,
+) -> bool:
+    """From Deneb to Fulu: whether a bid value in Wei is what its builder pays the recipient."""
+    return _native.consensus_relay_verify_bid_value(
+        name, fork, payload, fee_recipient, bid_value, balance_difference
+    )
 
 
 def relay_validators(
@@ -397,6 +413,28 @@ def reqresp_response_bounds(
 ) -> tuple[int, int]:
     """The smallest and the largest length of a successful response chunk at its fork."""
     return _native.consensus_reqresp_response_bounds(name, chunk_fork, protocol)
+
+
+def reqresp_decode_chunk(
+    fork: str,
+    protocol: str,
+    genesis_validators_root: bytes,
+    data: bytes,
+    name: str = "mainnet",
+    config: dict[str, Any] | None = None,
+) -> tuple[str, ResponseChunk]:
+    """
+    One response chunk at the bounds of its fork, with the name of that fork.
+
+    The fork of the exchange must define the protocol.
+    A successful chunk of a protocol that sends a digest has the fork of the first epoch with it.
+    That epoch must not be the far future one, and the protocol must have a type at its fork.
+    Any other chunk has the fork of the exchange.
+    """
+    chunk_fork, code, context, payload = _native.consensus_reqresp_decode_chunk(
+        name, config, genesis_validators_root, fork, protocol, data
+    )
+    return chunk_fork, ResponseChunk(code, context, payload)
 
 
 # What a response check reads from each item, field by field.
@@ -1063,7 +1101,7 @@ def api_blobs(
 ) -> dict[str, Any]:
     """The Beacon API blobs of a signed block, in commitment order, or ConsensusError."""
     # The blobs are those of the commitments of the block, one each, in order; else code 500.
-    # With hashes, only the blobs whose commitment has one of these versioned hashes remain.
+    # With hashes, one blob for each requested hash, at the first place of its commitment.
     # An empty list of hashes is a request for no blob, unlike None.
     # The flags execution_optimistic and finalized come from the store and are absent.
     chosen = None if hashes is None else list(hashes)
@@ -2419,6 +2457,7 @@ __all__ = [
     "builder_preferences_failures",
     "default_auth_data",
     "relay_submission_bid",
+    "relay_verify_bid_value",
     "relay_validators",
     "relay_validator_registration",
     "relay_delivered_payload",
@@ -2440,6 +2479,7 @@ __all__ = [
     "gossip_topic_bound",
     "reqresp_request_bounds",
     "reqresp_response_bounds",
+    "reqresp_decode_chunk",
     "ResponseBlock",
     "ResponseSidecar",
     "ResponseEnvelope",

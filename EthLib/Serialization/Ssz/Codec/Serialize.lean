@@ -71,7 +71,7 @@ An inline part sits here in full.
 Anything else leaves the offset of its body, and the next body begins past its end.
 -/
 def headOf (start : Nat) (parts : List (Bool × Bytes)) : Bytes :=
-  headOfFrom start parts #[]
+  headOfFrom start parts .empty
 
 /-- The bodies so far, then the bodies of `parts`. -/
 def bodiesOfFrom : List (Bool × Bytes) → Bytes → Bytes
@@ -81,7 +81,7 @@ def bodiesOfFrom : List (Bool × Bytes) → Bytes → Bytes
 
 /-- The bodies, in the order their offsets name them. -/
 def bodiesOf (parts : List (Bool × Bytes)) : Bytes :=
-  bodiesOfFrom parts #[]
+  bodiesOfFrom parts .empty
 
 /--
 Parts laid out as a struct or a sequence encodes them.
@@ -107,7 +107,9 @@ def assemble (inline : List Bool) (parts : List Bytes) : Except Err Bytes := do
   -- The offset of the body `i` is the first offset plus the lengths of the bodies before it.
   --
   -- The result is the fixed parts, offsets in place, then the variable parts in order.
-  return headOf leading slots ++ bodiesOf slots
+  --
+  -- Both are written into one array, sized once to the whole encoding.
+  return bodiesOfFrom slots (headOfFrom leading slots (ByteArray.emptyWithCapacity total))
 
 /-- The option a selector names, or a refusal when it names none. -/
 def lookupOption : List Nat → List Desc → Nat → Except Err Desc
@@ -127,12 +129,25 @@ def boundCheck : Option Nat → Nat → Except Err Unit
   | none, _ => .ok ()
   | some bound, count => if count ≤ bound then .ok () else .error (.overLimit bound count)
 
+/-- Encoded elements of one type, laid out as the parts of a sequence. -/
+def assembleSequence (element : Desc) (parts : List Bytes) : Except Err Bytes :=
+  -- Fixed elements need no offset table, since the count follows from the width.
+  assemble (parts.map fun _ => element.isFixed) parts
+
+/-- Encoded fields, laid out as the parts of a struct. -/
+def assembleStruct (fields : List Desc) (parts : List Bytes) : Except Err Bytes :=
+  -- Each field's declared type says whether it is fixed-size.
+  assemble (fields.map Desc.isFixed) parts
+
+-- Each recursive call reads a part of the value or of the list it was given.
+--
+-- So the recursion is structural, and the kernel can evaluate it.
 mutual
 
 /-- The SSZ encoding of a value, read against the type it is meant to fit. -/
 def serialize : Desc → Value → Except Err Bytes
   -- boolean: the byte `0x01` for true, `0x00` for false.
-  | .bool, .bool b => .ok #[if b then 1 else 0]
+  | .bool, .bool b => .ok ⟨#[if b then 1 else 0]⟩
   -- uintN: `N / 8` bytes, little-endian; the type holds the byte width `N / 8`.
   --
   -- A value of `2^N` or more is refused.
@@ -168,24 +183,33 @@ def serialize : Desc → Value → Except Err Bytes
     return packBitsDelimited data
   -- Vector[type, N]: exactly `N` elements, laid out as the parts of a sequence.
   | .vector element length, .seq elements =>
-    if elements.length == length then serializeSequence element elements
+    if elements.length == length then do
+      let parts ← serializeEach element elements
+      assembleSequence element parts
     else .error (.scope length elements.length)
   -- List[type, N]: at most `N` elements, laid out the same way.
   | .list element limit, .seq elements =>
-    if elements.length ≤ limit then serializeSequence element elements
+    if elements.length ≤ limit then do
+      let parts ← serializeEach element elements
+      assembleSequence element parts
     else .error (.overLimit limit elements.length)
   -- EIP-7916: a ProgressiveList serializes as a List[type, N].
   --
   -- As for the bitlist, its bound is EthLib's, and applies only where a shape declares one.
   | .progressiveList element limit, .seq elements => do
     boundCheck limit elements.length
-    serializeSequence element elements
+    let parts ← serializeEach element elements
+    assembleSequence element parts
   -- Container: the fields in declaration order, laid out as the parts of a sequence.
-  | .container _ fields, .seq values => serializeStruct fields values
+  | .container _ fields, .seq values => do
+    let parts ← serializeFields fields values
+    assembleStruct fields parts
   -- EIP-7495: a ProgressiveContainer serializes as a Container.
   --
   -- A gap holds no field, so a struct encodes exactly the fields it declares.
-  | .progressiveContainer _ _ fields, .seq values => serializeStruct fields values
+  | .progressiveContainer _ _ fields, .seq values => do
+    let parts ← serializeFields fields values
+    assembleStruct fields parts
   -- EIP-8016: one byte, the selector, then the serialization of the value it selects.
   | .compatibleUnion selectors options, .union selector data => do
     let option ← lookupOption selectors options selector
@@ -194,21 +218,9 @@ def serialize : Desc → Value → Except Err Bytes
     -- The selector is written as one byte, so one the range does not allow is refused, not cut.
     checkSelector selector
     let body ← serialize option data
-    return #[UInt8.ofNat selector] ++ body
+    return ⟨#[UInt8.ofNat selector]⟩ ++ body
   | _, _ => .error .typeMismatch
-
-/-- The encoding of a sequence whose elements all share one type. -/
-def serializeSequence (element : Desc) (elements : List Value) : Except Err Bytes := do
-  -- Each element is serialized on its own, then each is a part of the layout.
-  let parts ← serializeEach element elements
-  -- Fixed elements need no offset table, since the count follows from the width.
-  assemble (parts.map fun _ => element.isFixed) parts
-
-/-- The encoding of a struct, each field read against its own type. -/
-def serializeStruct (fields : List Desc) (values : List Value) : Except Err Bytes := do
-  -- Each field is serialized against its declared type, which says whether it is fixed-size.
-  let parts ← serializeFields fields values
-  assemble (fields.map Desc.isFixed) parts
+termination_by structural _ value => value
 
 /-- Each element of a sequence encoded on its own. -/
 def serializeEach (element : Desc) : List Value → Except Err (List Bytes)
@@ -242,5 +254,21 @@ def serializeFieldsFrom : List Desc → List Value → List Bytes → Except Err
   | _, _, _ => .error .typeMismatch
 
 end
+
+/-- The encoding of a sequence whose elements all share one type.
+
+The encoder computes exactly this for a vector, a list and a progressive list. -/
+def serializeSequence (element : Desc) (elements : List Value) : Except Err Bytes := do
+  -- Each element is serialized on its own, then each is a part of the layout.
+  let parts ← serializeEach element elements
+  assembleSequence element parts
+
+/-- The encoding of a struct, each field read against its own type.
+
+The encoder computes exactly this for a container and a progressive container. -/
+def serializeStruct (fields : List Desc) (values : List Value) : Except Err Bytes := do
+  -- Each field is serialized against its declared type, which says whether it is fixed-size.
+  let parts ← serializeFields fields values
+  assembleStruct fields parts
 
 end EthLib.Serialization.Ssz

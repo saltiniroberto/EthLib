@@ -11,17 +11,7 @@ public import EthLib.Cryptography.Proofs.Xmss.Security.XmssSecurity.Adversary
 
 After key generation, EthLib's game is the model's game.
 
-EthLib's signer keeps its key across requests, and the model's game uses the table signer.
-
-The prepared cache knows the key of key generation, and signing keeps it a key the cache knows.
-
-Under that cache, each request of EthLib's game erases to the model's.
-
 The adversary is translated as in `XmssSecurity/Adversary.lean`.
-
-The transcripts correspond entry by entry.
-
-The forgery wins in one exactly when its translation wins in the other.
 
 So the two games win equally often, and the model's makes at most the hash calls of EthLib's.
 -/
@@ -32,7 +22,7 @@ open OracleComp OracleSpec
 open EthLib.Cryptography
 open EthLib.Cryptography.Xmss.Unforgeability (queryH ofParam ofSeed ofDigest ofLeafIndex ofMessage
   ofSignature ofPublicKey toLeafIndex toMessage toSignature toModelAdversary toModelForgery
-  toModelRequest adversaryImpl ofEntry gameAfterKeys checkForgery)
+  toModelRequest adversaryImpl ofEntry)
 
 namespace XmssSecurity.Bridge
 
@@ -57,23 +47,25 @@ theorem lift_hash_romImpl {α : Type} (c : OracleComp HashSpec α) :
 /-! ## EthLib's game after key generation -/
 
 /-- EthLib's oracles: coins and hashes pass through, and a request signs with the kept key. -/
-abbrev keyedOracles : QueryImpl (OracleWorld + Xmss.Unforgeability.SigningSpec)
+noncomputable abbrev keyedOracles : QueryImpl (OracleWorld + Xmss.Unforgeability.SigningSpec)
     (StateT Xmss.SecretKey
       (WriterT (QueryLog Xmss.Unforgeability.SigningSpec) (OracleComp OracleWorld))) :=
   QueryImpl.ofLift OracleWorld (StateT Xmss.SecretKey
       (WriterT (QueryLog Xmss.Unforgeability.SigningSpec) (OracleComp OracleWorld))) +
-    Xmss.Unforgeability.signingOracle
+    SufCma.signingOracle Xmss.Unforgeability.scheme
 
 /-- The game after key generation: the adversary's run with its key forgotten, then the check. -/
 theorem gameAfterKeys_eq (adversary : Xmss.Unforgeability.Adversary) (pk : Xmss.PublicKey)
     (sk : Xmss.SecretKey) :
-    gameAfterKeys adversary pk sk =
+    SufCma.gameAfterKeys Xmss.Unforgeability.scheme adversary pk sk =
       (forgetState <$> ((simulateQ keyedOracles (adversary.main pk)).run sk).run) >>=
-        checkForgery pk := by
+        SufCma.checkForgery Xmss.Unforgeability.scheme pk := by
   rw [bind_map_left]
   rfl
 
-/-- The model's game after key generation: the translated run, then EthLib's check. -/
+/-- The model's game after key generation: the translated run, then EthLib's check.
+
+The forgery wins in one game exactly when its translation wins in the other. -/
 theorem gameRest_eq (adversary : Xmss.Unforgeability.Adversary) (d : Derivations)
     (result : (Digest × (TopIndex → Option (Randomness × Encoding))) × QueryLog HashSpec) :
     Seeded.gameRest (tableScheme d.rnd) (toModelAdversary adversary) (modelPublicKey d result)
@@ -81,7 +73,7 @@ theorem gameRest_eq (adversary : Xmss.Unforgeability.Adversary) (d : Derivations
       (translateLog ofEntry <$> (simulateQ ((forwardOracles + signingOracle (tableScheme d.rnd)
           (modelSecretKey d result)) ∘ₛ adversaryImpl)
           (adversary.main (ofPublicKey (modelPublicKey d result)))).run) >>=
-        checkForgery (ofPublicKey (modelPublicKey d result)) := by
+        SufCma.checkForgery Xmss.Unforgeability.scheme (ofPublicKey (modelPublicKey d result)) := by
   unfold Seeded.gameRest toModelAdversary
   simp only [simulateQ_map, WriterT.run_map', ← QueryImpl.simulateQ_compose]
   -- `erw`: the `<$>` is the free monad's functor.
@@ -98,12 +90,13 @@ theorem gameRest_eq (adversary : Xmss.Unforgeability.Adversary) (d : Derivations
       Xmss.Unforgeability.ofSignature_toSignature]
   -- So is the winning condition.
   have hwin : decide (Xmss.Unforgeability.Valid (p.2.map ofEntry) ∧
-        ¬Xmss.Unforgeability.Contains (p.2.map ofEntry) p.1)
+        ¬SufCma.Returned Xmss.Unforgeability.scheme (p.2.map ofEntry) p.1)
       = decide (SigningTranscript.Valid p.2 ∧
           ¬SigningTranscript.Contains p.2 (toModelForgery p.1)) :=
     decide_eq_decide.mpr (and_congr (Xmss.Unforgeability.valid_map _)
-      (not_congr (Xmss.Unforgeability.contains_map _ _)))
-  simp only [tableScheme, Concrete.scheme, checkForgery, translateLog]
+      (not_congr (Xmss.Unforgeability.returned_map _ _)))
+  simp only [tableScheme, Concrete.scheme, SufCma.checkForgery,
+    Xmss.Unforgeability.scheme, translateLog]
   rw [hverify]
   exact (bind_congr fun verified => congrArg (fun b => pure (b && verified)) hwin).symm
 
@@ -121,8 +114,8 @@ theorem run_keyedOracles_inr (request : Xmss.Unforgeability.SignRequest) (sk : X
       (fun r => ((r.1.toOption, r.2), [⟨request, r.1.toOption⟩])) <$>
         (liftM (Xmss.signWith Xmss.Unforgeability.H sk request.leafIndex
           request.message) : OracleComp OracleWorld _) := by
-  simp only [QueryImpl.add_apply_inr, Xmss.Unforgeability.signingOracle]
-  rfl
+  simp only [QueryImpl.add_apply_inr, SufCma.signingOracle, Xmss.Unforgeability.scheme,
+    StateT.run_mk, WriterT.run_mk, Functor.map_map]
 
 namespace Prepared
 
@@ -214,18 +207,27 @@ theorem keyResolves_oracles (h : Prepared seed d result cache)
 The key must be one the cache knows, such as the key of key generation. -/
 theorem evalDist_rest (h : Prepared seed d result cache) (hk : KeyResolves seed d cache sk)
     (adversary : Xmss.Unforgeability.Adversary) :
-    (simulateQ romImpl (gameAfterKeys adversary (ofPublicKey (modelPublicKey d result)) sk)).run'
+    (simulateQ romImpl (SufCma.gameAfterKeys Xmss.Unforgeability.scheme adversary
+      (ofPublicKey (modelPublicKey d result)) sk)).run'
         cache =ᵈ
       (simulateQ romImpl (Seeded.gameRest (tableScheme d.rnd) (toModelAdversary adversary)
         (modelPublicKey d result) (modelSecretKey d result))).run' cache := by
+  -- EthLib's signer keeps its key across requests, and the model's game uses the table signer.
   rw [gameAfterKeys_eq, gameRest_eq]
   simp only [simulateQ_bind, StateT.run'_eq, StateT.run_bind, map_bind, bind_map_left]
+  -- The prepared cache knows the key of key generation.
+  --
+  -- Signing keeps it a key the cache knows.
+  --
+  -- Under that cache, each request of EthLib's game erases to the model's.
   have hrun := evalDist_simulateQ_state cache (fun sk => KeyResolves seed d cache sk)
     keyedOracles _ ofEntry (fun q _ hs => h.erases_oracles hs q)
     (fun q sk c hs hc => h.keyResolves_oracles q sk c hs hc)
     (adversary.main (ofPublicKey (modelPublicKey d result))) sk cache hk le_rfl
+  -- The transcripts correspond entry by entry.
   have hbind := hrun.bind_left fun z =>
-    Prod.fst <$> (simulateQ romImpl (checkForgery (ofPublicKey (modelPublicKey d result)) z.1)).run
+    Prod.fst <$> (simulateQ romImpl (SufCma.checkForgery Xmss.Unforgeability.scheme
+      (ofPublicKey (modelPublicKey d result)) z.1)).run
       z.2
   simp only [bind_map_left] at hbind
   exact hbind
@@ -235,7 +237,8 @@ theorem evalDist_rest (h : Prepared seed d result cache) (hk : KeyResolves seed 
 The key must be one the cache knows, such as the key of key generation. -/
 theorem hashQueryBound_rest (h : Prepared seed d result cache) (hk : KeyResolves seed d cache sk)
     (adversary : Xmss.Unforgeability.Adversary) (q : Nat)
-    (hbound : HashQueryBound (gameAfterKeys adversary (ofPublicKey (modelPublicKey d result)) sk)
+    (hbound : HashQueryBound (SufCma.gameAfterKeys Xmss.Unforgeability.scheme adversary
+      (ofPublicKey (modelPublicKey d result)) sk)
       cache q) :
     HashQueryBound (Seeded.gameRest (tableScheme d.rnd) (toModelAdversary adversary)
       (modelPublicKey d result) (modelSecretKey d result)) cache q := by

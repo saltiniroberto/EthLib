@@ -75,7 +75,7 @@ theorem hashTreeRootM_progressiveContainer_mixin (hash : ByteArray → ByteArray
     ∃ contents : Bytes, contents.size = bytesPerChunk ∧
       mixinMessage (.progressiveContainer active names fields) value hash
         = some (contents ++ activeFieldsWord active) ∧
-      root = (hash (ByteArray.mk (contents ++ activeFieldsWord active))).data := by
+      root = hash (contents ++ activeFieldsWord active) := by
   -- The root spends one level of its budget, and both read the leaves with the rest.
   have budget : (Desc.progressiveContainer active names fields).nesting
       = Desc.deepestNesting fields + 1 := by
@@ -123,7 +123,7 @@ def findMixinCollision (leftShape rightShape : Desc) (left right : Value)
     (hash : ByteArray → ByteArray := Cryptography.Hash.Sha256.hash) : Option (Bytes × Bytes) := do
   let a ← mixinMessage leftShape left hash
   let b ← mixinMessage rightShape right hash
-  if a ≠ b ∧ hash (ByteArray.mk a) = hash (ByteArray.mk b) then
+  if a ≠ b ∧ hash a = hash b then
     some (a, b)
   else none
 
@@ -132,7 +132,7 @@ theorem findMixinCollision_valid {leftShape rightShape : Desc} {left right : Val
     {hash : ByteArray → ByteArray} {a b : Bytes}
     (found : findMixinCollision leftShape rightShape left right hash = some (a, b)) :
     mixinMessage leftShape left hash = some a ∧ mixinMessage rightShape right hash = some b ∧
-      a ≠ b ∧ hash (ByteArray.mk a) = hash (ByteArray.mk b) := by
+      a ≠ b ∧ hash a = hash b := by
   simp only [findMixinCollision, Option.bind_eq_bind, Option.bind_eq_some_iff] at found
   obtain ⟨a', leftMessage, b', rightMessage, found⟩ := found
   split at found
@@ -151,12 +151,6 @@ theorem findMixinCollision_self (shape : Desc) (value : Value)
 Two legal progressive containers with one root have one layout, or the search finds a collision.
 
 The hash is any hash with 32-byte digests, and it also computes the zero subtrees.
-
-The final hash takes the contents node and the layout word, 64 bytes in all.
-
-Equal inputs would give equal layout words, and legal layouts with equal words are equal.
-
-So different layouts give different inputs with one digest, and the search returns them.
 -/
 theorem hashTreeRootM_progressiveContainer_layouts_separate (hash : ByteArray → ByteArray)
     (width : ∀ x, (hash x).size = 32)
@@ -172,12 +166,16 @@ theorem hashTreeRootM_progressiveContainer_layouts_separate (hash : ByteArray �
     leftActive = rightActive ∨
       ∃ a b, findMixinCollision (.progressiveContainer leftActive leftNames leftFields)
           (.progressiveContainer rightActive rightNames rightFields) left right hash = some (a, b) ∧
+        -- The final hash takes the contents node and the layout word, 64 bytes in all.
         a.size = 2 * bytesPerChunk ∧ b.size = 2 * bytesPerChunk ∧ a ≠ b ∧
-        hash (ByteArray.mk a) = hash (ByteArray.mk b) := by
+        hash a = hash b := by
   obtain ⟨leftContents, leftWidth, leftMessage, rfl⟩ :=
     hashTreeRootM_progressiveContainer_mixin hash width first
   obtain ⟨rightContents, rightWidth, rightMessage, joined⟩ :=
     hashTreeRootM_progressiveContainer_mixin hash width second
+  -- Equal inputs would give equal layout words, and legal layouts with equal words are equal.
+  --
+  -- So different layouts give different inputs with one digest, and the search returns them.
   by_cases same :
       leftContents ++ activeFieldsWord leftActive = rightContents ++ activeFieldsWord rightActive
   · -- Equal 32-byte left halves leave equal right halves, which are the layout words.
@@ -187,11 +185,12 @@ theorem hashTreeRootM_progressiveContainer_layouts_separate (hash : ByteArray �
     exact .inl (activeFieldsWord_injective_of_legal leftEnds rightEnds
       (by simpa [bitsPerChunk, bytesPerChunk] using leftBounded)
       (by simpa [bitsPerChunk, bytesPerChunk] using rightBounded)
-      (Array.append_inj same (leftWidth.trans rightWidth.symm)).2)
+      (ByteArray.ext (Array.append_inj (by simpa only [ByteArray.ext_iff, ByteArray.data_append]
+        using same) (leftWidth.trans rightWidth.symm)).2))
   · -- Different inputs reached the same root, so the search stops at them.
-    have hashed : hash (ByteArray.mk (leftContents ++ activeFieldsWord leftActive))
-        = hash (ByteArray.mk (rightContents ++ activeFieldsWord rightActive)) :=
-      ByteArray.ext joined
+    have hashed : hash (leftContents ++ activeFieldsWord leftActive)
+        = hash (rightContents ++ activeFieldsWord rightActive) :=
+      joined
     refine .inr ⟨_, _, ?_, by simp [leftWidth, Nat.two_mul], by simp [rightWidth, Nat.two_mul],
       same, hashed⟩
     simp [findMixinCollision, leftMessage, rightMessage, same, hashed]
@@ -218,8 +217,7 @@ theorem hashTreeRoot_progressiveContainer_layouts_separate
       ∃ a b, findMixinCollision (.progressiveContainer leftActive leftNames leftFields)
           (.progressiveContainer rightActive rightNames rightFields) left right = some (a, b) ∧
         a.size = 2 * bytesPerChunk ∧ b.size = 2 * bytesPerChunk ∧ a ≠ b ∧
-        Cryptography.Hash.Sha256.hash (ByteArray.mk a)
-          = Cryptography.Hash.Sha256.hash (ByteArray.mk b) := by
+        Cryptography.Hash.Sha256.hash a = Cryptography.Hash.Sha256.hash b := by
   -- The specification's hasher is the one built from SHA-256 alone.
   rw [hashTreeRoot, ← ofHash_sha256] at first second
   exact hashTreeRootM_progressiveContainer_layouts_separate _ Cryptography.Hash.Sha256.hash_size

@@ -16,15 +16,7 @@ Each rule grows memory to hold the range it writes, pays that growth, then write
 
 A copy from the call data or a code reads zeros past its end.
 
-RETURNDATACOPY fails when its range ends past the return data, by EIP-211.
-
-So its rule asks that the range fit.
-
-MCOPY grows memory to hold both its ranges, and reads its source after that growth.
-
-The rule for EXTCODECOPY holds from Berlin to before Glamsterdam, with the prices of EIP-2929.
-
-Sources: EIP-211, EIP-2929 and EIP-5656.
+Sources: EIP-211, EIP-2929, EIP-5656 and EIP-8038.
 -/
 
 @[expose] public section
@@ -192,6 +184,7 @@ The range ends within the return data.
 It pays 3, 3 gas a word and the growth of memory, and keeps the return data. -/
 theorem returndatacopy (hfork : .byzantium ≤ fork) {start offset size : U256}
     {rest : List U256} (hlt : pc < code.size) (hbyte : code[pc] = 0x3e)
+    -- RETURNDATACOPY fails when its range ends past the return data, by EIP-211.
     (fit : offset.toNat + size.toNat ≤ returnData.size)
     (hgas : 3 + 3 * wordCount size.toNat + (extendMemory memory.size [(start, size)]).cost ≤
       gas) :
@@ -216,24 +209,21 @@ theorem returndatacopy (hfork : .byzantium ≤ fork) {start offset size : U256}
 
 /-- From Berlin, EXTCODECOPY copies a range of the code of an account.
 
-The address is the low 20 bytes of the word, and the state holds the code `c` of its account.
-
-The code reads as zeros past its end.
-
-The address is cold when the transaction has not accessed it yet, by EIP-2929.
-
-Up to BPO5 it pays 2600 for a cold address and 100 for a warm one.
-
-From Glamsterdam it pays the access to the address and a warm access to read the code, by EIP-8038.
-
-It also pays 3 gas a word and the growth of memory.
-
-It then adds the address to the accessed addresses, and records the read of the account. -/
+The code reads as zeros past its end. -/
 theorem extcodecopy_of_berlin_le (hfork : .berlin ≤ fork)
     {word start offset size : U256} {rest : List U256} {cold : Bool} {c : ByteArray}
     (hlt : pc < code.size) (hbyte : code[pc] = 0x3c)
+    -- The address is the low 20 bytes of the word, and the state holds the code `c` of its account.
     (hcode : state.getCode (state.getAccount (Base.toAddressMasked word)).codeHash = .ok c)
+    -- The address is cold when the transaction has not accessed it yet, by EIP-2929.
     (hcold : decide (Base.toAddressMasked word ∉ substate.accessedAddresses) = cold)
+    -- Up to BPO5 the copy pays 2600 for a cold address and 100 for a warm one.
+    --
+    -- From Glamsterdam it pays the access to the address and a warm access to read the code.
+    --
+    -- That price is from EIP-8038.
+    --
+    -- It also pays 3 gas a word and the growth of memory.
     (hgas : externalBaseCost fork cold + 3 * wordCount size.toNat +
       (extendMemory memory.size [(start, size)]).cost ≤ gas) :
     Hoare fork
@@ -244,6 +234,9 @@ theorem extcodecopy_of_berlin_le (hfork : .berlin ≤ fork)
           start.toNat ⟨(bufferRead c offset.toNat size.toNat).toArray⟩)
         (gas - (externalBaseCost fork cold + 3 * wordCount size.toNat +
           (extendMemory memory.size [(start, size)]).cost))
+        -- The copy adds the address to the accessed addresses.
+        --
+        -- It records the read of the account.
         (state.recordAccountRead (Base.toAddressMasked word))
         { substate with
           accessedAddresses :=
@@ -261,20 +254,17 @@ theorem extcodecopy_of_berlin_le (hfork : .berlin ≤ fork)
 
 /-- From Berlin to before Glamsterdam, EXTCODECOPY copies a range of the code of an account.
 
-The address is the low 20 bytes of the word, and the state holds the code `c` of its account.
-
-The code reads as zeros past its end.
-
-The address is cold when the transaction has not accessed it yet, by EIP-2929.
-
-It pays 2600 for a cold address and 100 for a warm one, 3 gas a word and the growth of memory.
-
-It then adds the address to the accessed addresses, and records the read of the account. -/
+The code reads as zeros past its end. -/
 theorem extcodecopy (hfork : .berlin ≤ fork) (hglam : fork < .glamsterdam)
     {word start offset size : U256} {rest : List U256} {cold : Bool} {c : ByteArray}
     (hlt : pc < code.size) (hbyte : code[pc] = 0x3c)
+    -- The address is the low 20 bytes of the word, and the state holds the code `c` of its account.
     (hcode : state.getCode (state.getAccount (Base.toAddressMasked word)).codeHash = .ok c)
+    -- The address is cold when the transaction has not accessed it yet, by EIP-2929.
     (hcold : decide (Base.toAddressMasked word ∉ substate.accessedAddresses) = cold)
+    -- The copy pays 2600 for a cold address and 100 for a warm one, the prices of EIP-2929.
+    --
+    -- It also pays 3 gas a word and the growth of memory.
     (hgas : (if cold then 2600 else 100) + 3 * wordCount size.toNat +
       (extendMemory memory.size [(start, size)]).cost ≤ gas) :
     Hoare fork
@@ -285,6 +275,9 @@ theorem extcodecopy (hfork : .berlin ≤ fork) (hglam : fork < .glamsterdam)
           start.toNat ⟨(bufferRead c offset.toNat size.toNat).toArray⟩)
         (gas - ((if cold then 2600 else 100) + 3 * wordCount size.toNat +
           (extendMemory memory.size [(start, size)]).cost))
+        -- The copy adds the address to the accessed addresses.
+        --
+        -- It records the read of the account.
         (state.recordAccountRead (Base.toAddressMasked word))
         { substate with
           accessedAddresses :=

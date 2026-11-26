@@ -85,7 +85,7 @@ structure PtcDuty where
 
 /-- The JSON of a public key: its hex text. -/
 def pubkeyJson (pubkey : BLSPubkey) : Json :=
-  .str (toHex pubkey.toArray)
+  .str (toHex ⟨pubkey.toArray⟩)
 
 /-- The JSON of an attester duty, as the API writes it. -/
 def AttesterDuty.toJson (duty : AttesterDuty) : Json :=
@@ -291,7 +291,10 @@ def ptcDuties (config : Config) (state : BeaconState preset fork) (gloas : .glam
   if epoch.toNat + 1 < (getCurrentEpoch state).toNat ∨ epoch < config.GLOAS_FORK_EPOCH then
     throw (invalidEpoch epoch)
   -- The source asks for distinct indices, so a repeated one gives code 400 too.
-  unless indices.Nodup do throw { code := 400, message := "Repeated validator index" }
+  --
+  -- One pass with a search tree finds a repeat, in `O(n log n)` for `n` indices.
+  unless (firstRepeated indices).isNone do
+    throw { code := 400, message := "Repeated validator index" }
   -- The duty of each requested validator in turn; the first index that fails ends the answer.
   return (← indices.mapM (ptcDuty config state gloas epoch)).filterMap id
 
@@ -310,7 +313,7 @@ def dependentRoot (state : BeaconState preset fork) (lag : Nat) (epoch : Epoch)
   --
   -- Here start(e) is the first slot of epoch e.
   --
-  -- The lag is 1, or 0 where the endpoint says start(epoch) - 1.
+  -- The lag is 1, or 0 where the root is the one at start(epoch) - 1.
   --
   -- The source: on underflow, before the first epoch or slot, the root of the genesis block.
   if epoch.toNat < lag then return genesisRoot
@@ -343,6 +346,8 @@ The sync answer has no dependent root; the proposer answers take no indices.
 
 For the Gloas fork epoch, the PTC root follows the [PTC duties endpoint][ptc].
 
+Up to the Fulu fork epoch, the second proposer root is that of the first version.
+
 [ptc]: https://github.com/ethereum/beacon-APIs/blob/0ed12552077c9927ba2599ee632e76b2caf021d7/apis/validator/duties/ptc.yaml#L19-L27
 -/
 def dutiesResponse (config : Config) (state : BeaconState preset fork) (kind : DutyKind)
@@ -365,8 +370,18 @@ def dutiesResponse (config : Config) (state : BeaconState preset fork) (kind : D
              data := .arr (duties.map ProposerDuty.toJson).toArray }
   | .proposerV2 => do
     let duties ← proposerDuties state epoch
-    -- The source: the dependent root at slot start(epoch - 1) - 1, and the array of the duties.
-    return { dependentRoot := some (← dependentRoot state 1 epoch genesisRoot),
+    -- From Fulu, the proposers of an epoch are drawn at the end of the epoch two before it.
+    --
+    -- So the source gives the root at slot start(epoch - 1) - 1.
+    --
+    -- The upgrade to Fulu draws the proposers of the fork epoch, after the epoch before it.
+    --
+    -- So up to the fork epoch, the blocks of the epoch before still change the proposers.
+    --
+    -- EthLib's rule: there, the root is the one at slot start(epoch) - 1, as before Fulu.
+    let lag := if epoch ≤ config.FULU_FORK_EPOCH then 0 else 1
+    -- The dependent root at that lag, and the array of the duties.
+    return { dependentRoot := some (← dependentRoot state lag epoch genesisRoot),
              data := .arr (duties.map ProposerDuty.toJson).toArray }
   | .sync =>
     if altair : .altair ≤ fork then do

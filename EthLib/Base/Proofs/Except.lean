@@ -39,6 +39,11 @@ theorem bind_unit_ok_iff {ε β : Type} {x : Except ε Unit} {g : Unit → Excep
     x >>= g = .ok y ↔ x = .ok () ∧ g () = .ok y := by
   cases x <;> simp [bind, Except.bind]
 
+/-- A map over a success applies the function to its value. -/
+theorem map_ok {ε α β : Type} (f : α → β) (a : α) :
+    f <$> (Except.ok a : Except ε α) = .ok (f a) :=
+  rfl
+
 /-- A map succeeds exactly when the step under it succeeds with some value.
 
 The map then sends that value to the result. -/
@@ -70,5 +75,32 @@ theorem stateT_map_eq_ok {ε σ α β : Type} {g : α → β} {x : StateT σ (Ex
     rw [hx] at h
     cases h
     exact ⟨r', rfl, rfl⟩
+
+/-- A step that fails below a bound succeeds exactly at or above it, with its value. -/
+theorem ite_lt_eq_ok_iff {ε α : Type} {a bound : Nat} {e : ε} {x out : α} :
+    (if a < bound then Except.error e else .ok x) = .ok out ↔ bound ≤ a ∧ out = x := by
+  by_cases below : a < bound
+  · simp only [below, ↓reduceIte, reduceCtorEq, false_iff, not_and]
+    omega
+  · simp only [below, ↓reduceIte, Except.ok.injEq]
+    exact ⟨fun h => ⟨by omega, h.symm⟩, fun h => h.2.symm⟩
+
+/-- A step that fails below a bound fails exactly there, with its error. -/
+theorem ite_lt_eq_error_iff {ε α : Type} {a bound : Nat} {e other : ε} {x : α} :
+    (if a < bound then Except.error e else .ok x) = .error other ↔ a < bound ∧ other = e := by
+  by_cases below : a < bound
+  · simp only [below, ↓reduceIte, Except.error.injEq, true_and]
+    exact eq_comm
+  · simp [below]
+
+/-- A computation gives a value as an option exactly when it succeeds with that value. -/
+theorem toOption_eq_some_iff {ε α : Type} {x : Except ε α} {a : α} :
+    x.toOption = some a ↔ x = .ok a := by
+  cases x <;> simp [Except.toOption]
+
+/-- A computation whose option holds a value has succeeded with that value. -/
+theorem toOption_eq_some {ε α : Type} {x : Except ε α} {a : α} (h : x.toOption = some a) :
+    x = .ok a :=
+  toOption_eq_some_iff.mp h
 
 end EthLib.Base

@@ -10,14 +10,6 @@ The statements hold for the fee recipient, the gas limit and the graffiti alike.
 A set then a get of the key gives the value set.
 
 A delete then a get of the key gives the default.
-
-A set or a delete on one key leaves the value of every other key unchanged.
-
-A delete on a key that the client does not manage gets HTTP 404, and changes nothing.
-
-A delete on a key that the client manages succeeds.
-
-A fee recipient of zero is refused with HTTP 400, and changes nothing.
 -/
 
 @[expose] public section
@@ -106,7 +98,7 @@ theorem delete_of_isManaged_eq_false (unmanaged : state.isManaged pubkey = false
     setting.delete state pubkey = .error notManaged := by
   simp [delete, unmanaged]
 
-/-- A delete on a key that the client manages removes its mappings. -/
+/-- A delete on a key that the client manages succeeds, and removes its mappings. -/
 theorem delete_of_isManaged (managed : state.isManaged pubkey = true) :
     setting.delete state pubkey =
       .ok (setting.withMappings state ((setting.mappings state).filter (·.1 != pubkey))) := by
@@ -144,6 +136,46 @@ theorem handle_get_of_handle_set {α : Type} {calls : SettingCalls α} {config :
       ((pubkey, value) :: (calls.setting.mappings state).filter (·.1 != pubkey))
     simpa [Setting.set, KeyState.isManaged, KeyState.isActive, locals, remotes] using managed
   simp [SettingCalls.handle, managed, read, allowed, stillManaged, Setting.get_set lawful]
+
+/-- A call through the API on a lawful setting keeps the local and the remote keys. -/
+private theorem keys_handle {α : Type} {calls : SettingCalls α} (lawful : calls.setting.Lawful)
+    (config : ClientConfig) (state : KeyState) (method : String) (pubkey : BLSPubkey)
+    (body : Json) :
+    (calls.handle config state method pubkey body).2.localKeys = state.localKeys ∧
+      (calls.handle config state method pubkey body).2.remoteKeys = state.remoteKeys := by
+  unfold SettingCalls.handle
+  split
+  · exact ⟨rfl, rfl⟩
+  · split
+    · exact ⟨rfl, rfl⟩
+    · split
+      · exact ⟨rfl, rfl⟩
+      · split
+        · exact ⟨rfl, rfl⟩
+        · exact (lawful _ _).2
+    · split
+      · rename_i deleted
+        unfold Setting.delete at deleted
+        split at deleted
+        · cases deleted
+          exact (lawful _ _).2
+        · cases deleted
+      · exact ⟨rfl, rfl⟩
+    · exact ⟨rfl, rfl⟩
+
+/-- A call through the API on a lawful setting keeps the local keys. -/
+theorem SettingCalls.localKeys_handle {α : Type} {calls : SettingCalls α}
+    (lawful : calls.setting.Lawful) (config : ClientConfig) (state : KeyState) (method : String)
+    (pubkey : BLSPubkey) (body : Json) :
+    (calls.handle config state method pubkey body).2.localKeys = state.localKeys :=
+  (keys_handle lawful config state method pubkey body).1
+
+/-- A call through the API on a lawful setting keeps the remote keys. -/
+theorem SettingCalls.remoteKeys_handle {α : Type} {calls : SettingCalls α}
+    (lawful : calls.setting.Lawful) (config : ClientConfig) (state : KeyState) (method : String)
+    (pubkey : BLSPubkey) (body : Json) :
+    (calls.handle config state method pubkey body).2.remoteKeys = state.remoteKeys :=
+  (keys_handle lawful config state method pubkey body).2
 
 /-- A set of the zero fee recipient on a managed key gets HTTP 400 and changes nothing. -/
 theorem handle_feeRecipient_zero {config : ClientConfig} {state : KeyState}

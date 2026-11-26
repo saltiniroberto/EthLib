@@ -17,37 +17,7 @@ import EthLib.Consensus.Proofs.ForkChoice.Supporters
 /-!
 # Proofs: the head of the fork choice can be computed
 
-The head of a store that the handlers build can be computed.
-
-The store must hold the state of its justified checkpoint, and the viable nodes must be computed.
-
-Before Gloas, its active stake must be at most `2 * 10^17` Gwei, so that no weight overflows.
-
-The proposer boost must fit the same cap.
-
-The walk weighs only children among the viable nodes, and each of them is a held block.
-
-The votes for a held block can be read: each latest vote names a held block, whose walk succeeds.
-
-Their sum is at most the active stake, so it stays below `2^64`.
-
-The boosted root is zero or a held block, so its walk succeeds too.
-
-A held child sits at a later slot than its held parent, so the walk descends and ends.
-
-From Gloas, the boost also asks whether the parent of the boosted block is weak.
-
-It asks only when that parent is from the slot just before the boosted block.
-
-That test adds the equivocators of the parent's committees to its votes.
-
-So the effective balances of the justified state's whole registry must add up to at most the cap.
-
-It must also hold each equivocator that is active in a held block's state, at that block's epoch.
-
-Each held state must have its registry within the limit, so that its committees can be read.
-
-An empty tree of viable nodes gives the empty node of the justified block.
+The head of a store that the handlers build can be computed, before and from Gloas.
 
 This is part of [#2060][issue].
 
@@ -154,49 +124,6 @@ private theorem getAttestationScore_exists
     (by simp only [UInt64.size]; omega)
   exact ⟨_, rfl, by rw [scoreEq]; exact bound, by rw [scoreEq, stake_supportersOf_eq_sum within]⟩
 
-/-- The children of a held node can be computed, when parents sit below their children.
-
-Each child is a held node of lower rank. -/
-theorem getNodeChildren_held (lower : store.ParentsBelow) {node : ForkChoiceNode}
-    {block : BeaconBlock preset fork} (found : store.blocks[node.root]? = some block) :
-    ∃ children, store.getNodeChildren node = .ok children ∧ ∀ child ∈ children,
-      ∃ childBlock, store.blocks[child.root]? = some childBlock ∧
-        store.nodeRank child < store.nodeRank node := by
-  -- A child block sits at a later slot than its parent, so its rank is lower.
-  have climbs : ∀ (child : ForkChoiceNode) (childBlock : BeaconBlock preset fork),
-      child.payloadStatus = .pending → store.blocks[child.root]? = some childBlock →
-      childBlock.parentRoot = node.root → store.nodeRank child < store.nodeRank node := by
-    intro child childBlock pending childFound parent
-    have below : childBlock.slot.toNat > block.slot.toNat :=
-      UInt64.lt_iff_toNat_lt.mp (lower _ childBlock block childFound (parent ▸ found))
-    have := childBlock.slot.toNat_lt
-    simp only [nodeRank, childFound, found, pending, ↓reduceIte]
-    split <;> omega
-  by_cases gloas : .glamsterdam ≤ fork
-  · by_cases pending : node.payloadStatus = .pending
-    · -- A pending node has the empty node and maybe the full node of its block.
-      refine ⟨_, getNodeChildren_of_pending gloas pending, fun child member => ⟨block, ?_, ?_⟩⟩ <;>
-        · simp only [List.mem_cons] at member
-          rcases member with rfl | member
-          · simp [nodeRank, found, pending]
-          · split at member
-            · rw [List.mem_singleton.mp member]
-              simp [nodeRank, found, pending]
-            · cases member
-    · obtain ⟨children, childrenOk⟩ :=
-        getNodeChildren_ok_of_known (status := node.payloadStatus) found
-      refine ⟨children, childrenOk, fun child member => ?_⟩
-      obtain ⟨childPending, childBlock, -, childFound, parent, -⟩ :=
-        (mem_getNodeChildren_of_gloas gloas pending childrenOk).mp member
-      exact ⟨childBlock, childFound, climbs child childBlock childPending childFound parent⟩
-  · have before : fork < .glamsterdam := Nat.lt_of_not_le gloas
-    obtain ⟨children, childrenOk⟩ :=
-      getNodeChildren_ok_of_known (status := node.payloadStatus) found
-    refine ⟨children, childrenOk, fun child member => ?_⟩
-    obtain ⟨childPending, childBlock, childFound, parent⟩ :=
-      (mem_getNodeChildren before childrenOk).mp member
-    exact ⟨childBlock, childFound, climbs child childBlock childPending childFound parent⟩
-
 /-- The walk from a held node can be computed when every held node weighs and has a tiebreaker. -/
 private theorem getHeadFrom_exists (lower : store.ParentsBelow)
     {tally : Except ForkChoiceError VoteTally} {nodes : List ForkChoiceNode}
@@ -251,7 +178,8 @@ private theorem computeProposerScore_le {config : Config} {state : BeaconState p
 
 /-! ## The boosted root is zero or a held block -/
 
-private theorem updateCheckpoints_boost (j f : Checkpoint) :
+/-- Updating the checkpoints keeps the boost. -/
+theorem updateCheckpoints_boost (j f : Checkpoint) :
     (store.updateCheckpoints j f).proposerBoostRoot = store.proposerBoostRoot := by
   unfold updateCheckpoints
   by_cases a : store.justifiedCheckpoint.epoch < j.epoch <;>
@@ -287,7 +215,8 @@ private theorem storeTargetCheckpointState_boost {checks : SignatureChecks} {tar
   · simp only [bind_ok_iff, pure, Except.pure, Except.ok.injEq] at stored
     obtain ⟨_, _, rfl⟩ := stored; rfl
 
-private theorem onAttestation_boost {checks : SignatureChecks}
+/-- An attestation keeps the boost. -/
+theorem onAttestation_boost {checks : SignatureChecks}
     {attestation : Attestation preset fork}
     {isFromBlock : Bool} {after : Store preset fork}
     (attested : store.onAttestation config checks attestation isFromBlock = .ok after) :
@@ -302,7 +231,8 @@ private theorem onAttestation_boost {checks : SignatureChecks}
     exact this
   · simp [throw, throwThe, MonadExceptOf.throw, bind, Except.bind] at attested
 
-private theorem onAttesterSlashing_boost {checks : SignatureChecks}
+/-- An attester slashing keeps the boost. -/
+theorem onAttesterSlashing_boost {checks : SignatureChecks}
     {slashing : AttesterSlashing preset fork} {after : Store preset fork}
     (slashed : store.onAttesterSlashing config checks slashing = .ok after) :
     after.proposerBoostRoot = store.proposerBoostRoot := by
@@ -312,7 +242,8 @@ private theorem onAttesterSlashing_boost {checks : SignatureChecks}
   subst slashed
   rfl
 
-private theorem recordBlockTimeliness_boost {root : Root} {after : Store preset fork}
+/-- Recording the timeliness of a block keeps the boost. -/
+theorem recordBlockTimeliness_boost {root : Root} {after : Store preset fork}
     (recorded : store.recordBlockTimeliness config root = .ok after) :
     after.proposerBoostRoot = store.proposerBoostRoot := by
   unfold recordBlockTimeliness at recorded
@@ -337,7 +268,8 @@ private theorem updateProposerBoostRoot_boost {head root : Root} {after : Store 
   split at updated <;> simp only [pure, Except.pure, Except.ok.injEq] at updated <;>
     subst updated <;> simp
 
-private theorem computePulledUpTip_boost {root : Root} {after : Store preset fork}
+/-- Pulling up the checkpoints of a block keeps the boost. -/
+theorem computePulledUpTip_boost {root : Root} {after : Store preset fork}
     (pulled : store.computePulledUpTip config root = .ok after) :
     after.proposerBoostRoot = store.proposerBoostRoot := by
   unfold computePulledUpTip at pulled
@@ -466,23 +398,31 @@ private theorem Reachable.boostHeld {anchorState : BeaconState preset fork}
 The store must hold that state, with active stake at most `2 * 10^17` Gwei.
 
 The proposer boost must fit that cap. -/
-private theorem getWeight_exists (before : fork < .glamsterdam)
+theorem getWeight_exists (before : fork < .glamsterdam)
     {anchorState : BeaconState preset fork} {anchorBlock : BeaconBlock preset fork}
     (forward : ForwardReachable config anchorState anchorBlock store)
+    -- The anchor block must not be after the anchor state.
     (anchorSlot : anchorBlock.slot ≤ anchorState.slot)
+    -- The parent root of the anchor block must name no held block.
     (unknown : store.blocks[anchorBlock.parentRoot]? = none)
-    (boostHeld : store.proposerBoostRoot = Vector.replicate 32 0 ∨
-      ∃ block parent, store.blocks[store.proposerBoostRoot]? = some block ∧
-        store.blocks[block.parentRoot]? = some parent)
+    -- An epoch must have a slot.
     (positive : 0 < preset.SLOTS_PER_EPOCH.toNat)
+    -- The proposer boost must fit the cap of `2 * 10^17` Gwei.
     (fits : config.ProposerScoreFits preset (2 * 10 ^ 17)) {state : BeaconState preset fork}
+    -- The store must hold the state of the justified checkpoint.
     (stateOk : store.checkpointState store.justifiedCheckpoint = .ok state)
+    -- That state must have active stake at most `2 * 10^17` Gwei.
     (bounded : stake (fun v => balanceAt state v.toNat)
       (getActiveValidatorIndices state (getCurrentEpoch state)).toFinset ≤ 2 * 10 ^ 17)
     {node : ForkChoiceNode} {block : BeaconBlock preset fork}
     (found : store.blocks[node.root]? = some block) :
     ∃ weight, store.getWeight config store.justifiedTally node = .ok weight := by
   have notGloas : ¬ .glamsterdam ≤ fork := Nat.not_le_of_lt before
+  -- The votes for a held block can be read.
+  --
+  -- Each latest vote names a held block, whose walk succeeds.
+  --
+  -- Their sum is at most the active stake, so it stays below `2^64`.
   obtain ⟨votes, votesOk, votesLe, -⟩ := getAttestationScore_exists (config := config) forward
     anchorSlot unknown found (BeaconState.registryWithinLimit_of_lt before state) (by omega)
   have scoreOk : store.scoreFromTally (store.tallyVotes state) node = .ok votes := votesOk
@@ -490,7 +430,8 @@ private theorem getWeight_exists (before : fork < .glamsterdam)
   by_cases zero : store.proposerBoostRoot = Vector.replicate 32 0
   · exact ⟨votes, by simp [getWeight, notGloas, zero, scoreOk, bind, Except.bind, pure,
       Except.pure]⟩
-  obtain ⟨boostBlock, -, boostFound, -⟩ := boostHeld.resolve_left zero
+  -- The boosted root is zero or a held block, so its walk succeeds too.
+  obtain ⟨boostBlock, -, boostFound, -⟩ := forward.reachable.boostHeld.resolve_left zero
   obtain ⟨d, dOk⟩ := isAncestor_ok_of_orphans_le
     (forward.reachable.parentsBelow anchorSlot unknown) found
     (fun _ _ f orphan => forward.reachable.orphans_le anchorSlot f orphan found)
@@ -509,57 +450,39 @@ private theorem getWeight_exists (before : fork < .glamsterdam)
     simp [getWeight, notGloas, zero, scoreOk, dOk, getOk, bind, Except.bind, pure, Except.pure,
       Except.mapError, addChecked_of_lt sumLt]
 
-/-- Before Gloas, the head can be computed when the boosted root is zero or held. -/
-private theorem getHead_exists_of_boostHeld (before : fork < .glamsterdam)
-    {anchorState : BeaconState preset fork} {anchorBlock : BeaconBlock preset fork}
+/-- Before Gloas, the head of a store that the handlers build can be computed. -/
+theorem getHead_exists (before : fork < .glamsterdam) {anchorState : BeaconState preset fork}
+    {anchorBlock : BeaconBlock preset fork}
     (forward : ForwardReachable config anchorState anchorBlock store)
+    -- The anchor block must not be after the anchor state.
     (anchorSlot : anchorBlock.slot ≤ anchorState.slot)
+    -- The parent root of the anchor block must name no held block.
     (unknown : store.blocks[anchorBlock.parentRoot]? = none)
-    (boostHeld : store.proposerBoostRoot = Vector.replicate 32 0 ∨
-      ∃ block parent, store.blocks[store.proposerBoostRoot]? = some block ∧
-        store.blocks[block.parentRoot]? = some parent)
+    -- An epoch must have a slot.
     (positive : 0 < preset.SLOTS_PER_EPOCH.toNat)
+    -- The proposer boost must fit the cap of `2 * 10^17` Gwei.
     (fits : config.ProposerScoreFits preset (2 * 10 ^ 17)) {nodes : List ForkChoiceNode}
+    -- The viable nodes must be computed.
     (tree : store.getFilteredNodeTree config = .ok nodes) {state : BeaconState preset fork}
+    -- The store must hold the state of the justified checkpoint.
     (stateOk : store.checkpointState store.justifiedCheckpoint = .ok state)
+    -- That state must have active stake at most `2 * 10^17` Gwei.
     (bounded : stake (fun v => balanceAt state v.toNat)
       (getActiveValidatorIndices state (getCurrentEpoch state)).toFinset ≤ 2 * 10 ^ 17) :
     ∃ head, store.getHead config = .ok head := by
   have notGloas : ¬ .glamsterdam ≤ fork := Nat.not_le_of_lt before
+  -- An empty tree of viable nodes gives the empty node of the justified block.
   obtain ⟨justified, justifiedFound⟩ := filterNodeTree_known tree
+  -- The walk weighs only children among the viable nodes, and each of them is a held block.
+  --
+  -- A held child sits at a later slot than its held parent, so the walk descends and ends.
   obtain ⟨head, headOk⟩ := getHeadFrom_exists (config := config) (nodes := nodes)
     (forward.reachable.parentsBelow anchorSlot unknown)
-    (fun n b f => getWeight_exists before forward anchorSlot unknown boostHeld positive fits
+    (fun n b f => getWeight_exists before forward anchorSlot unknown positive fits
       stateOk bounded f)
     (fun n _ _ => ⟨0, by simp [tiebreaker, notGloas, pure, Except.pure]⟩) _ justified
     justifiedFound
   exact ⟨head, by simp [getHead, tree, notGloas, headOk, bind, Except.bind]⟩
-
-/-- Before Gloas, the head of a store that the handlers build can be computed.
-
-The anchor block must not be after the anchor state, and its parent root must name no held block.
-
-The viable nodes must be computed, and the store must hold the state of the justified checkpoint.
-
-That state must have active stake at most `2 * 10^17` Gwei.
-
-The proposer boost must fit that cap.
-
-An epoch must have a slot. -/
-theorem getHead_exists (before : fork < .glamsterdam) {anchorState : BeaconState preset fork}
-    {anchorBlock : BeaconBlock preset fork}
-    (forward : ForwardReachable config anchorState anchorBlock store)
-    (anchorSlot : anchorBlock.slot ≤ anchorState.slot)
-    (unknown : store.blocks[anchorBlock.parentRoot]? = none)
-    (positive : 0 < preset.SLOTS_PER_EPOCH.toNat)
-    (fits : config.ProposerScoreFits preset (2 * 10 ^ 17)) {nodes : List ForkChoiceNode}
-    (tree : store.getFilteredNodeTree config = .ok nodes) {state : BeaconState preset fork}
-    (stateOk : store.checkpointState store.justifiedCheckpoint = .ok state)
-    (bounded : stake (fun v => balanceAt state v.toNat)
-      (getActiveValidatorIndices state (getCurrentEpoch state)).toFinset ≤ 2 * 10 ^ 17) :
-    ∃ head, store.getHead config = .ok head :=
-  getHead_exists_of_boostHeld before forward anchorSlot unknown
-    forward.reachable.boostHeld positive fits tree stateOk bounded
 
 /-! ## From Gloas: the payload decisions and the tiebreaker -/
 
@@ -720,10 +643,27 @@ private theorem tiebreaker_exists_of_gloas {anchorState : BeaconState preset for
 
 /-! ## The weak-head test -/
 
-/-- The stake of any set of validators of a state is at most the effective balances of its registry.
+variable (store) in
+/-- Every set of validators active in a state or known to equivocate weighs at most a cap there.
+
+The store says which validators are known to equivocate.
+
+The weak-head test adds such weights: the votes for a block and the equivocators of its committees.
 -/
-private theorem stake_le_registry (state : BeaconState preset fork) (T : Finset ValidatorIndex) :
-    stake (fun v => balanceAt state v.toNat) T ≤ effectiveBalanceSum state := by
+def HeadWeightAtMost (cap : ℕ) (state : BeaconState preset fork) : Prop :=
+  ∀ T : Finset ValidatorIndex, (∀ v ∈ T,
+      v ∈ (getActiveValidatorIndices state (getCurrentEpoch state)).toFinset ∨
+        v ∈ store.equivocatingIndices) →
+    stake (fun v => balanceAt state v.toNat) T ≤ cap
+
+variable (store) in
+/-- A cap on the effective balances of a whole registry caps each weight of the weak-head test.
+
+Any set of validators weighs at most the sum of the registry's effective balances. -/
+theorem headWeightAtMost_of_effectiveBalanceSum_le {cap : ℕ} {state : BeaconState preset fork}
+    (supply : effectiveBalanceSum state ≤ cap) : store.HeadWeightAtMost cap state := by
+  intro T _
+  refine le_trans ?_ supply
   have whole : stake (balanceAt state) (Finset.range state.validators.data.size) =
       effectiveBalanceSum state := by
     rw [effectiveBalanceSum_eq_sum_range, stake, ← List.sum_toFinset _ List.nodup_range]
@@ -752,39 +692,40 @@ private theorem equivocatorWeight_eq (equivocators : List ValidatorIndex)
     cases found : state.validators.data[v.toNat]? <;>
       simp_all [balanceAt]
 
-/-- The weak-head test of a held block can be computed.
-
-The store must hold the state of its justified checkpoint.
-
-The effective balances of that state's registry must add up to at most `2 * 10^17` Gwei.
-
-Each held state must have its registry within the limit.
-
-Each equivocator active in a held block's state, at its epoch, needs a place in the justified state.
-
-The committee windows and the head reads must fit. -/
+/-- The weak-head test of a held block can be computed. -/
 private theorem isHeadWeak_exists {anchorState : BeaconState preset fork}
     {anchorBlock : BeaconBlock preset fork}
     (forward : ForwardReachable config anchorState anchorBlock store)
     (anchorSlot : anchorBlock.slot ≤ anchorState.slot)
     (unknown : store.blocks[anchorBlock.parentRoot]? = none)
+    -- The committee windows must fit.
     (fit : config.CommitteeWindowsFit preset)
+    -- The head reads must fit.
     (weights : config.HeadWeightsFit preset (2 * 10 ^ 17)) {state : BeaconState preset fork}
+    -- The store must hold the state of its justified checkpoint.
     (stateOk : store.checkpointState store.justifiedCheckpoint = .ok state)
+    -- That state and each held state must have their registry within the limit.
     (within : state.RegistryWithinLimit) (held : HeldRegistriesWithinLimit store)
-    (supply : effectiveBalanceSum state ≤ 2 * 10 ^ 17)
+    -- The active stake of that state must be at most `2 * 10^17` Gwei.
+    (bounded : stake (fun v => balanceAt state v.toNat)
+      (getActiveValidatorIndices state (getCurrentEpoch state)).toFinset ≤ 2 * 10 ^ 17)
+    -- Take each set of validators of that state that are active or known to equivocate.
+    --
+    -- Each such set must weigh at most `2 * 10^17` Gwei too.
+    (heads : store.HeadWeightAtMost (2 * 10 ^ 17) state)
+    -- Take an equivocator active in a held block's state, at its epoch.
+    --
+    -- It needs a place in the justified state.
     (registered : ActiveEquivocatorsRegistered store state) {root : Root}
     {block : BeaconBlock preset fork} (found : store.blocks[root]? = some block) :
     ∃ weak, store.isHeadWeak config root = .ok weak := by
   have justifiedFound := checkpointState_ok_iff.mp stateOk
   obtain ⟨headState, headFound, -, -⟩ := forward.reachable.blockStatesFromParents found
   have headWithin := held root headState headFound
-  have activeLe := (stake_le_registry state
-    (getActiveValidatorIndices state (getCurrentEpoch state)).toFinset).trans supply
   -- The reorg threshold is the proposer score of a config whose boost is that threshold.
   obtain ⟨threshold, thresholdOk⟩ := computeProposerScore_exists
     (config := { config with PROPOSER_SCORE_BOOST := config.REORG_HEAD_WEIGHT_THRESHOLD })
-    ⟨by decide, weights.reorg⟩ fit.positive within activeLe
+    ⟨by decide, weights.reorg⟩ fit.positive within bounded
   obtain ⟨votes, votesOk, -, votesEq⟩ := getAttestationScore_exists (config := config) forward
     anchorSlot unknown (node := ⟨root, .pending⟩) found within (by omega)
   -- The committees of the block's slot read from its state, whose epoch is not past the clock.
@@ -842,7 +783,15 @@ private theorem isHeadWeak_exists {anchorState : BeaconState preset fork}
   have sumLe : votes.toNat + equivocatorWeight store.equivocatingIndices state
       (committees.flatMap Array.toList) ≤ 2 * 10 ^ 17 := by
     rw [votesEq, weightEq, stake, stake, ← Finset.sum_union apart]
-    exact (stake_le_registry state _).trans supply
+    -- Each supporter is active, and each counted member is a known equivocator.
+    refine heads _ fun v member => ?_
+    rcases Finset.mem_union.mp member with supporter | equivocator
+    · left
+      obtain ⟨validator, atIndex, active⟩ := isActiveAt_eq_true_iff.mp
+        (isActiveAt_of_mem_supportersOf within supporter)
+      exact List.mem_toFinset.mpr ((mem_getActiveValidatorIndices within).mpr
+        ⟨validator, atIndex, active⟩)
+    · exact .inr (List.elem_iff.mp (List.mem_filter.mp (List.mem_toFinset.mp equivocator)).2)
   exact ⟨_, isHeadWeak_ok_iff.mpr ⟨state, threshold, headState, block, votes, committees,
     justifiedFound, thresholdOk, headFound, found, votesOk, mapped, known, by omega, rfl⟩⟩
 
@@ -859,7 +808,9 @@ private theorem shouldApplyProposerBoost_exists {anchorState : BeaconState prese
     (weights : config.HeadWeightsFit preset (2 * 10 ^ 17)) {state : BeaconState preset fork}
     (stateOk : store.checkpointState store.justifiedCheckpoint = .ok state)
     (within : state.RegistryWithinLimit) (held : HeldRegistriesWithinLimit store)
-    (supply : effectiveBalanceSum state ≤ 2 * 10 ^ 17)
+    (bounded : stake (fun v => balanceAt state v.toNat)
+      (getActiveValidatorIndices state (getCurrentEpoch state)).toFinset ≤ 2 * 10 ^ 17)
+    (heads : store.HeadWeightAtMost (2 * 10 ^ 17) state)
     (registered : ActiveEquivocatorsRegistered store state) :
     ∃ apply, store.shouldApplyProposerBoost config gloas = .ok apply := by
   rcases forward.reachable.boostHeld with zero | ⟨block, parent, found, parentFound⟩
@@ -873,10 +824,20 @@ private theorem shouldApplyProposerBoost_exists {anchorState : BeaconState prese
     obtain ⟨-, -, -, nextOk⟩ := nextSlot_of_held forward anchorSlot weights.slots otherFound
     exact (Uint64.addChecked_ok_iff.mp nextOk).1
   have fits := nextFits _ parent parentFound
+  -- The boost asks whether the parent of the boosted block is weak.
+  --
+  -- It asks only when that parent is from the slot just before the boosted block.
   by_cases old : parent.slot.toNat + 1 < block.slot.toNat
   · exact ⟨true, shouldApplyProposerBoost_of_old_parent gloas zero found parentFound old⟩
+  -- That test adds the equivocators of the parent's committees to its votes.
+  --
+  -- So the justified state must cap each set of validators active or known to equivocate.
+  --
+  -- It must also hold each equivocator active in a held block's state, at that block's epoch.
+  --
+  -- Each held state must have its registry within the limit, so that its committees can be read.
   obtain ⟨weak, weakOk⟩ := isHeadWeak_exists forward anchorSlot unknown fit weights stateOk within
-    held supply registered parentFound
+    held bounded heads registered parentFound
   cases weak
   · exact ⟨true, shouldApplyProposerBoost_of_not_weak gloas zero found parentFound
       (by omega) fits weakOk⟩
@@ -899,30 +860,41 @@ private theorem shouldApplyProposerBoost_exists {anchorState : BeaconState prese
 /-- From Gloas, the weight of a held node can be computed from the tally of the justified state.
 
 The premises are those of the weak-head test, and the proposer boost must fit the same cap. -/
-private theorem getWeight_exists_of_gloas {anchorState : BeaconState preset fork}
+theorem getWeight_exists_of_gloas {anchorState : BeaconState preset fork}
     {anchorBlock : BeaconBlock preset fork} (gloas : .glamsterdam ≤ fork)
     (forward : ForwardReachable config anchorState anchorBlock store)
+    -- The anchor block must not be after the anchor state.
     (anchorSlot : anchorBlock.slot ≤ anchorState.slot)
+    -- The parent root of the anchor block must name no held block.
     (unknown : store.blocks[anchorBlock.parentRoot]? = none)
+    -- The committee windows must fit.
     (fit : config.CommitteeWindowsFit preset)
+    -- The proposer boost must fit the cap of `2 * 10^17` Gwei.
     (fits : config.ProposerScoreFits preset (2 * 10 ^ 17))
+    -- The head reads must fit that cap too.
     (weights : config.HeadWeightsFit preset (2 * 10 ^ 17)) {state : BeaconState preset fork}
+    -- The store must hold the state of the justified checkpoint.
     (stateOk : store.checkpointState store.justifiedCheckpoint = .ok state)
+    -- That state and each held state must have their registries within the limit.
     (within : state.RegistryWithinLimit) (held : HeldRegistriesWithinLimit store)
-    (supply : effectiveBalanceSum state ≤ 2 * 10 ^ 17)
+    -- Each set of active or known equivocating validators of that state weighs at most the cap.
+    (heads : store.HeadWeightAtMost (2 * 10 ^ 17) state)
+    -- An equivocator active in a held block's state has a place in the justified state.
     (registered : ActiveEquivocatorsRegistered store state) {node : ForkChoiceNode}
     {block : BeaconBlock preset fork} (found : store.blocks[node.root]? = some block) :
     ∃ weight, store.getWeight config store.justifiedTally node = .ok weight := by
+  -- The active stake is one of the weights that the head bounds.
+  have bounded : stake (fun v => balanceAt state v.toNat)
+      (getActiveValidatorIndices state (getCurrentEpoch state)).toFinset ≤ 2 * 10 ^ 17 :=
+    heads _ fun _ active => .inl active
   obtain ⟨_, _, _, decided⟩ :=
     isPreviousSlotPayloadDecision_ok forward anchorSlot weights.slots found
-  have activeLe := (stake_le_registry state
-    (getActiveValidatorIndices state (getCurrentEpoch state)).toFinset).trans supply
   obtain ⟨votes, votesOk, votesLe, -⟩ := getAttestationScore_exists (config := config) forward
     anchorSlot unknown found within (by omega)
   have scoreOk : store.scoreFromTally (store.tallyVotes state) node = .ok votes := votesOk
   obtain ⟨apply, applyOk⟩ := shouldApplyProposerBoost_exists gloas forward anchorSlot unknown fit
-    weights stateOk within held supply registered
-  obtain ⟨proposer, proposerOk⟩ := computeProposerScore_exists fits fit.positive within activeLe
+    weights stateOk within held bounded heads registered
+  obtain ⟨proposer, proposerOk⟩ := computeProposerScore_exists fits fit.positive within bounded
   have proposerLe := computeProposerScore_le proposerOk
   have getOk : store.getProposerScore config = .ok proposer := by
     simp [getProposerScore, stateOk, proposerOk, bind, Except.bind]
@@ -948,33 +920,37 @@ private theorem getWeight_exists_of_gloas {anchorState : BeaconState preset fork
       addChecked_of_lt (a := votes) (b := 0) (by simp; omega)]⟩
   · exact ⟨votes + proposer, by simp [dOk, getOk, Except.mapError, addChecked_of_lt sumLt]⟩
 
-/-- From Gloas, the head of a store that the handlers build can be computed.
-
-The anchor block must not be after the anchor state, and its parent root must name no held block.
-
-The viable nodes must be computed, and the store must hold the state of the justified checkpoint.
-
-That state must have its registry within the limit.
-
-Its effective balances must add up to at most `2 * 10^17` Gwei.
-
-Each held state must have its registry within the limit too.
-
-Each equivocator active in a held block's state, at its epoch, needs a place in the justified state.
-
-The committee windows must fit, and the proposer boost and the head reads must fit that cap. -/
+/-- From Gloas, the head of a store that the handlers build can be computed. -/
 theorem getHead_exists_of_gloas (gloas : .glamsterdam ≤ fork)
     {anchorState : BeaconState preset fork} {anchorBlock : BeaconBlock preset fork}
     (forward : ForwardReachable config anchorState anchorBlock store)
+    -- The anchor block must not be after the anchor state.
     (anchorSlot : anchorBlock.slot ≤ anchorState.slot)
+    -- The parent root of the anchor block must name no held block.
     (unknown : store.blocks[anchorBlock.parentRoot]? = none)
+    -- The committee windows must fit.
     (fit : config.CommitteeWindowsFit preset)
+    -- The proposer boost must fit the cap of `2 * 10^17` Gwei.
     (fits : config.ProposerScoreFits preset (2 * 10 ^ 17))
+    -- The head reads must fit that cap too.
     (weights : config.HeadWeightsFit preset (2 * 10 ^ 17)) {nodes : List ForkChoiceNode}
+    -- The viable nodes must be computed.
     (tree : store.getFilteredNodeTree config = .ok nodes) {state : BeaconState preset fork}
+    -- The store must hold the state of the justified checkpoint.
     (stateOk : store.checkpointState store.justifiedCheckpoint = .ok state)
+    -- That state must have its registry within the limit.
+    --
+    -- Each held state must have its registry within the limit too.
     (within : state.RegistryWithinLimit) (held : HeldRegistriesWithinLimit store)
-    (supply : effectiveBalanceSum state ≤ 2 * 10 ^ 17)
+    -- Take each set of validators of that state that are active or known to equivocate.
+    --
+    -- Each such set must weigh at most the cap.
+    --
+    -- That bounds its active stake too.
+    (heads : store.HeadWeightAtMost (2 * 10 ^ 17) state)
+    -- Take an equivocator active in a held block's state, at its epoch.
+    --
+    -- It needs a place in the justified state.
     (registered : ActiveEquivocatorsRegistered store state) :
     ∃ head, store.getHead config = .ok head := by
   cases nodes with
@@ -985,7 +961,7 @@ theorem getHead_exists_of_gloas (gloas : .glamsterdam ≤ fork)
   obtain ⟨head, headOk⟩ := getHeadFrom_exists (config := config) (nodes := first :: rest)
     (forward.reachable.parentsBelow anchorSlot unknown)
     (fun _ _ f => getWeight_exists_of_gloas gloas forward anchorSlot unknown fit fits weights
-      stateOk within held supply registered f)
+      stateOk within held heads registered f)
     (fun _ _ f => tiebreaker_exists_of_gloas gloas forward anchorSlot weights.slots f) _ justified
     justifiedFound
   exact ⟨head, by simp [getHead, tree, headOk, bind, Except.bind]⟩

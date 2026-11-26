@@ -12,29 +12,11 @@ A bootstrap proves its current sync committee with a branch against a state root
 
 An update proves its next sync committee the same way.
 
-An adversary outputs a state root and two committees with a branch each.
+An adversary wins with two different committees, if both branches pass the check at one index.
 
 The generalized index of the branches is fixed before the run.
 
-It wins with two different committees, if both branches pass the check at that index.
-
-The experiment roots both committees and climbs both branches, with the oracle as the node hash.
-
-Each win exposes two different queried inputs with one answer, so the birthday bound applies.
-
-The count grows with the size of a committee and the depth of the index.
-
-At mainnet, an adversary of `q` calls gives a bound of `(q + 2050 + 2 * depth)^2 / 2^256`.
-
-The depth of both indices is 5 before Electra, 6 from Electra and 11 from Gloas.
-
-With SHA-256 as the node hash, a win is two different committees that the branch check accepts.
-
-That result needs a committee of at least one member.
-
-Two accepted bootstraps with one state root and slot and different committees give one.
-
-So do two such updates that pass the check of the next committee.
+The experiment uses the oracle as the node hash.
 
 Source: Bellare and Rogaway, "Random Oracles are Practical", CCS 1993, section 2, "Oracles".
 
@@ -123,19 +105,19 @@ theorem hashTreeRootM_syncCommittee {m : Type → Type} [Monad m] [LawfulMonad m
           (.seq (committee.pubkeys.toList.map SszType.toValue))).run with
       | .ok keys =>
         let aggregate ← hash ⟨committee.aggregatePubkey.toArray ++ Array.replicate 16 0⟩
-        return .ok (← hash ⟨keys ++ aggregate.data⟩).data
+        return .ok (← hash (keys ++ aggregate))
       | .error error => return .error error) := by
   have aggregate : (hashTreeRootAtM (Hasher.ofHash hash) 2 (.byteVector 48)
-      (.bytes committee.aggregatePubkey.toArray)).run = _ :=
+      (.bytes ⟨committee.aggregatePubkey.toArray⟩)).run = _ :=
     hashTreeRootAtM_bytes48 (Hasher.ofHash hash) 1 committee.aggregatePubkey
   show (hashTreeRootAtM (Hasher.ofHash hash) 3 (.container ["pubkeys", "aggregate_pubkey"]
     [.vector (.byteVector 48) preset.SYNC_COMMITTEE_SIZE.toNat, .byteVector 48])
     (.seq [.seq (committee.pubkeys.toList.map SszType.toValue),
-      .bytes committee.aggregatePubkey.toArray])).run = _
+      .bytes ⟨committee.aggregatePubkey.toArray⟩])).run = _
   unfold hashTreeRootAtM
   simp only [merkleLayout, List.length_cons, List.length_nil, bne_self_eq_false,
     Bool.false_eq_true, ↓reduceIte, liftM_pure, pure_bind, List.zip_cons_cons, List.zip_nil_left,
-    List.map_cons, List.map_nil, MerkleLayout.nesting, layoutChunksAtM, Leaves.count,
+    List.map_cons, List.map_nil, MerkleLayout.nesting, layoutChunksWithM, Leaves.count,
     Option.getD_none, List.drop_zero, Nat.sub_zero, List.take_succ_cons, List.take_zero,
     List.mapM_cons, List.mapM_nil]
   simp only [ExceptT.run_bind, ExceptT.run_pure, bind_assoc, aggregate, pure_bind]
@@ -176,10 +158,13 @@ private theorem collision_or_eq_of_hashTreeRootM_syncCommittee {cache : HashOrac
   obtain ⟨digest₂, hdigest₂, hsecond⟩ := Option.bind_eq_some_iff.mp hsecond
   obtain ⟨top₂, htop₂, hsecond⟩ := Option.bind_eq_some_iff.mp hsecond
   -- Each step: one answer of two hashes gives one message, or a collision of the cache.
-  refine (collision_or_eq_of_queryHash htop₁ htop₂
-    (Except.ok.inj (Option.some.inj (hfirst.trans hsecond.symm)))).elim .inl fun top => ?_
-  obtain ⟨rfl, sameAggregate⟩ := Array.append_inj' top
+  refine (collision_or_eq_of_queryHash htop₁ htop₂ (congrArg ByteArray.data
+    (Except.ok.inj (Option.some.inj (hfirst.trans hsecond.symm))))).elim .inl fun top => ?_
+  -- A message is two nodes joined, so its array is the arrays of the two joined.
+  simp only [ByteArray.data_append] at top
+  obtain ⟨sameKeys, sameAggregate⟩ := Array.append_inj' top
     ((size_of_queryHash hdigest₁).trans (size_of_queryHash hdigest₂).symm)
+  obtain rfl : node₁ = node₂ := ByteArray.ext sameKeys
   refine (collision_or_eq_of_queryHash hdigest₁ hdigest₂ sameAggregate).elim .inl fun key => ?_
   refine (collision_or_eq_of_hashTreeRootM_bytes48Vector (by simp) (by simp) hkeys₁
     hkeys₂).elim .inl fun keys => .inr ?_
@@ -247,7 +232,9 @@ private theorem hashTreeRootM_syncCommittee_queryBound (committee : SyncCommitte
 
 /-- The extraction makes at most `2 * (size + width + 1) + 2 * depth` oracle calls.
 
-A committee has `size` keys in a tree of `width` leaves, and `depth` is the depth of the index. -/
+A committee has `size` keys in a tree of `width` leaves, and `depth` is the depth of the index.
+
+The count grows with the size of a committee and the depth of the index. -/
 theorem extractSyncCommittees_queryBound (preset : Preset) (gindex : Nat)
     (claim : SyncCommitteeClaim preset) :
     IsQueryBoundP (extractSyncCommittees queryHash preset gindex claim) (fun _ => True)
@@ -289,6 +276,7 @@ theorem prEvent_syncCommitteeWins_le [SampleableType Hash32] (preset : Preset) (
     Pr{let z ← (simulateQ HashOracle.romImpl
       (experimentWith (extractSyncCommittees queryHash preset gindex) adversary)).run ∅}[
         SyncCommitteeWins gindex z.1] ≤ Q * ((Q : ℝ≥0∞) / Nat.card Hash32) :=
+  -- Each win exposes two different queried inputs with one answer, so the birthday bound applies.
   prEvent_experimentWith_le (extractSyncCommittees queryHash preset gindex)
     (SyncCommitteeWins gindex) collision_of_extractSyncCommittees adversary hQ
 
@@ -317,7 +305,9 @@ theorem prEvent_syncCommitteeWins_le_of_adversary (preset : Preset) (gindex : Na
 
 There a committee has 512 members, and `depth` is the base-2 logarithm of the index.
 
-It needs the adversary to make at most `q` oracle calls. -/
+It needs the adversary to make at most `q` oracle calls.
+
+The depth of both indices is 5 before Electra, 6 from Electra and 11 from Gloas. -/
 theorem prEvent_syncCommitteeWins_le_mainnet (gindex : Nat)
     (adversary : OracleComp (unifSpec + HashOracle) (SyncCommitteeClaim .mainnet))
     {q : Nat} (hq : IsQueryBoundP adversary (fun t => t.isRight = true) q) :

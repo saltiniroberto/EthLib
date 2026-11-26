@@ -3,23 +3,16 @@ module
 public import EthLib.Base.Proofs.Base64
 public import EthLib.Networking.Enr.Record
 public import EthLib.Serialization.Proofs.Rlp.Codec
+import EthLib.Base.Proofs.CodeInjective
 
 /-!
 # Proofs: the decoder of node records
 
-The decoder rejects a record over 300 bytes.
+Every record that the decoder accepts came from its own encoding.
 
-The keys of every record it accepts strictly increase, so they are sorted and unique.
+So a record has one accepted encoding.
 
-Every record it accepts has the key `id`, and it rejects a record without it.
-
-It undoes the encoder on every record that fits, has increasing keys and has the key `id`.
-
-Every record it accepts came from its own encoding, so a record has one accepted encoding.
-
-The same holds for the text form.
-
-Two errors with one code come from one constructor.
+The same holds for its text form.
 -/
 
 @[expose] public section
@@ -270,8 +263,6 @@ theorem toText_of_fromText {text : String} {r : Enr} (h : fromText text = .ok r)
 /-- Two errors with one code come from one constructor. -/
 theorem EnrError.code_injective (e₁ e₂ : EnrError) (h : e₁.code = e₂.code) :
     e₁.ctorIdx = e₂.ctorIdx := by
-  -- Two distinct constructors have two distinct literal codes, which `decide` separates.
-  cases e₁ <;> cases e₂ <;>
-    first | rfl | (simp only [EnrError.code] at h; exact absurd h (by decide))
+  code_injective EnrError.code
 
 end EthLib.Networking.Enr

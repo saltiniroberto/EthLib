@@ -228,21 +228,20 @@ private theorem endpointCover_effective {x : ForkedBeaconState preset} {fork : F
   show min _ (withdrawalMaxEffectiveBalance preset fork _).toNat ≤ _
   rw [balanceEq, capEq]
 
-/-- The effective-balance updates keep the future cover, given the endpoint cover before them.
-
-An effective balance that stays is covered as before.
-
-A new one is at most the balance and the largest effective balance.
-
-The endpoint cover bounds that value.
-
-A validator still to activate has not reached its exit, since its activation is at most its exit. -/
+/-- The effective-balance updates keep the future cover, given the endpoint cover before them. -/
 private theorem futureCover_effective {x : ForkedBeaconState preset} {fork : Fork}
     {u v : BeaconState preset fork} {o : Ownership}
     (ok : processEffectiveBalanceUpdates u = .ok v) (matched : BalancesMatch u)
+    -- A validator still to activate has not reached its exit.
+    --
+    -- That holds since its activation is at most its exit.
     (activation : ∀ w ∈ u.validators.data, w.activationEpoch ≤ w.exitEpoch)
+    -- The endpoint cover bounds a new effective balance, which is at most the balance and the cap.
     (endpoint : EndpointCoverAll x ⟨fork, u⟩ o)
     (cover : FutureEffectiveCover x ⟨fork, u⟩ o) : FutureEffectiveCover x ⟨fork, v⟩ o := by
+  -- An effective balance that stays is covered as before.
+  --
+  -- A new one is at most the balance and the largest effective balance.
   have frame := processEffectiveBalanceUpdates_frame ok
   have epoch : getCurrentEpoch v = getCurrentEpoch u := by
     rw [frame]
@@ -275,15 +274,7 @@ private theorem futureCover_effective {x : ForkedBeaconState preset} {fork : For
 
 /-- A successful pending-consolidation pass over a tagged queue is a tagged pass.
 
-Its payments carry the reserve cut, the ownership and both covers.
-
-It follows the pass one queue entry at a time.
-
-A slashed source is dropped, and an unslashed source that cannot withdraw at `next` stops it.
-
-Any other source pays its target.
-
-The tagged pass, its reserved history and every cut are built in the same step. -/
+Its payments carry the reserve cut, the ownership and both covers. -/
 private theorem TaggedPass.reserved_of_pass {x : ForkedBeaconState preset} {high : Nat}
     {rounding : Nat → Nat} {fork : Fork} {next : Epoch} {eventPosition position : Nat}
     {s : BeaconState preset fork} {queue : List TaggedEntry}
@@ -323,6 +314,13 @@ private theorem TaggedPass.reserved_of_pass {x : ForkedBeaconState preset} {high
         | .initial _ => allocation.baseline = 0
         | .fresh _ => True) payments allocations ∧ result.1.slot = s.slot ∧
       FutureEffectiveCover x ⟨fork, result.1⟩ after := by
+  -- It follows the pass one queue entry at a time.
+  --
+  -- A slashed source is dropped, and an unslashed source that cannot withdraw at `next` stops it.
+  --
+  -- Any other source pays its target.
+  --
+  -- The tagged pass, its reserved history and every cut are built in the same step.
   induction queue generalizing s result before position with
   | nil =>
     simp only [List.map_nil, passPendingConsolidations, pure, Except.pure,
@@ -500,18 +498,13 @@ private theorem processPendingConsolidations_erasure {fork : Fork}
 
 Its end state has the step's validators and balances.
 
-Its suffix erases the step's queue.
-
-The step runs one pass at the checked next epoch over the actual queue.
-
-The tagged queue erases that queue.
-
-So the tagged pass and its reserved history follow that pass. -/
+Its suffix erases the step's queue. -/
 private theorem processPendingConsolidations_reserved {x : ForkedBeaconState preset} {high : Nat}
     {rounding : Nat → Nat} {fork : Fork} {next : Epoch} {eventPosition position : Nat}
     {s t : BeaconState preset fork} {electra : .pectra ≤ fork} {queue : List TaggedEntry}
     {before : Ownership}
     (ok : processPendingConsolidations s electra = .ok t)
+    -- The tagged queue erases that queue.
     (incoming : QueueErasure queue (pendingQueue ⟨fork, s⟩))
     (reserve : ReserveCut x high ⟨fork, s⟩ next (queue.map (·.entry)) before)
     (assignment : AssignmentCut rounding queue before)
@@ -549,6 +542,9 @@ private theorem processPendingConsolidations_reserved {x : ForkedBeaconState pre
         | .initial _ => allocation.baseline = 0
         | .fresh _ => True) payments allocations ∧ u.slot = s.slot ∧
       FutureEffectiveCover x ⟨fork, u⟩ after := by
+  -- The step runs one pass at the checked next epoch over the actual queue.
+  --
+  -- So the tagged pass and its reserved history follow that pass.
   obtain ⟨result, passOk, balances, _⟩ := processPendingConsolidations_pass ok
   -- The checked next epoch is the step's wrapping sum, and the tagged queue erases its queue.
   have sum := Uint64.addChecked_ok_iff.mp nextOk
@@ -646,27 +642,7 @@ private theorem reservedEvent_consolidations {x : ForkedBeaconState preset} {hig
   · simp only [↓reduceIte]
     exact ⟨fork, s, t, u, electra, next, rfl, rfl, nextOk, ok, validators, balances, history⟩
 
-/-- A consolidation event's reserved accounting does not depend on its credit and debit limits.
-
-The epoch replay records the pending consolidations.
-
-It sets both limits to the balance the pass consumes.
-
-That is the effective balance of the consumed unslashed sources.
-
-The reserved readers state the same event with limits `0` and `0`.
-
-Neither limit is read on the reserved side.
-
-For a consolidation event, consider its ownership step and the reserve clause of the event.
-
-They read only the source, the two states and the actual tagged pass with its payments.
-
-The moved balance is accounted there, payment by payment.
-
-The funding credit of a consolidation is `0` whatever its limits.
-
-So the two payloads give the same proposition. -/
+/-- A consolidation event's reserved accounting does not depend on its credit and debit limits. -/
 private theorem reservedEvent_consolidations_payload {x : ForkedBeaconState preset}
     {high eventPosition paymentPosition : Nat} {rounding : Nat → Nat}
     {before after : ForkedBeaconState preset} {credit debit credit' debit' : Nat}
@@ -678,6 +654,25 @@ private theorem reservedEvent_consolidations_payload {x : ForkedBeaconState pres
       ReservedEvent x high eventPosition paymentPosition rounding
         ⟨.consolidations, before, after, credit', debit'⟩ queue suffix tagged allocations
         owned owned' := by
+  -- The epoch replay records the pending consolidations.
+  --
+  -- It sets both limits to the balance the pass consumes.
+  --
+  -- That is the effective balance of the consumed unslashed sources.
+  --
+  -- The reserved readers state the same event with limits `0` and `0`.
+  --
+  -- Neither limit is read on the reserved side.
+  --
+  -- For a consolidation event, consider its ownership step and the reserve clause of the event.
+  --
+  -- They read only the source, the two states and the actual tagged pass with its payments.
+  --
+  -- The moved balance is accounted there, payment by payment.
+  --
+  -- The funding credit of a consolidation is `0` whatever its limits.
+  --
+  -- So the two payloads give the same proposition.
   simp only [ReservedEvent, OwnedEvent, ↓reduceIte]
 
 /-- The tag of a consolidation event reads only its source and its two states. -/
@@ -691,15 +686,7 @@ private theorem tagEvent_consolidations_payload {before after : ForkedBeaconStat
         position queue suffix consumed payments calls :=
   Iff.rfl
 
-/-- The pending consolidations as the head of a reserved replay, with any recorded limits.
-
-The reserved event is the one the readers construct, with limits `0` and `0`.
-
-The replay records the event with the limits the caller needs.
-
-An example is the consumed balance that the epoch replay records.
-
-It does so through the payload bridges above. -/
+/-- The pending consolidations as the head of a reserved replay, with any recorded limits. -/
 private theorem reservedReplay_consolidations_cons_payload {fork : Fork}
     {s t u : BeaconState preset fork} {queue middle consumed : List TaggedEntry}
     {tagged : List (TaggedEntry × Payment preset)} {credit debit : Nat}
@@ -709,6 +696,7 @@ private theorem reservedReplay_consolidations_cons_payload {fork : Fork}
     (validators : t.validators = u.validators) (balances : t.balances = u.balances)
     (frame : ReservedFrame (config := config) (checks := checks) x high rounding
       start ⟨fork, s⟩ startEpoch (getCurrentEpoch s) queue before eventOwned)
+    -- The reserved event is the one the readers construct, with limits `0` and `0`.
     (event : ReservedEvent x high eventPosition paymentPosition rounding
       ⟨.consolidations, ⟨fork, s⟩, ⟨fork, t⟩, 0, 0⟩ queue middle tagged allocations
       eventOwned midOwned)
@@ -719,6 +707,11 @@ private theorem reservedReplay_consolidations_cons_payload {fork : Fork}
       start startEpoch finish finishEpoch eventPosition paymentPosition callPosition
       (⟨.consolidations, ⟨fork, s⟩, ⟨fork, t⟩, credit, debit⟩ :: events) queue final
       (tagged ++ payments) (allocations ++ restAllocations) restCalls before after := by
+  -- The replay records the event with the limits the caller needs.
+  --
+  -- An example is the consumed balance that the epoch replay records.
+  --
+  -- It does so through the payload bridges above.
   have incoming := frame.2.2.2.2.2.2.1
   have tags :=
       tagEvent_consolidations (config := config) (position := callPosition) electra nextOk ok pass
@@ -801,16 +794,11 @@ private theorem reservedFrame_records_stage {x : ForkedBeaconState preset} {high
 
 /-- Let each supported validator's capped balance be covered at the endpoint.
 
-Then the effective-balance update keeps the reserve cut.
-
-The update keeps each effective balance or sets it to at most the capped balance.
-
-Every clause but the endpoint one already bounds the capped balance.
-
-The endpoint clause bounds only the effective balance, so `endpointBalance` covers a raise. -/
+Then the effective-balance update keeps the reserve cut. -/
 private theorem reserveCut_effective {x : ForkedBeaconState preset} {high : Nat} {fork : Fork}
     {s t : BeaconState preset fork} {epoch : Epoch} {suffix : List PendingConsolidation}
     {owned : Ownership} (ok : processEffectiveBalanceUpdates s = .ok t)
+    -- The endpoint clause bounds only the effective balance, so this hypothesis covers a raise.
     (endpointBalance : ∀ i v, s.validators.data[i]? = some v → SupportedAt epoch v →
       v.pubkey ∉ previousOnly x →
       min (actualBalanceAt ⟨fork, s⟩ i) (withdrawalMaxEffectiveBalance preset fork v).toNat ≤
@@ -818,6 +806,9 @@ private theorem reserveCut_effective {x : ForkedBeaconState preset} {high : Nat}
           (held owned i ∩ owned.endpoint).card)
     (reserve : ReserveCut x high ⟨fork, s⟩ epoch suffix owned) :
     ReserveCut x high ⟨fork, t⟩ epoch suffix owned := by
+  -- The update keeps each effective balance or sets it to at most the capped balance.
+  --
+  -- Every clause but the endpoint one already bounds the capped balance.
   have balancesEq := processEffectiveBalanceUpdates_balances ok
   have capS : ∀ v,
       withdrawalMaxEffectiveBalance preset (⟨fork, s⟩ : ForkedBeaconState preset).fork v =
@@ -976,24 +967,13 @@ private theorem covers_records_stage {x : ForkedBeaconState preset} {fork : Fork
 
 /-- The silent suffix of an epoch after the pending consolidations is a reserved frame.
 
-It keeps the endpoint cover and the future cover at the same ownership.
-
-Its stages keep the validators, the balances, the queue and the slot.
-
-The exception is the effective-balance update, which moves effective balances only.
-
-That update needs the endpoint balance cover at the start, which the payments stage keeps.
-
-The future cover through that update also needs three facts.
-
-They are matching balances, activations no later than exits, and the endpoint cover at its input.
-
-The payments stage keeps that endpoint cover from the start. -/
+It keeps the endpoint cover and the future cover at the same ownership. -/
 private theorem reservedFrame_epochSuffix_lifecycle {x : ForkedBeaconState preset} {high : Nat}
     {rounding : Nat → Nat} {fork : Fork} {s t : BeaconState preset fork} {epoch : Epoch}
     {queue : List TaggedEntry} {owned : Ownership}
     (trace : EpochTrace (EpochStage.action config checks)
       (EpochStage.middleStages ++ EpochStage.tailStages) s t)
+    -- That update needs the endpoint balance cover at the start, which the payments stage keeps.
     (endpointBalance : ∀ i v, s.validators.data[i]? = some v → SupportedAt epoch v →
       v.pubkey ∉ previousOnly x →
       min (actualBalanceAt ⟨fork, s⟩ i) (withdrawalMaxEffectiveBalance preset fork v).toNat ≤
@@ -1009,6 +989,19 @@ private theorem reservedFrame_epochSuffix_lifecycle {x : ForkedBeaconState prese
         EndpointCoverAll x ⟨fork, s⟩ owned → FutureEffectiveCover x ⟨fork, s⟩ owned →
           FutureEffectiveCover x ⟨fork, t⟩ owned) ∧
       RegistryLifecycle s t := by
+  -- Its stages keep the validators, the balances, the queue and the slot.
+  --
+  -- The exception is the effective-balance update, which moves effective balances only.
+  --
+  -- The future cover through that update also needs three facts.
+  --
+  -- The first is matching balances.
+  --
+  -- The second is activations no later than exits.
+  --
+  -- The third is the endpoint cover at the input of that update.
+  --
+  -- The payments stage keeps that endpoint cover from the start.
   simp only [EpochStage.middleStages, EpochStage.tailStages, List.cons_append,
     List.nil_append] at trace
   cases trace with | cons paid trace =>
@@ -1109,21 +1102,7 @@ private theorem supportedAt_next_exit {v : Validator} {c n : Epoch}
     simp only [isActiveValidator, Bool.and_eq_true, decide_eq_true_eq] at before
     exact before.2
 
-/-- The pending consolidations, then the silent suffix of the epoch, at the same event ownership.
-
-The consolidation event gives its ownership `after` and the reserve cut at `next`.
-
-It also gives the endpoint cover and the future cover at the actual result `t`.
-
-The pending consolidations keep the registry and the matching sizes.
-
-So the balance match and the activation order move from `s` to `t`.
-
-At `t` the endpoint cover gives the suffix's endpoint balance premise at `next`.
-
-A validator supported at `next` exits after the current epoch, which is at least the start epoch.
-
-The suffix then keeps the frame and both covers at `after`. -/
+/-- The pending consolidations, then the silent suffix of the epoch, at the same event ownership. -/
 private theorem reservedEvent_consolidations_suffix_retired {x : ForkedBeaconState preset}
     {high : Nat}
     {rounding : Nat → Nat} {fork : Fork} {next : Epoch} {eventPosition position : Nat}
@@ -1167,6 +1146,21 @@ private theorem reservedEvent_consolidations_suffix_retired {x : ForkedBeaconSta
         ⟨fork, t⟩ ⟨fork, z⟩ next next suffix after after ∧
       EndpointCoverAll x ⟨fork, z⟩ after ∧ FutureEffectiveCover x ⟨fork, z⟩ after ∧
       RetiredActivated z after.retired := by
+  -- The consolidation event gives its ownership `after` and the reserve cut at `next`.
+  --
+  -- It also gives the endpoint cover and the future cover at the actual result `t`.
+  --
+  -- The pending consolidations keep the registry and the matching sizes.
+  --
+  -- So the balance match and the activation order move from `s` to `t`.
+  --
+  -- At `t` the endpoint cover gives the suffix's endpoint balance premise at `next`.
+  --
+  -- A validator supported at `next` exits after the current epoch.
+  --
+  -- That epoch is at least the start epoch.
+  --
+  -- The suffix then keeps the frame and both covers at `after`.
   obtain ⟨u, suffix, consumed, payments, allocations, after, pass, validators, balances, outgoing,
       event, counted, cut, covered, retiredT, futureT⟩ :=
     reservedEvent_consolidations (eventPosition := eventPosition) (position := position) electra ok
@@ -1204,45 +1198,6 @@ private theorem reservedEvent_consolidations_suffix_retired {x : ForkedBeaconSta
     counted, retiredT, frame, endpointT matchedT covered,
     futureW matchedT activationT covered futureT, retiredT.lifecycle life⟩
 
-/-- The epoch stages from the start to the eth1 reset, as one trace of their actual edges. -/
-private theorem epochResetTrace {fork : Fork}
-    {s justified scored rewarded registered slashed reset : BeaconState preset fork}
-    (justifiedOk : EpochStage.Edge config checks .justification s justified)
-    (scoredOk : EpochStage.Edge config checks .inactivity justified scored)
-    (rewardsOk : processRewardsAndPenalties config scored = .ok rewarded)
-    (registry : processRegistryUpdates config rewarded = .ok registered)
-    (slashings : processSlashings registered = .ok slashed)
-    (resetOk : EpochStage.Edge config checks .eth1Reset slashed reset) :
-    EpochTrace (EpochStage.action config checks)
-      [.justification, .inactivity, .rewards, .registry, .slashings, .eth1Reset] s reset :=
-  .cons (EpochStage.action_cases.mpr justifiedOk) <|
-    .cons (EpochStage.action_cases.mpr scoredOk) <|
-    .cons (EpochStage.action_cases.mpr (show EpochStage.Edge config checks .rewards scored
-      rewarded from rewardsOk)) <|
-    .cons (EpochStage.action_cases.mpr (show EpochStage.Edge config checks .registry rewarded
-      registered from registry)) <|
-    .cons (EpochStage.action_cases.mpr (show EpochStage.Edge config checks .slashings
-      registered slashed from slashings)) <|
-    .cons (EpochStage.action_cases.mpr resetOk) .nil
-
-/-- The epoch stages from the start to the pending deposits, as one trace of their edges. -/
-theorem epochDepositTrace {fork : Fork}
-    {s justified scored rewarded registered slashed reset deposited : BeaconState preset fork}
-    (justifiedOk : EpochStage.Edge config checks .justification s justified)
-    (scoredOk : EpochStage.Edge config checks .inactivity justified scored)
-    (rewardsOk : processRewardsAndPenalties config scored = .ok rewarded)
-    (registry : processRegistryUpdates config rewarded = .ok registered)
-    (slashings : processSlashings registered = .ok slashed)
-    (resetOk : EpochStage.Edge config checks .eth1Reset slashed reset)
-    (depositsOk : EpochStage.Edge config checks .pendingDeposits reset deposited) :
-    EpochTrace (EpochStage.action config checks)
-      [.justification, .inactivity, .rewards, .registry, .slashings, .eth1Reset,
-        .pendingDeposits] s deposited :=
-  (EpochTrace.append_iff (xs := [.justification, .inactivity, .rewards, .registry,
-    .slashings, .eth1Reset]) (ys := [.pendingDeposits])).mpr
-    ⟨reset, epochResetTrace justifiedOk scoredOk rewardsOk registry slashings resetOk,
-      .cons (EpochStage.action_cases.mpr depositsOk) .nil⟩
-
 /-- The epoch prefix up to the pending consolidations, as one reserved replay.
 
 ```text
@@ -1250,35 +1205,11 @@ theorem epochDepositTrace {fork : Fork}
       -- registry--> registered --slashings--> slashed --eth1 reset--> reset pending deposits--> t
 ```
 
-These are the stages before the payments, in the order of the epoch schedule.
-
-Each step hands its own output frame to the next.
-
-The eth1 reset keeps the registry, the balances and the queue.
-
-So it carries the slashings frame and both covers with the same ownership.
-
-The queue erasure at `t` is the one the pending-deposit event establishes.
-
-The facts the stages need in between come from the epoch start.
-
-The epoch prefix carries the slot, the queue order, the exits and the delay to `reset`.
-
-Each stage keeps the registry lifecycle.
-
-`2 <= MIN_VALIDATOR_WITHDRAWABILITY_DELAY` gives the two epochs the deposit step reads. -/
+These are the stages before the payments, in the order of the epoch schedule. -/
 private theorem reservedReplay_epochPrefixDeposits_owned {fork : Fork}
-    {s justified scored rewarded registered slashed reset t : BeaconState preset fork}
-    {recorded : List (BalanceEvent preset)} {limit : Nat}
+    {s reset t : BeaconState preset fork}
     (electra : .pectra ≤ fork) (early : fork < .glamsterdam) (matched : BalancesMatch s)
-    (justifiedOk : EpochStage.Edge config checks .justification s justified)
-    (scoredOk : EpochStage.Edge config checks .inactivity justified scored)
-    (rewardsOk : processRewardsAndPenalties config scored = .ok rewarded)
-    (replay : replayRewards (config := config) (scored, []) = .ok (rewarded, recorded))
-    (registry : processRegistryUpdates config rewarded = .ok registered)
-    (slashings : processSlashings registered = .ok slashed)
-    (limitOk : delayedSlashingLimit registered = .ok limit)
-    (resetOk : EpochStage.Edge config checks .eth1Reset slashed reset)
+    (epoch : ReplayedPrefix config checks s reset)
     (deposits : processPendingDeposits config checks reset electra = .ok t)
     (reserve : ReserveCut x high ⟨fork, s⟩ (getCurrentEpoch s) (queue.map (·.entry)) owned)
     (assignment : AssignmentCut rounding queue owned)
@@ -1297,13 +1228,14 @@ private theorem reservedReplay_epochPrefixDeposits_owned {fork : Fork}
     ∃ after, ReservedReplay (config := config) (checks := checks) x high rounding
       ⟨fork, s⟩ (getCurrentEpoch s) ⟨fork, t⟩ (getCurrentEpoch t)
       eventPosition paymentPosition callPosition
-      (recorded ++ [⟨.slashings, ⟨fork, registered⟩, ⟨fork, slashed⟩, 0, limit⟩,
+      (epoch.recorded ++
+        [⟨.slashings, ⟨fork, epoch.registered⟩, ⟨fork, epoch.slashed⟩, 0, epoch.limit⟩,
         ⟨.deposits, ⟨fork, reset⟩, ⟨fork, t⟩, consumedDeposits reset t electra, 0⟩])
       queue queue [] [] [] owned after ∧
       ReservedFrame (config := config) (checks := checks) x high rounding
         ⟨fork, t⟩ ⟨fork, t⟩ (getCurrentEpoch t) (getCurrentEpoch t) queue after after ∧
       QueueErasure queue (pendingQueue ⟨fork, t⟩) ∧
-      OwnershipBefore (eventPosition + (recorded.length + 2)) paymentPosition after ∧
+      OwnershipBefore (eventPosition + (epoch.recorded.length + 2)) paymentPosition after ∧
       BalancesMatch t ∧ RetiredActivated t after.retired ∧
       (EndpointCoverAll x ⟨fork, s⟩ owned → EndpointCoverAll x ⟨fork, t⟩ after) ∧
       (FutureEffectiveCover x ⟨fork, s⟩ owned → FutureEffectiveCover x ⟨fork, t⟩ after) ∧
@@ -1315,57 +1247,79 @@ private theorem reservedReplay_epochPrefixDeposits_owned {fork : Fork}
       ((∀ v ∈ s.validators.data, v.activationEpoch ≤ v.exitEpoch) →
         ∀ v ∈ t.validators.data, v.activationEpoch ≤ v.exitEpoch) ∧
       after.original = owned.original := by
-  have rewardsEdge : EpochStage.Edge config checks .rewards scored rewarded := rewardsOk
-  have registryEdge : EpochStage.Edge config checks .registry rewarded registered := registry
-  have slashingsEdge : EpochStage.Edge config checks .slashings registered slashed := slashings
+  -- Each step hands its own output frame to the next.
+  --
+  -- The eth1 reset keeps the registry, the balances and the queue.
+  --
+  -- So it carries the slashings frame and both covers with the same ownership.
+  --
+  -- The queue erasure at `t` is the one the pending-deposit event establishes.
+  --
+  -- The facts the stages need in between come from the epoch start.
+  --
+  -- The epoch prefix carries the slot, the queue order, the exits and the delay to `reset`.
+  --
+  -- Each stage keeps the registry lifecycle.
+  --
+  -- `2 <= MIN_VALIDATOR_WITHDRAWABILITY_DELAY` gives the two epochs the deposit step reads.
+  have rewardsEdge : EpochStage.Edge config checks .rewards epoch.scored epoch.rewarded :=
+    epoch.rewardedOk
+  have registryEdge : EpochStage.Edge config checks .registry epoch.rewarded epoch.registered :=
+    epoch.registeredOk
+  have slashingsEdge : EpochStage.Edge config checks .slashings epoch.registered epoch.slashed :=
+    epoch.slashedOk
   -- The actual stage trace from the epoch start to the deposit input.
-  have trace := epochResetTrace (config := config) (checks := checks) justifiedOk scoredOk
-    rewardsOk registry slashings resetOk
+  have trace := epoch.trace
   obtain ⟨resetSlot, resetOrdered, resetExits, resetDelayed⟩ :=
     deposit_prefix_facts trace ordered exits delayed
   obtain ⟨rewardedOwned, rewards, rewardedFrame, rewardedCounters, rewardedMatched,
       rewardedCover, rewardedFuture, retiredSame, registrySame, originalSame⟩ :=
     reservedReplay_epochRewardStart_owned (callPosition := callPosition) electra matched
-      justifiedOk scoredOk replay reserve assignment erasure prior
+      epoch.justifiedOk epoch.scoredOk epoch.replay reserve assignment erasure prior
   -- Rewards keep the registry and the retired set, so retired sources stay activated.
-  have rewardedRetired : RetiredActivated rewarded rewardedOwned.retired := by
+  have rewardedRetired : RetiredActivated epoch.rewarded rewardedOwned.retired := by
     intro i member
     rw [retiredSame] at member
     obtain ⟨v, found, assigned⟩ := retired i member
     exact ⟨v, by rw [registrySame]; exact found, assigned⟩
-  have rewardedLife : RegistryLifecycle s rewarded := RegistryLifecycle.of_data registrySame
-  have rewardedExits : ExitsOrdered rewarded := by
+  have rewardedLife : RegistryLifecycle s epoch.rewarded := RegistryLifecycle.of_data registrySame
+  have rewardedExits : ExitsOrdered epoch.rewarded := by
     simpa only [ExitsOrdered, registrySame] using exits
-  have rewardedEpoch : getCurrentEpoch rewarded = getCurrentEpoch s := by
-    simp only [getCurrentEpoch, rewardsEdge.slot_eq, scoredOk.slot_eq, justifiedOk.slot_eq]
+  have rewardedEpoch : getCurrentEpoch epoch.rewarded = getCurrentEpoch s := by
+    simp only [getCurrentEpoch, rewardsEdge.slot_eq, epoch.scoredOk.slot_eq,
+      epoch.justifiedOk.slot_eq]
   obtain ⟨middle, slashedFrame, slashedCover, slashedFuture⟩ :=
     reservedReplay_registrySlashings_frame (callPosition := callPosition) electra early
-      rewardedMatched registry slashings limitOk rewardedRetired (startLife.trans rewardedLife)
+      rewardedMatched epoch.registeredOk epoch.slashedOk epoch.limitOk rewardedRetired
+      (startLife.trans rewardedLife)
       startFinite rewardedExits (rewardedEpoch ▸ finite) rewardedFrame rewardedCounters
   have slashedCounters := middle.counters rewardedCounters
   simp only [List.length_singleton, List.length_nil, Nat.add_zero] at slashedCounters
-  have registeredMatched : BalancesMatch registered :=
+  have registeredMatched : BalancesMatch epoch.registered :=
     registryEdge.balancesMatch_of_not_justification (by simp) rewardedMatched
-  have slashedMatched : BalancesMatch slashed :=
-    balancesMatch_of_sameSizes (sameSizes_processSlashings slashings) registeredMatched
+  have slashedMatched : BalancesMatch epoch.slashed :=
+    balancesMatch_of_sameSizes (sameSizes_processSlashings epoch.slashedOk) registeredMatched
   -- The eth1 reset keeps the registry, the balances, the queue and the slot.
-  obtain ⟨resetValidators, resetBalances, _⟩ := resetOk.records (by simp)
-  have resetEpoch : getCurrentEpoch reset = getCurrentEpoch slashed := by
-    simp only [getCurrentEpoch, resetOk.slot_eq]
+  obtain ⟨resetValidators, resetBalances, _⟩ := epoch.resetOk.records (by simp)
+  have resetEpoch : getCurrentEpoch reset = getCurrentEpoch epoch.slashed := by
+    simp only [getCurrentEpoch, epoch.resetOk.slot_eq]
   have resetFrame : ReservedFrame (config := config) (checks := checks) x high rounding
-      ⟨fork, slashed⟩ ⟨fork, reset⟩ (getCurrentEpoch slashed) (getCurrentEpoch reset) queue
-      (creditOwnership (eventPosition + recorded.length)
-        ⟨.slashings, ⟨fork, registered⟩, ⟨fork, slashed⟩, 0, limit⟩ rewardedOwned)
-      (creditOwnership (eventPosition + recorded.length)
-        ⟨.slashings, ⟨fork, registered⟩, ⟨fork, slashed⟩, 0, limit⟩ rewardedOwned) := by
+      ⟨fork, epoch.slashed⟩ ⟨fork, reset⟩ (getCurrentEpoch epoch.slashed) (getCurrentEpoch reset)
+      queue
+      (creditOwnership (eventPosition + epoch.recorded.length)
+        ⟨.slashings, ⟨fork, epoch.registered⟩, ⟨fork, epoch.slashed⟩, 0, epoch.limit⟩
+        rewardedOwned)
+      (creditOwnership (eventPosition + epoch.recorded.length)
+        ⟨.slashings, ⟨fork, epoch.registered⟩, ⟨fork, epoch.slashed⟩, 0, epoch.limit⟩
+        rewardedOwned) := by
     rw [resetEpoch]
-    exact reservedFrame_records_stage .eth1Reset (EpochStage.action_cases.mpr resetOk)
+    exact reservedFrame_records_stage .eth1Reset (EpochStage.action_cases.mpr epoch.resetOk)
       (by simp) slashedFrame.2.2.2.2.2.2.2.2 slashedFrame.2.2.2.2.1 slashedFrame.2.2.2.2.2.2.1
   have resetMatched : BalancesMatch reset :=
-    resetOk.balancesMatch_of_not_justification (by simp) slashedMatched
+    epoch.resetOk.balancesMatch_of_not_justification (by simp) slashedMatched
   have resetLife : RegistryLifecycle s reset :=
-    ((rewardedLife.trans (registryLifecycle_processRegistryUpdates registry)).trans
-      slashingsEdge.registryLifecycle).trans resetOk.registryLifecycle
+    ((rewardedLife.trans (registryLifecycle_processRegistryUpdates epoch.registeredOk)).trans
+      slashingsEdge.registryLifecycle).trans epoch.resetOk.registryLifecycle
   have resetFinite : getCurrentEpoch reset < FAR_FUTURE_EPOCH := by
     simpa only [getCurrentEpoch, resetSlot] using finite
   -- The configured delay is at least the two epochs the deposit step reads.
@@ -1391,9 +1345,10 @@ private theorem reservedReplay_epochPrefixDeposits_owned {fork : Fork}
   refine ⟨_, by simpa only [List.singleton_append, List.nil_append] using joined, finalFrame,
     finalFrame.2.2.2.2.2.2.1, by simpa only [Nat.add_assoc] using finalCounters,
     depositEdge.balancesMatch_of_not_justification (by simp) resetMatched,
-    (rewardedRetired.lifecycle ((((registryLifecycle_processRegistryUpdates registry).trans
-      slashingsEdge.registryLifecycle).trans resetOk.registryLifecycle).trans
-        depositEdge.registryLifecycle)),
+    (rewardedRetired.lifecycle
+      ((((registryLifecycle_processRegistryUpdates epoch.registeredOk).trans
+        slashingsEdge.registryLifecycle).trans epoch.resetOk.registryLifecycle).trans
+          depositEdge.registryLifecycle)),
     fun initial => finalCover ?_, fun initial => finalFuture ?_,
     depositEdge.slot_eq.trans resetSlot, resetLife.trans depositEdge.registryLifecycle,
     (frame_processPendingDeposits deposits).toFrame.exitsOrdered resetExits,
@@ -1402,28 +1357,20 @@ private theorem reservedReplay_epochPrefixDeposits_owned {fork : Fork}
     originalSame⟩
   rotate_left 2
   · -- Every stage of the prefix keeps the activation-exit order.
-    exact depositEdge.activationExitOrder <| resetOk.activationExitOrder <|
+    exact depositEdge.activationExitOrder <| epoch.resetOk.activationExitOrder <|
       slashingsEdge.activationExitOrder <| registryEdge.activationExitOrder <|
-      rewardsEdge.activationExitOrder <| scoredOk.activationExitOrder <|
-      justifiedOk.activationExitOrder order
-  · exact endpointCoverAll_records resetValidators resetBalances resetOk.slot_eq
+      rewardsEdge.activationExitOrder <| epoch.scoredOk.activationExitOrder <|
+      epoch.justifiedOk.activationExitOrder order
+  · exact endpointCoverAll_records resetValidators resetBalances epoch.resetOk.slot_eq
       (slashedCover (rewardedCover initial))
   · exact futureCover_records resetValidators (by
-      simp only [getCurrentEpoch, resetOk.slot_eq]
+      simp only [getCurrentEpoch, epoch.resetOk.slot_eq]
       exact UInt64.le_refl _) (slashedFuture (rewardedFuture initial))
 
 theorem reservedReplay_epochPrefixDeposits_facts {fork : Fork}
-    {s justified scored rewarded registered slashed reset t : BeaconState preset fork}
-    {recorded : List (BalanceEvent preset)} {limit : Nat}
+    {s reset t : BeaconState preset fork}
     (electra : .pectra ≤ fork) (early : fork < .glamsterdam) (matched : BalancesMatch s)
-    (justifiedOk : EpochStage.Edge config checks .justification s justified)
-    (scoredOk : EpochStage.Edge config checks .inactivity justified scored)
-    (rewardsOk : processRewardsAndPenalties config scored = .ok rewarded)
-    (replay : replayRewards (config := config) (scored, []) = .ok (rewarded, recorded))
-    (registry : processRegistryUpdates config rewarded = .ok registered)
-    (slashings : processSlashings registered = .ok slashed)
-    (limitOk : delayedSlashingLimit registered = .ok limit)
-    (resetOk : EpochStage.Edge config checks .eth1Reset slashed reset)
+    (epoch : ReplayedPrefix config checks s reset)
     (deposits : processPendingDeposits config checks reset electra = .ok t)
     (reserve : ReserveCut x high ⟨fork, s⟩ (getCurrentEpoch s) (queue.map (·.entry)) owned)
     (assignment : AssignmentCut rounding queue owned)
@@ -1442,13 +1389,14 @@ theorem reservedReplay_epochPrefixDeposits_facts {fork : Fork}
     ∃ after, ReservedReplay (config := config) (checks := checks) x high rounding
       ⟨fork, s⟩ (getCurrentEpoch s) ⟨fork, t⟩ (getCurrentEpoch t)
       eventPosition paymentPosition callPosition
-      (recorded ++ [⟨.slashings, ⟨fork, registered⟩, ⟨fork, slashed⟩, 0, limit⟩,
+      (epoch.recorded ++
+        [⟨.slashings, ⟨fork, epoch.registered⟩, ⟨fork, epoch.slashed⟩, 0, epoch.limit⟩,
         ⟨.deposits, ⟨fork, reset⟩, ⟨fork, t⟩, consumedDeposits reset t electra, 0⟩])
       queue queue [] [] [] owned after ∧
       ReservedFrame (config := config) (checks := checks) x high rounding
         ⟨fork, t⟩ ⟨fork, t⟩ (getCurrentEpoch t) (getCurrentEpoch t) queue after after ∧
       QueueErasure queue (pendingQueue ⟨fork, t⟩) ∧
-      OwnershipBefore (eventPosition + (recorded.length + 2)) paymentPosition after ∧
+      OwnershipBefore (eventPosition + (epoch.recorded.length + 2)) paymentPosition after ∧
       BalancesMatch t ∧ RetiredActivated t after.retired ∧
       (EndpointCoverAll x ⟨fork, s⟩ owned → EndpointCoverAll x ⟨fork, t⟩ after) ∧
       (FutureEffectiveCover x ⟨fork, s⟩ owned → FutureEffectiveCover x ⟨fork, t⟩ after) ∧
@@ -1462,7 +1410,7 @@ theorem reservedReplay_epochPrefixDeposits_facts {fork : Fork}
   obtain ⟨after, history, frame, erasureT, counters, matchedT, retiredT, cover, future, slotT,
       lifeT, exitsT, delayT, activationT, _⟩ :=
     reservedReplay_epochPrefixDeposits_owned (callPosition := callPosition) electra early matched
-      justifiedOk scoredOk rewardsOk replay registry slashings limitOk resetOk deposits reserve
+      epoch deposits reserve
       assignment erasure prior retired startLife startFinite ordered exits finite delayed delayTwo
   exact ⟨after, history, frame, erasureT, counters, matchedT, retiredT, cover, future, slotT, lifeT,
     exitsT, delayT, activationT⟩
@@ -1471,23 +1419,7 @@ theorem reservedReplay_epochPrefixDeposits_facts {fork : Fork}
 
 ```text
     start ==frame==> s --pending consolidations--> t ==silent suffix==> z
-```
-
-The frame into `s` supplies the incoming queue erasure and the assignment cut.
-
-So the event reads no separate erasure hypothesis.
-
-The event is the one pass construction of the pending consolidations with the silent suffix.
-
-The replay records it with the limits the caller needs.
-
-An example is the consumed balance that the epoch replay records.
-
-It ends in the suffix frame at the event's ownership `after`.
-
-The retired sources stay activated at `z`, since every suffix stage keeps the registry lifecycle.
-
-The reserve cut at `next` stays a premise. -/
+``` -/
 private theorem reservedReplay_consolidations_suffix {x : ForkedBeaconState preset} {high : Nat}
     {rounding : Nat → Nat} {fork : Fork} {next : Epoch}
     {eventPosition position callPosition : Nat} {credit debit : Nat}
@@ -1495,6 +1427,9 @@ private theorem reservedReplay_consolidations_suffix {x : ForkedBeaconState pres
     {s t z : BeaconState preset fork} {queue : List TaggedEntry} {owned before : Ownership}
     (electra : .pectra ≤ fork)
     (ok : processPendingConsolidations s electra = .ok t)
+    -- The frame into `s` supplies the incoming queue erasure and the assignment cut.
+    --
+    -- So the event reads no separate erasure hypothesis.
     (frame : ReservedFrame (config := config) (checks := checks) x high rounding
       start ⟨fork, s⟩ startEpoch (getCurrentEpoch s) queue owned before)
     (reserve : ReserveCut x high ⟨fork, s⟩ next (queue.map (·.entry)) before)
@@ -1532,6 +1467,19 @@ private theorem reservedReplay_consolidations_suffix {x : ForkedBeaconState pres
       OwnershipBefore (eventPosition + 1) (position + payments.length) after ∧
       RetiredActivated z after.retired ∧
       EndpointCoverAll x ⟨fork, z⟩ after ∧ FutureEffectiveCover x ⟨fork, z⟩ after := by
+  -- The event is the one pass construction of the pending consolidations with the silent suffix.
+  --
+  -- The replay records it with the limits the caller needs.
+  --
+  -- An example is the consumed balance that the epoch replay records.
+  --
+  -- It ends in the suffix frame at the event's ownership `after`.
+  --
+  -- The retired sources stay activated at `z`.
+  --
+  -- That holds since every suffix stage keeps the registry lifecycle.
+  --
+  -- The reserve cut at `next` stays a premise.
   obtain ⟨u, suffix, consumed, payments, allocations, after, pass, validators, balances, event,
       counted, _, suffixFrame, endpointZ, futureZ, retiredZ⟩ :=
     reservedEvent_consolidations_suffix_retired electra ok reserve frame.2.2.2.2.1
@@ -1550,18 +1498,10 @@ private theorem reservedReplay_consolidations_suffix {x : ForkedBeaconState pres
 
 /-- The whole-epoch reserved replay, with the facts the prefix fixes at the consolidation input. -/
 private theorem reservedReplay_epoch_facts {fork : Fork}
-    {s justified scored rewarded registered slashed reset deposited consolidated z :
-      BeaconState preset fork}
-    {recorded : List (BalanceEvent preset)} {limit : Nat} {next : Epoch}
+    {s reset deposited consolidated z : BeaconState preset fork}
+    {next : Epoch}
     (electra : .pectra ≤ fork) (early : fork < .glamsterdam) (matched : BalancesMatch s)
-    (justifiedOk : EpochStage.Edge config checks .justification s justified)
-    (scoredOk : EpochStage.Edge config checks .inactivity justified scored)
-    (rewardsOk : processRewardsAndPenalties config scored = .ok rewarded)
-    (replay : replayRewards (config := config) (scored, []) = .ok (rewarded, recorded))
-    (registry : processRegistryUpdates config rewarded = .ok registered)
-    (slashings : processSlashings registered = .ok slashed)
-    (limitOk : delayedSlashingLimit registered = .ok limit)
-    (resetOk : EpochStage.Edge config checks .eth1Reset slashed reset)
+    (epoch : ReplayedPrefix config checks s reset)
     (depositsOk : EpochStage.Edge config checks .pendingDeposits reset deposited)
     (consolidationsOk : EpochStage.Edge config checks .pendingConsolidations deposited consolidated)
     (trace : EpochTrace (EpochStage.action config checks)
@@ -1595,10 +1535,11 @@ private theorem reservedReplay_epoch_facts {fork : Fork}
     ∃ after, ReservedReplay (config := config) (checks := checks) x high rounding
       ⟨fork, s⟩ (getCurrentEpoch s) ⟨fork, deposited⟩ (getCurrentEpoch deposited)
       eventPosition paymentPosition callPosition
-      (recorded ++ [⟨.slashings, ⟨fork, registered⟩, ⟨fork, slashed⟩, 0, limit⟩,
+      (epoch.recorded ++
+        [⟨.slashings, ⟨fork, epoch.registered⟩, ⟨fork, epoch.slashed⟩, 0, epoch.limit⟩,
         ⟨.deposits, ⟨fork, reset⟩, ⟨fork, deposited⟩, consumedDeposits reset deposited electra, 0⟩])
       queue queue [] [] [] owned after ∧
-      OwnershipBefore (eventPosition + (recorded.length + 2)) paymentPosition after ∧
+      OwnershipBefore (eventPosition + (epoch.recorded.length + 2)) paymentPosition after ∧
       after.original = owned.original ∧
       ReserveCut x high ⟨fork, deposited⟩ (getCurrentEpoch deposited) (queue.map (·.entry)) after ∧
       FutureEffectiveCover x ⟨fork, deposited⟩ after ∧ ExitsOrdered deposited ∧
@@ -1616,7 +1557,8 @@ private theorem reservedReplay_epoch_facts {fork : Fork}
           ReservedReplay (config := config) (checks := checks) x high rounding
             ⟨fork, s⟩ (getCurrentEpoch s) ⟨fork, z⟩ next eventPosition paymentPosition
             callPosition
-            (recorded ++ [⟨.slashings, ⟨fork, registered⟩, ⟨fork, slashed⟩, 0, limit⟩] ++
+            (epoch.recorded ++
+              [⟨.slashings, ⟨fork, epoch.registered⟩, ⟨fork, epoch.slashed⟩, 0, epoch.limit⟩] ++
               if electra : .pectra ≤ fork then
                 [⟨.deposits, ⟨fork, reset⟩, ⟨fork, deposited⟩,
                   consumedDeposits reset deposited electra, 0⟩,
@@ -1627,7 +1569,7 @@ private theorem reservedReplay_epoch_facts {fork : Fork}
             queue suffix payments allocations [] owned final ∧
           ReservedFrame (config := config) (checks := checks) x high rounding
             ⟨fork, consolidated⟩ ⟨fork, z⟩ next next suffix final final ∧
-          OwnershipBefore (eventPosition + (recorded.length + 3))
+          OwnershipBefore (eventPosition + (epoch.recorded.length + 3))
             (paymentPosition + payments.length) final ∧
           RetiredActivated z final.retired ∧
           EndpointCoverAll x ⟨fork, z⟩ final ∧ FutureEffectiveCover x ⟨fork, z⟩ final) := by
@@ -1638,7 +1580,7 @@ private theorem reservedReplay_epoch_facts {fork : Fork}
   obtain ⟨after, prefixReplay, prefixFrame, _, counters, matchedD, retiredD, cover, future,
       slotD, lifeD, exitsD, delayedD, activationD, originalSame⟩ :=
     reservedReplay_epochPrefixDeposits_owned (callPosition := callPosition) electra early matched
-      justifiedOk scoredOk rewardsOk replay registry slashings limitOk resetOk deposits reserve
+      epoch deposits reserve
       assignment erasure prior retired startLife startFinite ordered exits finite delayed delayTwo
   refine ⟨after, prefixReplay, counters, originalSame, prefixFrame.2.2.2.2.2.2.2.2,
     future startFuture, exitsD, slotD, lifeD, delayedD, fun reserveNext initialZero => ?_⟩
@@ -1659,7 +1601,8 @@ private theorem reservedReplay_epoch_facts {fork : Fork}
     obtain ⟨w, located, kept⟩ := lifeD.validators _ v found
     exact ⟨w, located, by rw [kept.activationEpoch assigned]; exact assigned⟩
   have suffixCounters : OwnershipBefore
-      (eventPosition + (recorded ++ [(⟨.slashings, ⟨fork, registered⟩, ⟨fork, slashed⟩, 0, limit⟩ :
+      (eventPosition + (epoch.recorded ++
+        [(⟨.slashings, ⟨fork, epoch.registered⟩, ⟨fork, epoch.slashed⟩, 0, epoch.limit⟩ :
         BalanceEvent preset), ⟨.deposits, ⟨fork, reset⟩, ⟨fork, deposited⟩,
           consumedDeposits reset deposited electra, 0⟩]).length)
       (paymentPosition + ([] : List (TaggedEntry × Payment preset)).length) after := by
@@ -1684,40 +1627,12 @@ private theorem reservedReplay_epoch_facts {fork : Fork}
   simpa only [List.length_append, List.length_cons, List.length_nil, List.length_singleton,
     Nat.add_zero, Nat.add_assoc] using suffixCounted
 
-/-- The whole-epoch reserved replay, with the initial baselines from the start ownership.
-
-Every prefix step keeps the original balances.
-
-So the ownership at the consolidation input has the start's baselines.
-
-The prefix also gives the current reserve cut and the future cover at that input.
-
-It gives the exit order, the slot, the lifecycle and the exit delay there too.
-
-The caps at the consolidation input come from the caps at `s`.
-
-The steps before the payments keep them.
-
-The pending consolidations keep the registry.
-
-The slashed sources' withdrawability from `x` to the consolidation input is a premise.
-
-It is returned unchanged for the reserve.
-
-The reserve cut at the next epoch stays the caller's, for that ownership. -/
+/-- The whole-epoch reserved replay, with the initial baselines from the start ownership. -/
 private theorem reservedReplay_epochReserved {fork : Fork}
-    {s justified scored rewarded registered slashed reset deposited consolidated z :
-      BeaconState preset fork}
-    {recorded : List (BalanceEvent preset)} {limit : Nat} {next : Epoch}
+    {s reset deposited consolidated z : BeaconState preset fork}
+    {next : Epoch}
     (electra : .pectra ≤ fork) (early : fork < .glamsterdam) (matched : BalancesMatch s)
-    (justifiedOk : EpochStage.Edge config checks .justification s justified)
-    (scoredOk : EpochStage.Edge config checks .inactivity justified scored)
-    (rewardsOk : processRewardsAndPenalties config scored = .ok rewarded)
-    (replay : replayRewards (config := config) (scored, []) = .ok (rewarded, recorded))
-    (registry : processRegistryUpdates config rewarded = .ok registered)
-    (slashings : processSlashings registered = .ok slashed)
-    (limitOk : delayedSlashingLimit registered = .ok limit)
-    (resetOk : EpochStage.Edge config checks .eth1Reset slashed reset)
+    (epoch : ReplayedPrefix config checks s reset)
     (depositsOk : EpochStage.Edge config checks .pendingDeposits reset deposited)
     (consolidationsOk : EpochStage.Edge config checks .pendingConsolidations deposited consolidated)
     (trace : EpochTrace (EpochStage.action config checks)
@@ -1750,6 +1665,9 @@ private theorem reservedReplay_epochReserved {fork : Fork}
       w.activationEpoch ≠ FAR_FUTURE_EPOCH)
     (initialZero : ∀ tag ∈ queue, ∀ n, tag.tag = .initial n →
       owned.original tag.entry.sourceIndex.toNat = 0)
+    -- The slashed sources' withdrawability from `x` to the consolidation input is a premise.
+    --
+    -- It is returned unchanged for the reserve.
     (slashedSpan : ∀ (i : Nat) (v w : Validator), x.state.validators.data[i]? = some v →
       deposited.validators.data[i]? = some w → v.slashed = true →
       v.exitEpoch ≠ FAR_FUTURE_EPOCH →
@@ -1758,10 +1676,11 @@ private theorem reservedReplay_epochReserved {fork : Fork}
     ∃ after, ReservedReplay (config := config) (checks := checks) x high rounding
       ⟨fork, s⟩ (getCurrentEpoch s) ⟨fork, deposited⟩ (getCurrentEpoch deposited)
       eventPosition paymentPosition callPosition
-      (recorded ++ [⟨.slashings, ⟨fork, registered⟩, ⟨fork, slashed⟩, 0, limit⟩,
+      (epoch.recorded ++
+        [⟨.slashings, ⟨fork, epoch.registered⟩, ⟨fork, epoch.slashed⟩, 0, epoch.limit⟩,
         ⟨.deposits, ⟨fork, reset⟩, ⟨fork, deposited⟩, consumedDeposits reset deposited electra, 0⟩])
       queue queue [] [] [] owned after ∧
-      OwnershipBefore (eventPosition + (recorded.length + 2)) paymentPosition after ∧
+      OwnershipBefore (eventPosition + (epoch.recorded.length + 2)) paymentPosition after ∧
       ReserveCut x high ⟨fork, deposited⟩ (getCurrentEpoch deposited) (queue.map (·.entry)) after ∧
       FutureEffectiveCover x ⟨fork, deposited⟩ after ∧ ExitsOrdered deposited ∧
       deposited.slot = s.slot ∧ RegistryLifecycle x.state deposited ∧
@@ -1781,7 +1700,8 @@ private theorem reservedReplay_epochReserved {fork : Fork}
           ReservedReplay (config := config) (checks := checks) x high rounding
             ⟨fork, s⟩ (getCurrentEpoch s) ⟨fork, z⟩ next eventPosition paymentPosition
             callPosition
-            (recorded ++ [⟨.slashings, ⟨fork, registered⟩, ⟨fork, slashed⟩, 0, limit⟩] ++
+            (epoch.recorded ++
+              [⟨.slashings, ⟨fork, epoch.registered⟩, ⟨fork, epoch.slashed⟩, 0, epoch.limit⟩] ++
               if electra : .pectra ≤ fork then
                 [⟨.deposits, ⟨fork, reset⟩, ⟨fork, deposited⟩,
                   consumedDeposits reset deposited electra, 0⟩,
@@ -1792,18 +1712,26 @@ private theorem reservedReplay_epochReserved {fork : Fork}
             queue suffix payments allocations [] owned final ∧
           ReservedFrame (config := config) (checks := checks) x high rounding
             ⟨fork, consolidated⟩ ⟨fork, z⟩ next next suffix final final ∧
-          OwnershipBefore (eventPosition + (recorded.length + 3))
+          OwnershipBefore (eventPosition + (epoch.recorded.length + 3))
             (paymentPosition + payments.length) final ∧
           RetiredActivated z final.retired ∧
           EndpointCoverAll x ⟨fork, z⟩ final ∧ FutureEffectiveCover x ⟨fork, z⟩ final) := by
-  -- The steps before the payments keep the caps; the consolidations keep the registry.
-  have before : epochBeforePayments config checks s = .ok consolidated := by
-    rw [epochBeforePayments_eq_run]
-    exact EpochTrace.run_ok_iff.mpr ((EpochTrace.append_iff
-      (xs := [.justification, .inactivity, .rewards, .registry, .slashings, .eth1Reset,
-        .pendingDeposits]) (ys := [.pendingConsolidations])).mpr
-      ⟨deposited, epochDepositTrace justifiedOk scoredOk rewardsOk registry slashings resetOk
-        depositsOk, .cons (EpochStage.action_cases.mpr consolidationsOk) .nil⟩)
+  -- Every prefix step keeps the original balances.
+  --
+  -- So the ownership at the consolidation input has the start's baselines.
+  --
+  -- The prefix also gives the current reserve cut and the future cover at that input.
+  --
+  -- It gives the exit order, the slot, the lifecycle and the exit delay there too.
+  --
+  -- The caps at the consolidation input come from the caps at `s`.
+  --
+  -- The steps before the payments keep them.
+  --
+  -- The pending consolidations keep the registry.
+  --
+  -- The reserve cut at the next epoch stays the caller's, for that ownership.
+  have before := epoch.epochBeforePayments depositsOk consolidationsOk
   have kept : consolidated.validators = deposited.validators :=
     (processPendingConsolidations_kept
       (by simpa only [EpochStage.Edge, electra, ↓reduceDIte] using consolidationsOk)).1
@@ -1815,8 +1743,8 @@ private theorem reservedReplay_epochReserved {fork : Fork}
     exact Array.mem_of_getElem? found
   obtain ⟨after, history, counters, originalSame, current, futureD, exitsD, slotD, lifeD,
       delayedD, rest⟩ :=
-    reservedReplay_epoch_facts (callPosition := callPosition) electra early matched justifiedOk
-      scoredOk rewardsOk replay registry slashings limitOk resetOk depositsOk consolidationsOk
+    reservedReplay_epoch_facts (callPosition := callPosition) electra early matched epoch
+      depositsOk consolidationsOk
       trace reserve assignment erasure prior retired startCover startFuture startLife startFinite
       startCurrent ordered exits finite delayed delayTwo activationOrder nextOk twoSlots capsD
       unique apart sources
@@ -1832,27 +1760,18 @@ A slashed withdrawable epoch cannot decrease along the run, the cache step and t
 
 This is the slashed-span premise of the reserved replay of the epoch. -/
 theorem epochPrefix_slashedSpan {x outer : ForkedBeaconState preset}
-    {s justified scored rewarded registered slashed reset deposited :
-      BeaconState preset outer.fork}
-    (run : Run config checks x outer)
-    (activation : preset.MAX_EFFECTIVE_BALANCE ≤ preset.MIN_ACTIVATION_BALANCE)
-    (compounding : preset.MIN_ACTIVATION_BALANCE ≤ preset.MAX_EFFECTIVE_BALANCE_ELECTRA)
-    (early : outer.fork < .glamsterdam)
+    {s reset deposited : BeaconState preset outer.fork} (run : Run config checks x outer)
+    (caps : CapOrder preset)
     (cached : processSlot outer.state = .ok s)
-    (justifiedOk : EpochStage.Edge config checks .justification s justified)
-    (scoredOk : EpochStage.Edge config checks .inactivity justified scored)
-    (rewardsOk : processRewardsAndPenalties config scored = .ok rewarded)
-    (registry : processRegistryUpdates config rewarded = .ok registered)
-    (slashings : processSlashings registered = .ok slashed)
-    (resetOk : EpochStage.Edge config checks .eth1Reset slashed reset)
+    (epoch : EpochPrefix config checks s reset)
     (depositsOk : EpochStage.Edge config checks .pendingDeposits reset deposited) :
     ∀ (i : Nat) (v w : Validator), x.state.validators.data[i]? = some v →
       deposited.validators.data[i]? = some w → v.slashed = true →
       v.exitEpoch ≠ FAR_FUTURE_EPOCH →
         w.slashed = true ∧ w.exitEpoch ≠ FAR_FUTURE_EPOCH ∧
           v.withdrawableEpoch ≤ w.withdrawableEpoch :=
-  Run.slashed_withdrawableEpoch_mono_epoch run activation compounding early cached
-    (epochDepositTrace justifiedOk scoredOk rewardsOk registry slashings resetOk depositsOk)
+  Run.slashed_withdrawableEpoch_mono_epoch run caps cached
+    (epoch.depositTrace depositsOk)
 
 /-- Support at the epoch after `c` is support at `c`, or an activation exactly at that epoch.
 
@@ -1898,31 +1817,23 @@ private theorem fundingRelevant_next {fork : Fork} {s : BeaconState preset fork}
 
 /-- The reserve cut at the current epoch gives the cut at the next epoch.
 
-It needs two provenance facts for sources that become due, and the future cover.
-
-- `initialDue`: a source of the start's queue due by the next epoch is initially pending.
-  So the pending clause bounds it.
-- `freshDue`: take a source queued later, due by the next epoch and no new reference.
-  It was inactive at the start, so the idle clause bounds it.
-- `future`: take a validator that activates at the next epoch.
-  Its effective balance is covered at the endpoint.
-  The endpoint clause needs this, and no clause at the current epoch gives it.
-
-Every other clause reads the demand epoch only through three things.
-
-They are support, funding relevance and an activation or exit after it.
-
-Each of them moves from the next epoch back to the current one. -/
+It needs two provenance facts for sources that become due, and the future cover. -/
 private theorem reserveCut_next {x : ForkedBeaconState preset} {fork : Fork}
     {s : BeaconState preset fork} {high : Nat} {next : Epoch}
     {suffix : List PendingConsolidation} {owned : Ownership}
     (nextOk : Uint64.addChecked (getCurrentEpoch s) 1 = .ok next)
     (exits : ExitsOrdered s)
     (start : getCurrentEpoch x.state ≤ getCurrentEpoch s)
+    -- A source of the start's queue due by the next epoch is initially pending.
+    --
+    -- So the pending clause bounds it.
     (initialDue : ∀ q ∈ suffix,
       (∃ p ∈ pendingQueue x, p.sourceIndex.toNat = q.sourceIndex.toNat) →
       ∀ v, s.validators.data[q.sourceIndex.toNat]? = some v → v.withdrawableEpoch ≤ next →
         InitialPending x high q.sourceIndex.toNat)
+    -- Take a source queued later, due by the next epoch and no new reference.
+    --
+    -- It was inactive at the start, so the idle clause bounds it.
     (freshDue : ∀ q ∈ suffix,
       (¬ ∃ p ∈ pendingQueue x, p.sourceIndex.toNat = q.sourceIndex.toNat) →
       ¬ NewReference x q.sourceIndex.toNat →
@@ -1930,9 +1841,19 @@ private theorem reserveCut_next {x : ForkedBeaconState preset} {fork : Fork}
         (x.state.validators.data[q.sourceIndex.toNat]?).all (fun initial =>
           !isActiveValidator initial (getCurrentEpoch x.state) &&
             !isActiveValidator initial (getPreviousEpoch x.state)))
+    -- Take a validator that activates at the next epoch.
+    --
+    -- Its effective balance is covered at the endpoint.
+    --
+    -- The endpoint clause needs this, and no clause at the current epoch gives it.
     (future : FutureEffectiveCover x ⟨fork, s⟩ owned)
     (reserve : ReserveCut x high ⟨fork, s⟩ (getCurrentEpoch s) suffix owned) :
     ReserveCut x high ⟨fork, s⟩ next suffix owned := by
+  -- Every other clause reads the demand epoch only through three things.
+  --
+  -- They are support, funding relevance and an activation or exit after it.
+  --
+  -- Each of them moves from the next epoch back to the current one.
   have step : next.toNat = (getCurrentEpoch s).toNat + 1 := by
     simpa only [UInt64.reduceToNat] using (Uint64.addChecked_ok_iff.mp nextOk).2
   have earlier : getCurrentEpoch s ≤ next := UInt64.le_iff_toNat_le.mpr (by omega)
@@ -1988,18 +1909,7 @@ Let every queued source that becomes due be bounded.
 
 Then the cut at the current epoch moves to the next one.
 
-The move of the cut to the next epoch asks for this bound in two cases.
-
-- A source of the start's queue has its exit assigned at `x`.
-  If it is unslashed at `x`, it withdraws there at most the delay after its exit.
-  The exit stays the same up to `u`, where the delay is at least met.
-  So the withdrawable epoch at `x` is at most the one at `u`.
-  If it is slashed at `x`, `slashedLater` keeps its withdrawable epoch from decreasing.
-  Either way the source is due by `next`, and so by the horizon, already at `x`.
-- Any other queued source had an unset exit at `x`, by the queue provenance.
-  At `x` a slashed key has its exit assigned, so this source was unslashed at `x`.
-  A source that is no new reference was then inactive at `x`, read at `x` itself.
-  A later slashing of the source does not enter: only the source at `x` is read. -/
+The move of the cut to the next epoch asks for this bound in two cases. -/
 private theorem reserveCut_next_of_provenance {x : ForkedBeaconState preset} {fork : Fork}
     {u : BeaconState preset fork} {high : Nat} {next : Epoch} {queue : List TaggedEntry}
     {owned : Ownership}
@@ -2025,6 +1935,18 @@ private theorem reserveCut_next_of_provenance {x : ForkedBeaconState preset} {fo
     (reserve : ReserveCut x high ⟨fork, u⟩ (getCurrentEpoch u) (queue.map (·.entry)) owned) :
     ReserveCut x high ⟨fork, u⟩ next (queue.map (·.entry)) owned := by
   refine reserveCut_next nextOk exits start ?_ ?_ future reserve
+  -- The first case is a source of the start's queue, which has its exit assigned at `x`.
+  --
+  -- If it is unslashed at `x`, it withdraws there at most the delay after its exit.
+  --
+  -- The exit stays the same up to `u`, where the delay is at least met.
+  --
+  -- So the withdrawable epoch at `x` is at most the one at `u`.
+  --
+  -- If it is slashed at `x`, its withdrawable epoch does not decrease up to `u`.
+  --
+  -- Either way the source is due by `next`, and so by the horizon, already at `x`.
+  --
   -- A source of the start's queue that is due by `next` is initially pending.
   · intro q _ ⟨p, queued, sameIndex⟩ v found ready
     unfold pendingQueue at queued
@@ -2050,6 +1972,16 @@ private theorem reserveCut_next_of_provenance {x : ForkedBeaconState preset} {fo
     · have grown :=
         UInt64.le_iff_toNat_le.mp (slashedLater _ initial v initialAt found flag assigned)
       omega
+  -- The second case is any other queued source, which had an unset exit at `x`.
+  --
+  -- That follows from the queue provenance.
+  --
+  -- At `x` a slashed key has its exit assigned, so this source was unslashed at `x`.
+  --
+  -- A source that is no new reference was then inactive at `x`, read at `x` itself.
+  --
+  -- A later slashing of the source does not enter: only the source at `x` is read.
+  --
   -- Any other queued source had an unset exit at `x`, so it was unslashed and inactive there.
   · intro q member notQueued notReference v _ _
     rcases provenance q member with queued | unset
@@ -2068,32 +2000,12 @@ private theorem reserveCut_next_of_provenance {x : ForkedBeaconState preset} {fo
       rw [initial] at inactive
       exact inactive
 
-/-- The whole-epoch reserved replay, with the reserve cut at the next epoch supplied.
-
-The composition gives several facts at the consolidation input and for its own ownership.
-
-They are the current cut, the future cover, the exit order and the slot.
-
-They also include the registry lifecycle from `x`, the withdrawal delay and the slashed span.
-
-The lemma above on the cut at the next epoch turns these into that cut.
-
-It also uses the queue provenance and the queue order at `x`.
-
-It also uses the assigned exits of slashed keys at `x` and the horizon. -/
+/-- The whole-epoch reserved replay, with the reserve cut at the next epoch supplied. -/
 theorem reservedReplay_epochNext {fork : Fork}
-    {s justified scored rewarded registered slashed reset deposited consolidated z :
-      BeaconState preset fork}
-    {recorded : List (BalanceEvent preset)} {limit : Nat} {next : Epoch}
+    {s reset deposited consolidated z : BeaconState preset fork}
+    {next : Epoch}
     (electra : .pectra ≤ fork) (early : fork < .glamsterdam) (matched : BalancesMatch s)
-    (justifiedOk : EpochStage.Edge config checks .justification s justified)
-    (scoredOk : EpochStage.Edge config checks .inactivity justified scored)
-    (rewardsOk : processRewardsAndPenalties config scored = .ok rewarded)
-    (replay : replayRewards (config := config) (scored, []) = .ok (rewarded, recorded))
-    (registry : processRegistryUpdates config rewarded = .ok registered)
-    (slashings : processSlashings registered = .ok slashed)
-    (limitOk : delayedSlashingLimit registered = .ok limit)
-    (resetOk : EpochStage.Edge config checks .eth1Reset slashed reset)
+    (epoch : ReplayedPrefix config checks s reset)
     (depositsOk : EpochStage.Edge config checks .pendingDeposits reset deposited)
     (consolidationsOk : EpochStage.Edge config checks .pendingConsolidations deposited consolidated)
     (trace : EpochTrace (EpochStage.action config checks)
@@ -2143,7 +2055,8 @@ theorem reservedReplay_epochNext {fork : Fork}
           ReservedReplay (config := config) (checks := checks) x high rounding
             ⟨fork, s⟩ (getCurrentEpoch s) ⟨fork, z⟩ next eventPosition paymentPosition
             callPosition
-            (recorded ++ [⟨.slashings, ⟨fork, registered⟩, ⟨fork, slashed⟩, 0, limit⟩] ++
+            (epoch.recorded ++
+              [⟨.slashings, ⟨fork, epoch.registered⟩, ⟨fork, epoch.slashed⟩, 0, epoch.limit⟩] ++
               if electra : .pectra ≤ fork then
                 [⟨.deposits, ⟨fork, reset⟩, ⟨fork, deposited⟩,
                   consumedDeposits reset deposited electra, 0⟩,
@@ -2154,13 +2067,24 @@ theorem reservedReplay_epochNext {fork : Fork}
             queue suffix payments allocations [] owned final ∧
           ReservedFrame (config := config) (checks := checks) x high rounding
             ⟨fork, consolidated⟩ ⟨fork, z⟩ next next suffix final final ∧
-          OwnershipBefore (eventPosition + (recorded.length + 3))
+          OwnershipBefore (eventPosition + (epoch.recorded.length + 3))
             (paymentPosition + payments.length) final ∧
           RetiredActivated z final.retired ∧
           EndpointCoverAll x ⟨fork, z⟩ final ∧ FutureEffectiveCover x ⟨fork, z⟩ final := by
+  -- The composition gives several facts at the consolidation input and for its own ownership.
+  --
+  -- They are the current cut, the future cover, the exit order and the slot.
+  --
+  -- They also include the registry lifecycle from `x`, the withdrawal delay and the slashed span.
+  --
+  -- The lemma above on the cut at the next epoch turns these into that cut.
+  --
+  -- It also uses the queue provenance and the queue order at `x`.
+  --
+  -- It also uses the assigned exits of slashed keys at `x` and the horizon.
   obtain ⟨_, _, _, current, futureD, exitsD, slotD, lifeD, delayedD, spanD, rest⟩ :=
-    reservedReplay_epochReserved (callPosition := callPosition) electra early matched justifiedOk
-        scoredOk rewardsOk replay registry slashings limitOk resetOk depositsOk consolidationsOk
+    reservedReplay_epochReserved (callPosition := callPosition) electra early matched epoch
+      depositsOk consolidationsOk
         trace reserve assignment erasure prior retired startCover startFuture startLife startFinite
         startCurrent ordered exits finite delayed delayTwo activationOrder nextOk twoSlots caps
         unique apart sources initialZero slashedSpan

@@ -698,7 +698,7 @@ private theorem Run.activationCohortBound {s t : ForkedBeaconState preset}
 private theorem Genesis.activationCohortBound {g : ForkedBeaconState preset}
     (genesis : Genesis (config := config) (checks := checks) g) :
     ActivationCohortBound config g.state := by
-  obtain ⟨hash, time, deposits, ok⟩ := genesis
+  obtain ⟨hash, time, deposits, _, ok⟩ := genesis
   have classified := initializeBeaconStateFromEth1_activation_epochs ok
   constructor
   · intro e finite nonGenesis
@@ -1068,23 +1068,20 @@ namespace DirectSafety
 
 /-- Before Electra, the validators assigned an activation epoch over a window are few.
 
-They are counted at the end `z` of a run from `x`, without those already exited at `x`.
-
-A validator exited at `x` has an assigned activation epoch and an exit epoch not after `x`.
-
-The count is at most `bound k`, where `k` is the number of epochs from `x` to `z`.
-
-`bound 0` must hold the active and the scheduled validators at `x`.
-
-Each epoch may add the count churn of `bound`.
-
-The count churn is that of the active validators, which are all counted. -/
+The count is at most `bound k`, where `k` is the number of epochs from `x` to `z`. -/
 theorem windowActivations_le {x z : ForkedBeaconState preset}
     (tail : Run config checks x z) (early : z.fork < .pectra) (bound : Nat → Nat)
+    -- `bound 0` must hold the active and the scheduled validators at `x`.
     (start : activeCount x.state + x.state.validators.data.toList.countP (fun v =>
       decide (getCurrentEpoch x.state < v.activationEpoch) &&
         v.activationEpoch != FAR_FUTURE_EPOCH) ≤ bound 0)
+    -- Each epoch may add the count churn of `bound`.
+    --
+    -- The count churn is that of the active validators, which are all counted.
     (grows : ∀ t, bound t + cohortCap config (bound t) ≤ bound (t + 1)) :
+    -- They are counted at the end `z` of a run from `x`, without those already exited at `x`.
+    --
+    -- A validator exited at `x` has an assigned activation epoch and an exit epoch not after `x`.
     ((Finset.range z.state.validators.data.size).filter fun i =>
       (z.state.validators.data[i]?).any (·.activationEpoch != FAR_FUTURE_EPOCH) &&
         (x.state.validators.data[i]?).all fun w => w.activationEpoch == FAR_FUTURE_EPOCH ||
@@ -1115,8 +1112,7 @@ theorem effectiveWeight_le_cap {g x : ForkedBeaconState preset}
     (run : Run config checks g x) (genesis : Genesis (config := config) (checks := checks) g)
     (caps : CapOrder preset) (early : x.fork < .pectra) (key : Cryptography.Bls.BLSPubkey) :
     effectiveWeight x.state key ≤ preset.MAX_EFFECTIVE_BALANCE.toNat := by
-  have capped := run.effectiveBalance_capped genesis caps.activation caps.compounding
-    (Nat.lt_trans early (by decide))
+  have capped := run.effectiveBalance_capped genesis caps
   unfold effectiveWeight
   cases found : x.state.validators.data.toList.find? (fun v => v.pubkey == key) with
   | none => simp
@@ -1227,7 +1223,7 @@ theorem recent_inactive_same_epoch {g x y : ForkedBeaconState preset}
     {key : Cryptography.Bls.BLSPubkey}
     (member : key ∈ (recentKeys y.state ∩ recentKeys x.state) \ activeKeys x.state) :
     getCurrentEpoch y.state = getCurrentEpoch x.state := by
-  have ⟨_, _, _, initialized⟩ := genesis
+  have ⟨_, _, _, _, initialized⟩ := genesis
   classical
   have xEarly := Nat.lt_of_le_of_lt (fork_le_of_chainSteps tail.chainSteps) early
   obtain ⟨both, absent⟩ := Finset.mem_sdiff.mp member
@@ -1362,7 +1358,7 @@ theorem joining_before_electra_split {g x y : ForkedBeaconState preset}
         cohortCap config y.state.validators.data.size * preset.MAX_EFFECTIVE_BALANCE.toNat ∧
     Models.stake (effectiveWeight y.state)
       ((recentKeys y.state ∩ recentKeys x.state) \ activeKeys x.state) ≤ boundaryStake x := by
-  have ⟨_, _, _, initialized⟩ := genesis
+  have ⟨_, _, _, _, initialized⟩ := genesis
   classical
   refine ⟨new_recent_before_electra shared tail genesis twoSlots caps early, ?_⟩
   have uniqueX := (validatorKeys_prefix_and_distinct_of_genesis_chainSteps initialized
@@ -1380,7 +1376,7 @@ theorem joining_before_electra_split {g x y : ForkedBeaconState preset}
         (Finset.mem_sdiff.mpr ⟨(Finset.mem_inter.mp both).2, absent⟩)
     obtain ⟨v, current, vKey⟩ := validators_getElem?_of_validatorKeys_prefix
       (validatorKeys_prefix_and_distinct_of_chainSteps tail.chainSteps).1 found
-    have bound := tail.effectiveAt_le_of_same_epoch early same i
+    have bound := tail.effectiveAt_le_of_same_epoch same i
       (Array.getElem?_eq_some_iff.mp found).1
     have oldWeight := effectiveWeight_of_member uniqueX
       (by simpa using Array.mem_of_getElem? found)

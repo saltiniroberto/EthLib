@@ -7,7 +7,7 @@ public import EthLib.Consensus.Proofs.Transition.ValidatorStep
 
 Each validator's effective balance is at most the cap of its withdrawal credentials.
 
-Genesis gives it, and every step keeps it before Gloas.
+Genesis gives it, and every step keeps it.
 
 An epoch and a slot keep it at every fork.
 -/
@@ -20,22 +20,21 @@ open Base Internal
 
 variable {preset : Preset} {config : Config} {checks : SignatureChecks}
 
-/-- A validator with an assigned exit never gains compounding credentials along a pre-Gloas run. -/
+/-- A validator with an assigned exit never gains compounding credentials along a run. -/
 theorem Run.compounding_of_exit_assigned {x y : ForkedBeaconState preset}
     (run : Run config checks x y)
-    (activation : preset.MAX_EFFECTIVE_BALANCE ≤ preset.MIN_ACTIVATION_BALANCE)
-    (compounding : preset.MIN_ACTIVATION_BALANCE ≤ preset.MAX_EFFECTIVE_BALANCE_ELECTRA)
-    (early : y.fork < .glamsterdam) (i : Nat) (v : Validator)
+    (caps : CapOrder preset)
+    (i : Nat) (v : Validator)
     (found : x.state.validators.data[i]? = some v)
     (assigned : v.exitEpoch ≠ FAR_FUTURE_EPOCH) :
     ∃ w, y.state.validators.data[i]? = some w ∧
       (hasCompoundingWithdrawalCredential w = true →
         hasCompoundingWithdrawalCredential v = true) := by
-  have kept := (CapStep.run run activation compounding early).1
+  have kept := (CapStep.run run caps).1
   obtain ⟨w, read, _⟩ := kept.monotone i v found
   exact ⟨w, read, (kept.frozen i v w found read assigned).2⟩
 
-/-- Before Gloas, each validator reached from genesis has an effective balance at most its cap.
+/-- Each validator reached from genesis has an effective balance at most its cap.
 
 The preset caps are assumed in order.
 
@@ -45,24 +44,21 @@ The preset caps are assumed in order.
 -/
 theorem Run.effectiveBalance_capped {g x : ForkedBeaconState preset}
     (run : Run config checks g x) (genesis : Genesis (config := config) (checks := checks) g)
-    (activation : preset.MAX_EFFECTIVE_BALANCE ≤ preset.MIN_ACTIVATION_BALANCE)
-    (compounding : preset.MIN_ACTIVATION_BALANCE ≤ preset.MAX_EFFECTIVE_BALANCE_ELECTRA)
-    (early : x.fork < .glamsterdam) :
+    (caps : CapOrder preset) :
     ∀ v ∈ x.state.validators.data,
       v.effectiveBalance ≤ withdrawalMaxEffectiveBalance preset x.fork v :=
-  (CapStep.run run activation compounding early).1.capped genesis.effectiveBalance_capped
+  (CapStep.run run caps).1.capped genesis.effectiveBalance_capped
 
-/-- An existing validator's cap cannot decrease along a pre-Gloas run. -/
+/-- An existing validator's cap cannot decrease along a run. -/
 theorem Run.validatorCap_mono {x y : ForkedBeaconState preset}
     (run : Run config checks x y)
-    (activation : preset.MAX_EFFECTIVE_BALANCE ≤ preset.MIN_ACTIVATION_BALANCE)
-    (compounding : preset.MIN_ACTIVATION_BALANCE ≤ preset.MAX_EFFECTIVE_BALANCE_ELECTRA)
-    (early : y.fork < .glamsterdam) (i : Nat) (v : Validator)
+    (caps : CapOrder preset)
+    (i : Nat) (v : Validator)
     (found : x.state.validators.data[i]? = some v) :
     ∃ w, y.state.validators.data[i]? = some w ∧
       withdrawalMaxEffectiveBalance preset x.fork v ≤
         withdrawalMaxEffectiveBalance preset y.fork w :=
-  (CapStep.run run activation compounding early).1.monotone i v found
+  (CapStep.run run caps).1.monotone i v found
 
 /-- The cap at an existing index cannot decrease during an epoch. -/
 theorem processEpoch_validatorCap_mono {f : Fork} {s t : BeaconState preset f}
@@ -171,11 +167,10 @@ The largest balance before Electra must be at most the least one from Electra.
 That one must be at most the largest one for compounding credentials. -/
 theorem upgradeNext_capped {s : ForkedBeaconState preset}
     {t : {t : ForkedBeaconState preset // s.fork < t.fork}}
-    (activation : preset.MAX_EFFECTIVE_BALANCE ≤ preset.MIN_ACTIVATION_BALANCE)
-    (compounding : preset.MIN_ACTIVATION_BALANCE ≤ preset.MAX_EFFECTIVE_BALANCE_ELECTRA)
+    (caps : CapOrder preset)
     (ok : upgradeNext config checks s = .ok t) (capped : EffectiveBalancesCapped s.state) :
     EffectiveBalancesCapped t.val.state :=
-  (CapStep.upgrade activation compounding ok).1.capped capped
+  (CapStep.upgrade caps ok).1.capped capped
 
 /-- The epoch prefix before payments preserves effective-balance caps. -/
 theorem capped_epochBeforePayments

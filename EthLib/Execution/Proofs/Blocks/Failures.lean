@@ -1,5 +1,6 @@
 module
 
+public import EthLib.Base.Proofs.ErrorsMeet
 public import EthLib.Execution.Proofs.Blocks.SystemCall
 public import EthLib.Execution.Proofs.Blocks.Transition
 
@@ -8,23 +9,11 @@ public import EthLib.Execution.Proofs.Blocks.Transition
 
 A result meets a property on its errors when each error that it fails with has the property.
 
-A sequence, a map and a change of error keep that, so a proof follows the steps of a definition.
-
-The body of a block meets a property when each of its leaves does, on states that keep invariants.
-
-The checks of a block before its body fail with no abort and no error of the state.
-
-Nor do they fail for a system call or for a transaction kept out of the block.
-
-Nor do the recent hashes, the roots and the checks of its output.
-
-So the transition of a block fails only with errors of a property when its body does.
+The transition of a block fails only with errors of a property when its body does.
 
 The property must also hold for the other errors of the block, and for the abort from Hegotá on.
 
-A failed system call can be left out of the property as well, since the checks never give one.
-
-So can a transaction kept out of the block, for the same reason.
+The steps outside the transactions fail only with the state errors that their parts give.
 -/
 
 @[expose] public section
@@ -39,55 +28,6 @@ open EthLib.Execution.Transactions (Transaction checkInclusion processTransactio
 variable {fork : Fork}
 
 /-! ## Results whose errors meet a property -/
-
-/-- Whether every failure of a result meets a property. -/
-def ErrorsMeet {α : Type} (P : BlockError → Prop) (r : Except BlockError α) : Prop :=
-  ∀ e, r = .error e → P e
-
-/-- A success has no failure. -/
-theorem ErrorsMeet.ok {α : Type} {P : BlockError → Prop} (a : α) :
-    ErrorsMeet P (.ok a : Except BlockError α) :=
-  fun _ h => by cases h
-
-/-- A pure result has no failure. -/
-theorem ErrorsMeet.pure {α : Type} {P : BlockError → Prop} (a : α) :
-    ErrorsMeet P (Pure.pure a : Except BlockError α) :=
-  fun _ h => by cases h
-
-/-- A failure with an error that meets the property meets it. -/
-theorem ErrorsMeet.error {α : Type} {P : BlockError → Prop} {e : BlockError} (h : P e) :
-    ErrorsMeet P (.error e : Except BlockError α) :=
-  fun _ he => by cases he; exact h
-
-/-- A throw of an error that meets the property meets it. -/
-theorem ErrorsMeet.throw {α : Type} {P : BlockError → Prop} {e : BlockError} (h : P e) :
-    ErrorsMeet P (MonadExcept.throw e : Except BlockError α) :=
-  fun _ he => by cases he; exact h
-
-/-- A sequence meets the property when its first part does, and its rest after it. -/
-theorem ErrorsMeet.bind {α β : Type} {P : BlockError → Prop} {x : Except BlockError α}
-    {f : α → Except BlockError β} (hx : ErrorsMeet P x)
-    (hf : ∀ a, x = .ok a → ErrorsMeet P (f a)) : ErrorsMeet P (x >>= f) := by
-  intro e h
-  rcases Base.bind_eq_error h with h | ⟨a, ha, h⟩
-  · exact hx e h
-  · exact hf a ha e h
-
-/-- A map of a result that meets the property meets it. -/
-theorem ErrorsMeet.map {α β : Type} {P : BlockError → Prop} {x : Except BlockError α}
-    (f : α → β) (hx : ErrorsMeet P x) : ErrorsMeet P (f <$> x) := by
-  intro e h
-  cases hx' : x with
-  | error e' => rw [hx'] at h; cases h; exact hx e hx'
-  | ok a => rw [hx'] at h; cases h
-
-/-- A change of error meets the property when each changed failure does. -/
-theorem ErrorsMeet.mapError {ε α : Type} {P : BlockError → Prop} {x : Except ε α}
-    {f : ε → BlockError} (hf : ∀ e, x = .error e → P (f e)) : ErrorsMeet P (x.mapError f) := by
-  intro e h
-  cases hx : x with
-  | error e' => rw [hx] at h; cases h; exact hf e' hx
-  | ok a => rw [hx] at h; cases h
 
 /-- An abort meets the property when each of its errors does, as an abort. -/
 theorem ErrorsMeet.aborted {α : Type} {P : BlockError → Prop} {x : Except EvmError α}
@@ -205,21 +145,22 @@ theorem checkBlock_eq_error {config : ChainConfig} {checkSeal : Bool} {recent : 
     (∀ error, e ≠ .aborted error) ∧ ∀ error, e ≠ .state error :=
   ⟨(plain_checkBlock e h).1, (plain_checkBlock e h).2.1⟩
 
-/-! ## The body of a block -/
+/-! ## The body of a block
+
+The body of a block meets a property when each of its leaves does, on states that keep invariants.
+-/
 
 /-- The facts at the leaves of the body of a block that keep its errors in a property.
 
-A first invariant holds on the block state before the withdrawals, and a second one after them.
-
-A third one holds on the state that each call, transaction and withdrawal ends on.
-
-Its join to the body then fails in the property.
-
-Each step keeps its invariant, and the withdrawals pass from the first to the second.
-
 An invariant that always holds needs no proof that the steps keep it. -/
 structure BodyLeaves (config : ChainConfig) (env : BlockEnvironment fork)
+    -- A first invariant holds on the block state before the withdrawals.
+    --
+    -- A second one holds on the block state after them.
     (block : Block fork Transaction) (P : BlockError → Prop) (Inv Inv' : BlockState → Prop)
+    -- A third one holds on the state that each call, transaction and withdrawal ends on.
+    --
+    -- Any failure of its join to the body then meets the property.
     (Out : TransactionState → Prop) : Prop where
   /-- An error that is no abort, state error, failed call or excluded transaction meets it. -/
   plain : ∀ e, (∀ x, e ≠ .aborted x) → (∀ x, e ≠ .state x) →
@@ -470,22 +411,18 @@ end BodyLeaves
 
 /-! ## The transition -/
 
-/-- The transition of a block fails only with errors of a property when its body does.
-
-The body must meet it in the environment that the header gives with each list of recent hashes.
-
-The property must hold for every error that is no abort, no state error and no failed system call.
-
-It need not hold for a failed system call or a transaction kept out of the block.
-
-The checks never give one, so only the body must meet it there.
-
-It must hold for the abort from Hegotá on, for a fork whose rules are not yet specified. -/
+/-- The transition of a block fails only with errors of a property when its body does. -/
 theorem errorsMeet_stateTransition_of_plain {chain : BlockChain} {block : Block fork Transaction}
     {checkSeal : Bool} {P : BlockError → Prop}
+    -- The property must hold for every error that is no abort, no state error and no failed call.
     (plain : ∀ e, (∀ x, e ≠ .aborted x) → (∀ x, e ≠ .state x) →
+      -- It need not hold for a failed system call or a transaction kept out of the block.
+      --
+      -- The checks never give one, so only the body must meet it there.
       (∀ a x, e ≠ .systemCallFailed a x) → (∀ i x, e ≠ .invalidTransaction i x) → P e)
+    -- It must hold for the abort from Hegotá on, for a fork whose rules are not yet specified.
     (hegota : .hegota ≤ fork → P (.aborted (.forkNotYetSpecified fork)))
+    -- The body must meet it in the environment from the header and each list of recent hashes.
     (body : ∀ hashes, ErrorsMeet P (applyBody chain.config
       (blockEnvironment chain.config hashes block.header) block ⟨chain.state, ∅, ∅, ∅, ∅⟩)) :
     ErrorsMeet P (stateTransition chain block checkSeal) := by
@@ -493,6 +430,11 @@ theorem errorsMeet_stateTransition_of_plain {chain : BlockChain} {block : Block 
     fun hx e h => plain e (hx e h).1 (hx e h).2.1 (hx e h).2.2.1 (hx e h).2.2.2
   have trie : ∀ {β : Type} (x : Except Trie.TrieError β), ErrorsMeet P (x.mapError .trie) :=
     fun _ => other (ErrorsMeet.mapError fun _ _ => ⟨nofun, nofun, nofun, nofun⟩)
+  -- The checks of a block before its body fail with no abort and no error of the state.
+  --
+  -- Nor do they fail for a system call or for a transaction kept out of the block.
+  --
+  -- Nor do the recent hashes, the roots and the checks of its output.
   have rest : ErrorsMeet P (do
       checkBlock chain.config checkSeal chain.recent block
       let result ← runBody chain block
@@ -556,5 +498,133 @@ theorem errorsMeet_stateTransition {chain : BlockChain} {block : Block fork Tran
       (blockEnvironment chain.config hashes block.header) block ⟨chain.state, ∅, ∅, ∅, ∅⟩)) :
     ErrorsMeet P (stateTransition chain block checkSeal) :=
   errorsMeet_stateTransition_of_plain (fun e ha hs _ _ => plain e ha hs) hegota body
+
+/-! ## Errors of the state of one kind -/
+
+/-- Whether an error of a block is a state error of one kind, in a call or outside one. -/
+def StateErrorOf {κ : Type} (kind : κ → State.StateError) (e : BlockError) : Prop :=
+  ∃ a, e = .aborted (.state (kind a)) ∨ e = .state (kind a)
+
+namespace StateErrorOf
+
+variable {κ : Type} {kind : κ → State.StateError}
+
+/-- A state step that never fails with an error of the kind gives none to the block. -/
+theorem not_state {α : Type} {x : Except State.StateError α} (h : ∀ a, x ≠ .error (kind a)) :
+    ∀ e, x = .error e → ¬StateErrorOf kind (.state e) :=
+  fun e he ⟨a, hc⟩ => by
+    rcases hc with hc | hc
+    · cases hc
+    · cases hc
+      exact h a he
+
+/-- A call that never aborts with an error of the kind gives none to the block. -/
+theorem not_aborted {α : Type} {x : Except EvmError α}
+    (h : ∀ a, x ≠ .error (.state (kind a))) : ∀ e, x = .error e → ¬StateErrorOf kind (.aborted e) :=
+  fun e he ⟨a, hc⟩ => by
+    rcases hc with hc | hc
+    · cases hc
+      exact h a he
+    · cases hc
+
+/-- An error that is neither an abort nor an error of the state is of no kind. -/
+theorem not_plain {e : BlockError} (ha : ∀ x, e ≠ .aborted x) (hs : ∀ x, e ≠ .state x) :
+    ¬StateErrorOf kind e :=
+  fun ⟨_, h⟩ => h.elim (ha _) (hs _)
+
+end StateErrorOf
+
+/-- The join of a state to the body fails with an error only when a read of a code fails with it. -/
+theorem BodyState.join_ne_error (body : BodyState) {tx : TransactionState} {e : State.StateError}
+    (code : ∀ hash, tx.getCode hash ≠ .error e) : body.join tx ≠ .error e := by
+  have write : ∀ (b : AccessListBuilder) address written,
+      b.recordAccountWrite tx address written ≠ .error e := by
+    intro b address written h
+    unfold AccessListBuilder.recordAccountWrite at h
+    dsimp only at h
+    split at h
+    · rcases Base.bind_eq_error h with h | ⟨_, -, h⟩
+      · exact code _ h
+      · cases h
+    · cases h
+  have record : ∀ b : AccessListBuilder, b.recordTransaction tx ≠ .error e := by
+    intro b h
+    unfold AccessListBuilder.recordTransaction at h
+    simp only [bind, Except.bind] at h
+    split at h
+    · rename_i he
+      cases h
+      rw [Std.ExtTreeMap.foldlM_eq_foldlM_toList] at he
+      exact foldlM_ne_error_of_step
+        (g := fun a (x : Address × Option State.Account) => a.recordAccountWrite tx x.1 x.2)
+        (fun a x => write a x.1 x.2) _ _ he
+    · cases h
+  intro h
+  unfold BodyState.join at h
+  rcases Base.bind_eq_error h with h | ⟨_, -, h⟩
+  · exact record _ h
+  · cases h
+
+/-- The rewards fail with no error other than a balance that would overflow. -/
+theorem payRewards_ne_error {tx : TransactionState} {coinbase : Address} {number : Nat}
+    {ommers : List (Address × Nat)} {e : State.StateError} (ne : ∀ a, e ≠ .balanceOverflow a) :
+    payRewards fork tx coinbase number ommers ≠ .error e := by
+  have create : ∀ (tx : TransactionState) a v, tx.createEther fork a v ≠ .error e :=
+    fun _ _ _ h => ne _ (TransactionState.error_createEther h)
+  unfold payRewards
+  split
+  · nofun
+  · intro h
+    rcases Base.bind_eq_error h with h | ⟨_, -, h⟩
+    · exact create _ _ _ h
+    · exact foldlM_ne_error_of_step (fun _ _ => create _ _ _) _ _ h
+
+/-- The withdrawals fail with no error other than a balance that would overflow. -/
+theorem withdrawalState_ne_error {block : BlockState} {withdrawals : List Withdrawal}
+    {e : State.StateError} (ne : ∀ a, e ≠ .balanceOverflow a) :
+    withdrawalState fork block withdrawals ≠ .error e :=
+  foldlM_ne_error_of_step (fun _ _ h => ne _ (TransactionState.error_createEther h)) _ _
+
+/-- The system calls at the start of a block never fail with a given error of the state.
+
+No call and no join may fail with it, from a block state that holds an invariant.
+
+Each call, followed by its join, must keep the invariant. -/
+theorem startSystemCalls_ne_error {env : BlockEnvironment fork} {parentHash : Hash32}
+    {body : BodyState} {e : State.StateError} (Inv : BlockState → Prop)
+    (call : ∀ block target data, Inv block → systemCall env block target data ≠ .error (.state e))
+    (join : ∀ (b : BodyState) target data out, Inv b.block →
+      systemCall env b.block target data = .ok out → b.join out.state ≠ .error e)
+    (keep : ∀ (b b' : BodyState) target data out, Inv b.block →
+      systemCall env b.block target data = .ok out → b.join out.state = .ok b' → Inv b'.block)
+    (start : Inv body.block) :
+    startSystemCalls env parentHash body ≠ .error (.state e) := by
+  -- The second call, from the body that the first one leaves.
+  have second : ∀ mid : BodyState, Inv mid.block →
+      (if Fork.pectra ≤ fork then do
+        let out ← systemCall env mid.block HISTORY_STORAGE_ADDRESS ⟨parentHash.toArray⟩
+        Except.mapError EvmError.state (mid.join out.state)
+      else pure mid) ≠ .error (.state e) := by
+    intro mid hm h
+    split at h
+    · rcases Base.bind_eq_error h with h | ⟨out, hout, h⟩
+      · exact call _ _ _ hm h
+      · obtain ⟨_, h, ⟨⟩⟩ := mapError_eq_error h
+        exact join _ _ _ _ hm hout h
+    · cases h
+  intro h
+  unfold startSystemCalls at h
+  dsimp only at h
+  split at h
+  · rcases Base.bind_eq_error h with h | ⟨out, hout, h⟩
+    · exact call _ _ _ start h
+    · rcases Base.bind_eq_error h with h | ⟨mid, hmid, h⟩
+      · obtain ⟨_, h, ⟨⟩⟩ := mapError_eq_error h
+        exact join _ _ _ _ start hout h
+      · exact second mid (keep _ _ _ _ _ start hout (mapError_ok_iff.mp hmid)) h
+  · rcases Base.bind_eq_error h with h | ⟨mid, hmid, h⟩
+    · cases h
+    · cases hmid
+      exact second _ start h
 
 end EthLib.Execution.Blocks

@@ -13,15 +13,7 @@ import EthLib.Serialization.Proofs.Ssz.Type.Legality
 
 Each of them exists for every input, since the roots they hash always exist.
 
-A domain starts with its domain type, so two domain types never share a domain.
-
-Before Fulu, a fork digest is the first four bytes of the root of the fork data.
-
 A signing root is also the root of the signing data whose first field holds the object itself.
-
-So two different objects of one type with one signing root are two values with one root.
-
-If every count of both objects fits its word, two inputs of the node hash in their trees collide.
 -/
 
 @[expose] public section
@@ -87,7 +79,7 @@ def signingShape (shape : Desc) : Desc :=
 
 /-- The signing data with the object in place of its root. -/
 def signingValue (value : Value) (domain : Domain) : Value :=
-  .seq [value, .bytes domain.toArray]
+  .seq [value, .bytes ⟨domain.toArray⟩]
 
 /-- The signing root of an object is the root of one value.
 
@@ -106,18 +98,18 @@ theorem computeSigningRoot_eq_hashTreeRoot {α : Type} [SszType α] [LawfulSszTy
   -- A container reads only the root of each field, so the object gives the same root as its root.
   have summary := hashTreeRoot_summary (names := ["object_root", "domain"])
     (fields := [desc α, .byteVector bytesPerChunk])
-    (values := [toValue object, .bytes domain.toArray]) (position := 0) rfl rfl rfl rooted
-  have objectRooted : SszType.hashTreeRoot object = .ok ⟨root, width⟩ :=
+    (values := [toValue object, .bytes ⟨domain.toArray⟩]) (position := 0) rfl rfl rfl rooted
+  have objectRooted : SszType.hashTreeRoot object = .ok ⟨root.data, width⟩ :=
     hashTreeRoot_ok_iff.mpr rooted
   rw [computeSigningRoot, objectRooted]
-  show SszType.hashTreeRoot (SigningData.mk ⟨root, width⟩ domain) = _
+  show SszType.hashTreeRoot (SigningData.mk ⟨root.data, width⟩ domain) = _
   rw [SszType.hashTreeRoot_eq]
   exact congrArg (· >>= toChunk) summary
 
 /-- The signing type is well formed exactly when the type of the object is. -/
 theorem wellFormed_signingShape_iff (shape : Desc) :
     (signingShape shape).wellFormed = .ok () ↔ shape.wellFormed = .ok () := by
-  have distinct : firstDuplicate ["object_root", "domain"] = none := by decide
+  have distinct : ["object_root", "domain"].Nodup := by decide
   rw [signingShape, wellFormed_container_iff]
   cases sound : shape.wellFormed <;>
     simp [sound, distinct, Desc.allWellFormed, Desc.wellFormed, bind, Except.bind]
@@ -176,16 +168,16 @@ theorem signingValues_of_computeSigningRoot_eq {α : Type} [SszType α] [LawfulS
     (secondSigned : computeSigningRoot second secondDomain = .ok root) :
     signingValue (toValue first) firstDomain ≠ signingValue (toValue second) secondDomain ∧
       Serialization.Ssz.hashTreeRoot (signingShape (desc α))
-          (signingValue (toValue first) firstDomain) = .ok root.toArray ∧
+          (signingValue (toValue first) firstDomain) = .ok ⟨root.toArray⟩ ∧
       Serialization.Ssz.hashTreeRoot (signingShape (desc α))
-          (signingValue (toValue second) secondDomain) = .ok root.toArray := by
+          (signingValue (toValue second) secondDomain) = .ok ⟨root.toArray⟩ := by
   rw [computeSigningRoot_eq_hashTreeRoot] at firstSigned secondSigned
   -- A signing root is the root of its signing value, cut to one node.
   have rooted : ∀ {value : Value} {domain : Domain},
       (do toChunk (← Serialization.Ssz.hashTreeRoot (signingShape (desc α))
         (signingValue value domain))) = Except.ok root →
       Serialization.Ssz.hashTreeRoot (signingShape (desc α)) (signingValue value domain) =
-        .ok root.toArray := by
+        .ok ⟨root.toArray⟩ := by
     intro value domain signed
     cases found : Serialization.Ssz.hashTreeRoot (signingShape (desc α))
         (signingValue value domain) with
@@ -245,6 +237,28 @@ theorem computeSigningRoot_ne_or_collision {α : Type} [SszType α] [LawfulSszTy
       · rw [signingMessages, valueMessages_of_valueTree secondOk]
         exact bMember
   · exact .inl same
+
+/-- Two different objects of one type have two different signing roots, or SHA-256 collides.
+
+The search over the messages of their two signing roots returns the collision.
+
+The domains may differ. -/
+theorem computeSigningRoot_ne_or_findMessageCollision {α : Type} [SszType α] [LawfulSszType α]
+    {first second : α}
+    {firstDomain secondDomain : Domain} {firstRoot secondRoot : Root}
+    -- Every variable-size count in both objects must fit its 256-bit word.
+    (firstSized : CommitmentSized (desc α) (toValue first))
+    (secondSized : CommitmentSized (desc α) (toValue second))
+    (differ : first ≠ second)
+    (firstSigned : computeSigningRoot first firstDomain = .ok firstRoot)
+    (secondSigned : computeSigningRoot second secondDomain = .ok secondRoot) :
+    firstRoot ≠ secondRoot ∨ ∃ x y, findMessageCollision (signingMessages first firstDomain)
+      (signingMessages second secondDomain) = some (x, y) ∧ MessageCollision x y := by
+  rcases computeSigningRoot_ne_or_collision firstSized secondSized differ firstSigned
+      secondSigned with differ | ⟨a, aMember, b, bMember, collision⟩
+  · exact .inl differ
+  · obtain ⟨x, y, found⟩ := findMessageCollision_of_collision aMember bMember collision
+    exact .inr ⟨x, y, found, (findMessageCollision_valid found).2.2⟩
 
 /-- The inputs of the binary hashes in the root of the signing data of an object root and a domain.
 

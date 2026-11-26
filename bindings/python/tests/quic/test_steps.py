@@ -12,7 +12,7 @@ from ethlib.networking.quic import handshake as hs, tls
 from raising import raises
 
 # These credentials instantiate RFC 5280 §4.1 and pinned libp2p TLS's SignedKey format.
-# Source: libp2p/specs 4facaf9876da1eb7d6e066982010c81495ebb965, tls/tls.md.
+# Source: libp2p/specs 1a084b699d9d424ca7027edf350cf4184cd6f5bd, tls/tls.md.
 # An X.509 toolkit outside EthLib generated the signatures.
 # The certificate signing scalars are 1 and 3; the P-256 host scalars are 2 and 4.
 # Both certificates are valid from 2020-01-01 through 2035-01-01, with no unique IDs.
@@ -460,10 +460,23 @@ def test_local_signing_key_must_match_the_certificate() -> None:
 
 
 @pytest.mark.parametrize(
-    "case", ["retry_random", "unordered_shares", "duplicate_groups", "missing_ephemeral_key"]
+    "case",
+    [
+        "retry_random",
+        "unordered_shares",
+        "duplicate_groups",
+        "duplicate_ephemeral_keys",
+        "missing_ephemeral_key",
+    ],
 )
 def test_inconsistent_configuration_is_rejected(
-    case: Literal["retry_random", "unordered_shares", "duplicate_groups", "missing_ephemeral_key"],
+    case: Literal[
+        "retry_random",
+        "unordered_shares",
+        "duplicate_groups",
+        "duplicate_ephemeral_keys",
+        "missing_ephemeral_key",
+    ],
 ) -> None:
     endpoint_config = config(case == "retry_random")
     p256_key: hs.EphemeralKey = {"group": 0x0017, "secret": (1).to_bytes(32, "big")}
@@ -476,6 +489,9 @@ def test_inconsistent_configuration_is_rejected(
         endpoint_config["initial_shares"] = [0x0017, 0x001D]
     elif case == "duplicate_groups":
         endpoint_config["policy"]["groups"] = [0x001D, 0x001D]
+    elif case == "duplicate_ephemeral_keys":
+        # A second key for the group of the first, with another secret.
+        endpoint_config["ephemeral_keys"].append({"group": 0x001D, "secret": X25519_SERVER})
     else:
         endpoint_config["policy"]["groups"] = [0x001D, 0x0017]
     with raises(hs.TlsStepError, PREFIX + "configuration") as error:

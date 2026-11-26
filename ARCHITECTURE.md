@@ -25,6 +25,7 @@ Each part names the EIPs that define it where they exist, and a later fork adds 
 - Checksums: CRC-32 for the fork identifier of EIP-2124, and CRC-32C for the Snappy framing format.
 - Symmetric encryption: AES with the CTR and GCM modes, which the RLPx transport and discv5 use.
 - Key derivation over SHA-256: HMAC, HKDF, the Concatenation KDF, PBKDF2, and scrypt.
+- Elliptic-curve point encoding: the octet strings of SEC 1 for every short Weierstrass curve over an odd prime field, and public key validation.
 - secp256k1: ECDSA signatures with RFC 6979 nonces, public key recovery, the address of a public key, and ECDH.
 - secp256r1: signature verification for the P256VERIFY precompile of EIP-7951.
 - alt_bn128: the curve operations and the pairing of EIP-196 and EIP-197.
@@ -142,7 +143,7 @@ A refinement theorem is a property.
 A **refinement module** is a property module that states a refinement theorem, or uses one in a proof.
 A refinement that holds by definition is still stated as a theorem, so that a reader can find it.
 Its proof unfolds the definitions, often with `rfl`.
-`rootWith_hash` in `EthLib/Cryptography/Proofs/Vrf/Unpredictability.lean` is one.
+`rootOf_secret` in `EthLib/Cryptography/Proofs/Vrf/SeedSecrets.lean` is one.
 
 A module is a model because of what it says, not because of what it imports.
 A module that imports VCVio is a property when its theorems are about the specification.
@@ -215,8 +216,9 @@ So its messages live in `EthLib/Execution/Network/`, which has those types and i
 
 A protocol layer owns the tables that give bytes their meaning.
 For example, Consensus gives the SSZ type and the length bounds of each gossip topic, of each request and of each response chunk, in `EthLib/Consensus/Gossip/Bounds.lean`, `EthLib/Consensus/ReqResp/Bounds.lean` and `EthLib/Consensus/ReqResp/ResponseBounds.lean`.
-Networking owns the framing and its own payload cap.
-It applies the smaller of that cap and the length bound that its caller passes, as `decodePayload` does in `EthLib/Networking/Gossip/Payload.lean` and in `EthLib/Networking/ReqResp/Encoding.lean`.
+Networking owns the framing, and it takes the payload cap of the network as an argument.
+The cap is a value of the consensus configuration, since each network may set its own.
+Networking applies the smaller of that cap and the length bound that its caller passes, as `decodePayload` does in `EthLib/Networking/Gossip/Payload.lean` and in `EthLib/Networking/ReqResp/Encoding.lean`.
 
 ## Rules
 
@@ -264,8 +266,9 @@ So the types that cross a module boundary are fixed here, and `EthLib/Base/` def
 - Bytes of a fixed length `n` are a `Vector UInt8 n`.
   The length is then part of the type, as `CONTRIBUTING.md` asks, and a 48-byte commitment cannot be passed where a 96-byte signature is expected.
   Such a value crosses a module boundary in its typed form, not as a `ByteArray`.
-  Some functions still take or return such a value as a `ByteArray`.
-  [#2189](https://github.com/ethereum/EthLib/issues/2189) lists those found so far, and each pull request that converts one removes it there.
+  A digest that its caller feeds straight back into bytes or into an integer may stay a `ByteArray`.
+  The SHA-256 digests inside HMAC and the SSZ Merkle tree are such digests.
+  There the typed form would be converted back at once, and no type would be gained.
   At an external interface, one parser turns the bytes into the typed value or a typed error.
   A C export, EVM call data and a wire format are such interfaces.
 - A fixed-size type keeps the name its source gives it, defined once by the layer that owns the concept.
@@ -274,7 +277,8 @@ So the types that cross a module boundary are fixed here, and `EthLib/Base/` def
   A KZG commitment and a KZG proof are both 48 bytes.
   In consensus-specs, a Merkle root and the hash of an execution block are two classes of 32 bytes.
   A one-field structure over `Vector UInt8 n` keeps such types apart, because Lean then rejects one where the other is expected.
-  This form applies to `KZGCommitment` and `VersionedHash`, which stay abbreviations until a pull request converts them.
+  `KZGCommitment`, `KZGProof` and `VersionedHash` take this form.
+  Their wire encodings are those of their bytes.
   Another type takes the form only by a pull request that converts it and reports the cost of its port.
   That cost is the conversions at call sites, the edited theorems and the breaking change for Lean importers.
 - Such a structure follows its source.

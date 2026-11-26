@@ -1,6 +1,7 @@
 module
 
 public import EthLib.Cryptography.Hash.Keccak
+public import PolyFun.Control.Monad.Hom
 import EthLib.Base.Proofs.Bytes
 import Mathlib.Tactic.IntervalCases
 
@@ -284,21 +285,21 @@ private theorem shiftedByte (b : UInt8) (m i : Nat) (hm : m < 8) (hi : i < 64) :
 /-- A lane read from a byte string is its eight bytes from the start, each shifted to its place. -/
 private theorem laneAt_eq (bytes : ByteArray) (s : Nat) :
     Internal.laneAt bytes s =
-      (EthLib.Base.byteAt bytes s).toUInt64 |||
-      (EthLib.Base.byteAt bytes (s + 1)).toUInt64 <<< UInt64.ofNat (8 * 1) |||
-      (EthLib.Base.byteAt bytes (s + 2)).toUInt64 <<< UInt64.ofNat (8 * 2) |||
-      (EthLib.Base.byteAt bytes (s + 3)).toUInt64 <<< UInt64.ofNat (8 * 3) |||
-      (EthLib.Base.byteAt bytes (s + 4)).toUInt64 <<< UInt64.ofNat (8 * 4) |||
-      (EthLib.Base.byteAt bytes (s + 5)).toUInt64 <<< UInt64.ofNat (8 * 5) |||
-      (EthLib.Base.byteAt bytes (s + 6)).toUInt64 <<< UInt64.ofNat (8 * 6) |||
-      (EthLib.Base.byteAt bytes (s + 7)).toUInt64 <<< UInt64.ofNat (8 * 7) :=
+      (EthLib.Base.byteAtOrZero bytes s).toUInt64 |||
+      (EthLib.Base.byteAtOrZero bytes (s + 1)).toUInt64 <<< UInt64.ofNat (8 * 1) |||
+      (EthLib.Base.byteAtOrZero bytes (s + 2)).toUInt64 <<< UInt64.ofNat (8 * 2) |||
+      (EthLib.Base.byteAtOrZero bytes (s + 3)).toUInt64 <<< UInt64.ofNat (8 * 3) |||
+      (EthLib.Base.byteAtOrZero bytes (s + 4)).toUInt64 <<< UInt64.ofNat (8 * 4) |||
+      (EthLib.Base.byteAtOrZero bytes (s + 5)).toUInt64 <<< UInt64.ofNat (8 * 5) |||
+      (EthLib.Base.byteAtOrZero bytes (s + 6)).toUInt64 <<< UInt64.ofNat (8 * 6) |||
+      (EthLib.Base.byteAtOrZero bytes (s + 7)).toUInt64 <<< UInt64.ofNat (8 * 7) :=
   rfl
 
 /-- Bit `i` of the lane at byte `s` is bit `i % 8` of byte `s + i / 8`, as in FIPS 202 §3.1.2. -/
 theorem Internal.laneAt_testBit (bytes : ByteArray)
     (s i : Nat) (hi : i < 64) :
     (Internal.laneAt bytes s).toBitVec.getLsbD i =
-      (EthLib.Base.byteAt bytes (s + i / 8)).toNat.testBit (i % 8) := by
+      (EthLib.Base.byteAtOrZero bytes (s + i / 8)).toNat.testBit (i % 8) := by
   rw [laneAt_eq]
   simp only [UInt64.toBitVec_or, BitVec.getLsbD_or, byteExtend _ _ hi,
     shiftedByte _ 1 _ (by decide) hi, shiftedByte _ 2 _ (by decide) hi,
@@ -327,9 +328,9 @@ So the sponge absorbs the same blocks as the padded message `P` of FIPS 202 §4,
 
 /-- A lane reads only its own 8 bytes. -/
 theorem laneAt_congr {a b : ByteArray} {s t : Nat}
-    (h : ∀ k < 8, EthLib.Base.byteAt a (s + k) = EthLib.Base.byteAt b (t + k)) :
+    (h : ∀ k < 8, EthLib.Base.byteAtOrZero a (s + k) = EthLib.Base.byteAtOrZero b (t + k)) :
     Internal.laneAt a s = Internal.laneAt b t := by
-  have h0 : EthLib.Base.byteAt a s = EthLib.Base.byteAt b t := by simpa using h 0 (by omega)
+  have h0 : EthLib.Base.byteAtOrZero a s = EthLib.Base.byteAtOrZero b t := by simpa using h 0 (by omega)
   unfold Internal.laneAt
   rw [h0, h 1 (by omega), h 2 (by omega), h 3 (by omega), h 4 (by omega), h 5 (by omega),
     h 6 (by omega), h 7 (by omega)]
@@ -344,16 +345,16 @@ theorem Internal.blockLane_of_dvd {rate : Nat} (lanes : 8 ∣ rate) (read : Nat 
   simp only [blockLane, show (8 * i + 8 ≤ 8 * m) = (8 * i < 8 * m) from propext (by omega)]
 
 /-- Below the length of the message, the padded message holds the message's own bytes. -/
-theorem byteAt_pad_of_lt (rate : Nat) {msg : ByteArray} {j : Nat} (h : j < msg.size) :
-    EthLib.Base.byteAt (pad rate msg) j = EthLib.Base.byteAt msg j := by
-  rw [pad, EthLib.Base.byteAt_append, ite_eq_left h]
+theorem byteAtOrZero_pad_of_lt (rate : Nat) {msg : ByteArray} {j : Nat} (h : j < msg.size) :
+    EthLib.Base.byteAtOrZero (pad rate msg) j = EthLib.Base.byteAtOrZero msg j := by
+  rw [pad, EthLib.Base.byteAtOrZero_append, ite_eq_left h]
 
 /-- From the length of the message on, the padded message holds padding bytes, then zeros. -/
-theorem byteAt_pad_of_le (rate : Nat) {msg : ByteArray} {j : Nat} (h : msg.size ≤ j) :
-    EthLib.Base.byteAt (pad rate msg) j =
+theorem byteAtOrZero_pad_of_le (rate : Nat) {msg : ByteArray} {j : Nat} (h : msg.size ≤ j) :
+    EthLib.Base.byteAtOrZero (pad rate msg) j =
       if j - msg.size < rate - msg.size % rate then paddingByte rate msg.size (j - msg.size)
       else 0 := by
-  rw [pad, EthLib.Base.byteAt_append, ite_eq_right (by omega), EthLib.Base.byteAt_eq_getD]
+  rw [pad, EthLib.Base.byteAtOrZero_append, ite_eq_right (by omega), EthLib.Base.byteAtOrZero_eq_getD]
   split
   · next inside =>
     simp only [Array.getD_eq_getD_getElem?, padding_data, Array.getElem?_ofFn, inside,
@@ -384,13 +385,13 @@ theorem blockLane_pad_of_le {rate : Nat} {msg : ByteArray} {start : Nat}
     blockLane rate (laneAt (pad rate msg)) start i = blockLane rate (laneAt msg) start i := by
   unfold blockLane
   split
-  · exact laneAt_congr fun k hk => byteAt_pad_of_lt rate (by omega)
+  · exact laneAt_congr fun k hk => byteAtOrZero_pad_of_lt rate (by omega)
   · rfl
 
 open Internal in
 /-- The whole blocks of the message absorb alike from the message and from `P`. -/
-theorem absorbBlocks_pad (f : State → State) (rate : Nat) (msg : ByteArray) (n start : Nat)
-    (S : State) (h : start + rate * n ≤ msg.size) :
+theorem absorbBlocks_pad {m : Type → Type} [Monad m] (f : State → m State) (rate : Nat)
+    (msg : ByteArray) (n start : Nat) (S : State) (h : start + rate * n ≤ msg.size) :
     absorbBlocks f rate (laneAt (pad rate msg)) n start S =
       absorbBlocks f rate (laneAt msg) n start S := by
   induction n generalizing start S with
@@ -399,7 +400,7 @@ theorem absorbBlocks_pad (f : State → State) (rate : Nat) (msg : ByteArray) (n
     have hlane : blockLane rate (laneAt (pad rate msg)) start = blockLane rate (laneAt msg) start :=
       funext (blockLane_pad_of_le (by rw [Nat.mul_succ] at h; omega))
     rw [absorbBlocks, absorbBlocks, absorbBlock, absorbBlock, hlane]
-    exact ih _ _ (by rw [Nat.mul_succ] at h; omega)
+    exact congrArg _ (funext fun T => ih _ _ (by rw [Nat.mul_succ] at h; omega))
 
 /-- A byte shifted to byte `m` of a lane, with the shift written as a natural number. -/
 private theorem shiftedByte_toUInt64 (b : UInt8) (m i : Nat) (hm : m < 8) (hi : i < 64) :
@@ -462,11 +463,11 @@ theorem blockLane_pad_last (rate : Nat) (msg : ByteArray) (i : Nat) :
   rw [first, last]
   -- Byte `8i + z / 8` of the block is a message byte, or a padding byte past the message.
   by_cases inMsg : rate * (msg.size / rate) + 8 * i + z / 8 < msg.size
-  · rw [byteAt_pad_of_lt rate inMsg]
+  · rw [byteAtOrZero_pad_of_lt rate inMsg]
     have : ¬ (8 * i + z / 8 = msg.size % rate ∧ z % 8 = 0) := by omega
     have : ¬ (8 * i + z / 8 = rate - 1 ∧ z % 8 = 7) := by omega
     simp [*]
-  · rw [byteAt_pad_of_le rate (by omega), EthLib.Base.byteAt_of_size_le (by omega),
+  · rw [byteAtOrZero_pad_of_le rate (by omega), EthLib.Base.byteAtOrZero_of_size_le (by omega),
       ite_eq_left (by omega), paddingByte_testBit _ _ _ _ hb]
     have hpos : rate * (msg.size / rate) + 8 * i + z / 8 - msg.size =
         8 * i + z / 8 - msg.size % rate := by
@@ -511,14 +512,16 @@ open Internal in
 /-- The state before the last permutation is FIPS 202 §4, Algorithm 8, run on `P`.
 
 The blocks before the last one are absorbed from `P`, and the last block of `P` is XORed in. -/
-theorem stateBeforeLastPermutation_eq_pad (f : State → State) (rate : Nat) (msg : ByteArray) :
+theorem stateBeforeLastPermutation_eq_pad {m : Type → Type} [Monad m] [LawfulMonad m]
+    (f : State → m State) (rate : Nat) (msg : ByteArray) :
     stateBeforeLastPermutation f rate msg.size (laneAt msg) =
-      absorbBlock rate (absorbBlocks f rate (laneAt (pad rate msg)) (blockCount rate msg.size - 1)
-        0 State.zero) (laneAt (pad rate msg)) (rate * (blockCount rate msg.size - 1)) := by
+      (fun S => absorbBlock rate S (laneAt (pad rate msg)) (rate * (blockCount rate msg.size - 1)))
+        <$> absorbBlocks f rate (laneAt (pad rate msg)) (blockCount rate msg.size - 1) 0
+          State.zero := by
   rw [blockCount, Nat.add_sub_cancel,
     absorbBlocks_pad f rate msg _ 0 _ (by rw [Nat.zero_add]; exact Nat.mul_div_le _ _),
-    stateBeforeLastPermutation]
-  generalize absorbBlocks f rate (laneAt msg) (msg.size / rate) 0 State.zero = S
+    stateBeforeLastPermutation, map_eq_pure_bind]
+  refine congrArg _ (funext fun S => congrArg pure ?_)
   -- The last block of `P`: the lanes of the rest of the message, then the two padding bits.
   simp only [absorbBlock, blockLane_pad_last]
   unfold xorBlockByte
@@ -547,27 +550,31 @@ theorem stateBeforeLastPermutation_eq_pad (f : State → State) (rate : Nat) (ms
 /-! ## The absorbing phase -/
 
 open Internal in
-/-- Absorbing `m + n` blocks absorbs the first `m`, then the `n` after them. -/
-theorem absorbBlocks_add (f : State → State) (rate : Nat) (read : Nat → UInt64)
-    (m n start : Nat) (S : State) :
-    absorbBlocks f rate read (m + n) start S
-      = absorbBlocks f rate read n (start + rate * m) (absorbBlocks f rate read m start S) := by
-  induction m generalizing start S with
+/-- Absorbing `k + n` blocks absorbs the first `k`, then the `n` after them. -/
+theorem absorbBlocks_add {m : Type → Type} [Monad m] [LawfulMonad m] (f : State → m State)
+    (rate : Nat) (read : Nat → UInt64) (k n start : Nat) (S : State) :
+    absorbBlocks f rate read (k + n) start S
+      = absorbBlocks f rate read k start S >>= absorbBlocks f rate read n (start + rate * k) := by
+  induction k generalizing start S with
   | zero => simp [absorbBlocks]
-  | succ m ih =>
-    rw [Nat.succ_add, absorbBlocks, ih, absorbBlocks, Nat.mul_succ, Nat.add_comm (rate * m),
-      Nat.add_assoc]
+  | succ k ih =>
+    rw [Nat.succ_add, absorbBlocks, absorbBlocks, bind_assoc]
+    refine congrArg _ (funext fun T => ?_)
+    rw [ih, Nat.mul_succ, Nat.add_comm (rate * k), Nat.add_assoc]
 
 /-- The absorbing phase is FIPS 202 §4, Algorithm 8, steps 1 to 6, block after block.
 
 Every one of the `n` blocks of the padded message goes through `S = f(S ^ (P_i || 0^c))`. -/
-theorem spongeAbsorb_eq (f : State → State) (rate : Nat) (msg : ByteArray) :
+theorem spongeAbsorb_eq {m : Type → Type} [Monad m] [LawfulMonad m] (f : State → m State)
+    (rate : Nat) (msg : ByteArray) :
     Internal.spongeAbsorb f rate msg.size (Internal.laneAt msg) =
       Internal.absorbBlocks f rate (Internal.laneAt (pad rate msg)) (blockCount rate msg.size) 0
         State.zero := by
   -- The last of the n = len(N) / r + 1 blocks is the one the last permutation follows.
   rw [Internal.spongeAbsorb, stateBeforeLastPermutation_eq_pad, blockCount, Nat.add_sub_cancel,
-    absorbBlocks_add, Nat.zero_add, Internal.absorbBlocks, Internal.absorbBlocks]
+    absorbBlocks_add, Nat.zero_add, bind_map_left]
+  refine congrArg _ (funext fun S => ?_)
+  simp only [Internal.absorbBlocks, bind_pure]
 
 /-! ## Reading the message by lanes -/
 
@@ -589,8 +596,8 @@ theorem absorbBlock_congr_read (rate : Nat) (S : State) {read read' : Nat → UI
 
 open Internal in
 /-- Absorbing `n` blocks reads the message only below `rate * n`, at multiples of 8. -/
-theorem absorbBlocks_congr_read (f : State → State) {rate : Nat} (lanes : 8 ∣ rate) (n : Nat)
-    (S : State) {read read' : Nat → UInt64} {s t : Nat}
+theorem absorbBlocks_congr_read {m : Type → Type} [Monad m] (f : State → m State) {rate : Nat}
+    (lanes : 8 ∣ rate) (n : Nat) (S : State) {read read' : Nat → UInt64} {s t : Nat}
     (h : ∀ q < rate * n, 8 ∣ q → read (s + q) = read' (t + q)) :
     absorbBlocks f rate read n s S = absorbBlocks f rate read' n t S := by
   induction n generalizing s t S with
@@ -598,7 +605,7 @@ theorem absorbBlocks_congr_read (f : State → State) {rate : Nat} (lanes : 8 �
   | succ n ih =>
     rw [absorbBlocks, absorbBlocks, absorbBlock_congr_read rate S
       (fun i hi => h (8 * i) (by rw [Nat.mul_succ]; omega) ⟨i, rfl⟩)]
-    apply ih
+    refine congrArg _ (funext fun T => ih T ?_)
     intro q hq h8
     rw [Nat.add_assoc, Nat.add_assoc]
     exact h _ (by rw [Nat.mul_succ]; omega) (Nat.dvd_add lanes h8)
@@ -606,20 +613,150 @@ theorem absorbBlocks_congr_read (f : State → State) {rate : Nat} (lanes : 8 �
 /-- The state before the last permutation reads the message only at multiples of 8.
 
 So two lane readers that agree there give the same state. -/
-theorem stateBeforeLastPermutation_congr (f : State → State) {rate : Nat} (lanes : 8 ∣ rate)
-    (len : Nat) {read read' : Nat → UInt64} (h : ∀ q, 8 ∣ q → read q = read' q) :
+theorem stateBeforeLastPermutation_congr {m : Type → Type} [Monad m] (f : State → m State)
+    {rate : Nat} (lanes : 8 ∣ rate) (len : Nat) {read read' : Nat → UInt64}
+    (h : ∀ q, 8 ∣ q → read q = read' q) :
     Internal.stateBeforeLastPermutation f rate len read =
       Internal.stateBeforeLastPermutation f rate len read' := by
   simp only [Internal.stateBeforeLastPermutation]
   rw [absorbBlocks_congr_read f lanes _ _ (read' := read') (t := 0)
-      (fun q _ h8 => by simp only [Nat.zero_add]; exact h q h8),
-    absorbBlock_congr_read rate _ (read' := read')
+      (fun q _ h8 => by simp only [Nat.zero_add]; exact h q h8)]
+  refine congrArg _ (funext fun S => ?_)
+  rw [absorbBlock_congr_read rate S (read' := read')
       (fun i _ => h _ (Nat.dvd_add (Dvd.dvd.mul_right lanes _) ⟨i, rfl⟩))]
 
 /-- Keccak-256 of a byte string is the bytes of the squeezed state after absorbing it. -/
 theorem keccak256_eq_squeeze256 (msg : ByteArray) :
-    keccak256 msg = Internal.squeeze256 (Internal.spongeAbsorb keccakF RATE_256 msg.size
-      (Internal.laneAt msg)) :=
+    keccak256 msg = Internal.squeeze256 (Id.run (Internal.spongeAbsorb (fun S => pure (keccakF S))
+      RATE_256 msg.size (Internal.laneAt msg))) :=
   rfl
+
+/-- Keccak-256 over any permutation is the bytes of the squeezed state after absorbing. -/
+theorem keccak256With_eq_squeeze256 {m : Type → Type} [Monad m] [LawfulMonad m]
+    (f : State → m State) (msg : ByteArray) :
+    keccak256With f msg =
+      Internal.squeeze256 <$> Internal.spongeAbsorb f RATE_256 msg.size (Internal.laneAt msg) := by
+  rw [keccak256With, Internal.keccak256Read]
+  exact Functor.map_map _ _ _
+
+/-! ## Monad morphisms
+
+A monad morphism maps the sponge over `f` to the sponge over its image of `f`.
+
+Only the permutation calls carry effects, so the morphism acts on them alone. -/
+
+section Morphism
+
+variable {m n : Type → Type} [Monad m] [Monad n]
+
+open Internal in
+/-- A monad morphism maps the absorbed blocks to the blocks absorbed over its image. -/
+theorem mmap_absorbBlocks (φ : m →ᵐ n) (f : State → m State) (rate : Nat)
+    (read : Nat → UInt64) (k start : Nat) (S : State) :
+    φ (absorbBlocks f rate read k start S) =
+      absorbBlocks (fun T => φ (f T)) rate read k start S := by
+  induction k generalizing start S with
+  | zero => exact φ.mmap_pure S
+  | succ k ih =>
+    rw [absorbBlocks, absorbBlocks, φ.mmap_bind]
+    exact congrArg _ (funext fun T => ih _ T)
+
+open Internal in
+/-- A monad morphism maps the state before the last permutation to that over its image. -/
+theorem mmap_stateBeforeLastPermutation (φ : m →ᵐ n) (f : State → m State) (rate len : Nat)
+    (read : Nat → UInt64) :
+    φ (stateBeforeLastPermutation f rate len read) =
+      stateBeforeLastPermutation (fun T => φ (f T)) rate len read := by
+  rw [stateBeforeLastPermutation, stateBeforeLastPermutation, φ.mmap_bind, mmap_absorbBlocks]
+  exact congrArg _ (funext fun T => φ.mmap_pure _)
+
+open Internal in
+/-- A monad morphism maps the absorbing phase to that over its image. -/
+theorem mmap_spongeAbsorb (φ : m →ᵐ n) (f : State → m State) (rate len : Nat)
+    (read : Nat → UInt64) :
+    φ (spongeAbsorb f rate len read) = spongeAbsorb (fun T => φ (f T)) rate len read := by
+  rw [spongeAbsorb, spongeAbsorb, φ.mmap_bind, mmap_stateBeforeLastPermutation]
+
+/-- A monad morphism maps Keccak-256 of lanes to Keccak-256 of lanes over its image. -/
+theorem mmap_keccak256LanesWith [LawfulMonad m] [LawfulMonad n] (φ : m →ᵐ n)
+    (f : State → m State) (lanes : Array UInt64) :
+    φ (keccak256LanesWith f lanes) = keccak256LanesWith (fun T => φ (f T)) lanes := by
+  rw [keccak256LanesWith, keccak256LanesWith, Internal.keccak256Read, Internal.keccak256Read,
+    φ.mmap_map, mmap_spongeAbsorb]
+
+/-- A monad morphism maps Keccak-256 of bytes to Keccak-256 of bytes over its image. -/
+theorem mmap_keccak256With [LawfulMonad m] [LawfulMonad n] (φ : m →ᵐ n)
+    (f : State → m State) (msg : ByteArray) :
+    φ (keccak256With f msg) = keccak256With (fun T => φ (f T)) msg := by
+  rw [keccak256With_eq_squeeze256, keccak256With_eq_squeeze256, φ.mmap_map, mmap_spongeAbsorb]
+
+end Morphism
+
+/-! ## A pure permutation
+
+Over a permutation that is a pure function, the sponge in any lawful monad has no effect.
+
+It returns the value the sponge computes in the identity monad. -/
+
+open Internal in
+/-- Absorbing over a pure permutation, in a lawful monad, is `pure` of the absorbed state. -/
+theorem absorbBlocks_pure {m : Type → Type} [Monad m] [LawfulMonad m] (g : State → State)
+    (rate : Nat) (read : Nat → UInt64) (n start : Nat) (S : State) :
+    absorbBlocks (m := m) (fun T => pure (g T)) rate read n start S =
+      pure (Id.run (absorbBlocks (fun T => pure (g T)) rate read n start S)) := by
+  have h := mmap_absorbBlocks (MonadHom.pure m) (fun T => (pure (g T) : Id State)) rate read n
+    start S
+  simp only [MonadHom.pure_apply, Id.run_pure] at h
+  exact h.symm
+
+open Internal in
+/-- The state before the last permutation, over a pure permutation, is `pure` of its value. -/
+theorem stateBeforeLastPermutation_pure {m : Type → Type} [Monad m] [LawfulMonad m]
+    (g : State → State) (rate len : Nat) (read : Nat → UInt64) :
+    stateBeforeLastPermutation (m := m) (fun T => pure (g T)) rate len read =
+      pure (Id.run (stateBeforeLastPermutation (fun T => pure (g T)) rate len read)) := by
+  have h := mmap_stateBeforeLastPermutation (MonadHom.pure m) (fun T => (pure (g T) : Id State))
+    rate len read
+  simp only [MonadHom.pure_apply, Id.run_pure] at h
+  exact h.symm
+
+open Internal in
+/-- The absorbing phase over a pure permutation is `pure` of its value. -/
+theorem spongeAbsorb_pure {m : Type → Type} [Monad m] [LawfulMonad m] (g : State → State)
+    (rate len : Nat) (read : Nat → UInt64) :
+    spongeAbsorb (m := m) (fun T => pure (g T)) rate len read =
+      pure (Id.run (spongeAbsorb (fun T => pure (g T)) rate len read)) := by
+  have h := mmap_spongeAbsorb (MonadHom.pure m) (fun T => (pure (g T) : Id State)) rate len read
+  simp only [MonadHom.pure_apply, Id.run_pure] at h
+  exact h.symm
+
+/-- Keccak-256 of lanes over a pure permutation is `pure` of its value. -/
+theorem keccak256LanesWith_pure {m : Type → Type} [Monad m] [LawfulMonad m] (g : State → State)
+    (lanes : Array UInt64) :
+    keccak256LanesWith (m := m) (fun T => pure (g T)) lanes =
+      pure (Id.run (keccak256LanesWith (fun T => pure (g T)) lanes)) := by
+  have h := mmap_keccak256LanesWith (MonadHom.pure m) (fun T => (pure (g T) : Id State)) lanes
+  simp only [MonadHom.pure_apply, Id.run_pure] at h
+  exact h.symm
+
+/-- Keccak-256 of bytes over a pure permutation is `pure` of its value. -/
+theorem keccak256With_pure {m : Type → Type} [Monad m] [LawfulMonad m] (g : State → State)
+    (msg : ByteArray) :
+    keccak256With (m := m) (fun T => pure (g T)) msg =
+      pure (Id.run (keccak256With (fun T => pure (g T)) msg)) := by
+  have h := mmap_keccak256With (MonadHom.pure m) (fun T => (pure (g T) : Id State)) msg
+  simp only [MonadHom.pure_apply, Id.run_pure] at h
+  exact h.symm
+
+/-- Keccak-256 of lanes over Keccak-f[1600], in a lawful monad, is `pure` of its Keccak-256. -/
+theorem keccak256LanesWith_keccakF {m : Type → Type} [Monad m] [LawfulMonad m]
+    (lanes : Array UInt64) :
+    keccak256LanesWith (m := m) (fun T => pure (keccakF T)) lanes = pure (keccak256Lanes lanes) :=
+  keccak256LanesWith_pure keccakF lanes
+
+/-- Keccak-256 of bytes over Keccak-f[1600], in a lawful monad, is `pure` of its Keccak-256. -/
+theorem keccak256With_keccakF {m : Type → Type} [Monad m] [LawfulMonad m] (msg : ByteArray) :
+    keccak256With (m := m) (fun T => pure (keccakF T)) msg = pure (keccak256 msg) :=
+  keccak256With_pure keccakF msg
 
 end EthLib.Cryptography.Hash.Keccak

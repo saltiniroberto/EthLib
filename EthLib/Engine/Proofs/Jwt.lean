@@ -2,22 +2,18 @@ module
 
 public import EthLib.Engine.Jwt
 public import EthLib.Base.Proofs.Base64
+public import EthLib.Base.Proofs.Json.Number
+public import EthLib.Base.Proofs.Json.Text
 public import Mathlib.Tactic
 
 /-!
 # Engine JWT construction, refusal and acceptance
 
-A 32-byte secret always builds a token, since the reader reads back the builder's own JSON.
+A token built with a 32-byte secret authenticates.
 
-That token authenticates with its secret and issued-at time.
+The clock check accepts it at each clock at most 60 seconds from its issued-at time.
 
-The clock check then accepts at every clock within 60 seconds, including both endpoints.
-
-A token whose tag does not match its parts is refused before any JSON is read.
-
-An authenticated token carries the HS256 tag of its header and claims under its secret.
-
-So it is the compact form of those parts with that tag, and no other tag part is accepted.
+A token authenticates only as the compact form of its parts with their HS256 tag under the secret.
 -/
 
 @[expose] public section
@@ -61,161 +57,220 @@ private theorem objectFields_encode (text : String) :
     objectFields (Base64.encode text.toUTF8) = Json.fields text := by
   simp [objectFields, Base64.decode_encode, String.fromUTF8?, String.fromUTF8, text.isValidUTF8]
 
-/-- Characters a JSON string may hold without an escape. -/
-private def Plain (c : Char) : Prop := c ≠ '"' ∧ c ≠ '\\' ∧ 0x20 ≤ c.toNat
+open Base.Json (after after_eq_cons after_eq_nil_iff eq_of_after_eq expect_of_after
+  expect_eq_none)
 
-private theorem string_plain (rest : List Char) :
-    ∀ (s acc : List Char) (fuel : Nat), (∀ c ∈ s, Plain c) → s.length < fuel →
-      Json.string fuel (s ++ '"' :: rest) acc = some (String.ofList (acc.reverse ++ s), rest)
-  | [], acc, fuel + 1, _, _ => by simp [Json.string]
-  | c :: s, acc, fuel + 1, h, hl => by
-    obtain ⟨h1, h2, h3⟩ := h c (by simp)
-    have ih := string_plain rest s (c :: acc) fuel (fun d hd => h d (by simp [hd]))
-      (by simp at hl; omega)
-    rw [List.cons_append, Json.string.eq_def]
-    split <;> simp_all
-
-private theorem digit_of_mem_toDigits {c : Char} {n : Nat} (h : c ∈ Nat.toDigits 10 n) :
-    Json.digit c = true := by
-  have := Nat.isDigit_of_mem_toDigits (by decide) (by decide) h
-  simp only [Char.isDigit, Json.digit, Bool.and_eq_true, decide_eq_true_eq] at this ⊢
-  exact this
-
-private theorem digitsValue_eq (l : List Char) (h : ∀ c ∈ l, Json.digit c = true) (init : Nat) :
-    l.foldl (fun acc c => 10 * acc + c.toNat - '0'.toNat) init = Nat.ofDigitChars 10 l init := by
-  induction l generalizing init with
-  | nil => simp
-  | cons c l ih =>
-    have hc := h c (by simp)
-    simp only [Json.digit, Bool.and_eq_true, decide_eq_true_eq] at hc
-    have : '0'.toNat ≤ c.toNat := hc.1
-    rw [List.foldl_cons, Nat.ofDigitChars_cons, Nat.add_sub_assoc this]
-    exact ih (fun d hd => h d (by simp [hd])) _
-
-private theorem head_toDigits_ne_zero (n : Nat) (hn : 0 < n) :
-    (Nat.toDigits 10 n).head? ≠ some '0' := by
-  induction n using Nat.strong_induction_on with
-  | _ n ih =>
-    rw [Nat.toDigits_eq_ite (by decide)]
-    split
-    · simp; omega
-    · rw [List.head?_append_of_ne_nil _ Nat.toDigits_ne_nil]
-      exact ih (n / 10) (by omega) (by omega)
-
-private theorem number_toDigits (n : Nat) (tail : List Char) :
-    Json.number (Nat.toDigits 10 n ++ '}' :: tail) = some (⟨n, 0⟩, '}' :: tail) := by
-  have hdig : ∀ c ∈ Nat.toDigits 10 n, Json.digit c = true := fun c h => digit_of_mem_toDigits h
-  have hspan : (Nat.toDigits 10 n ++ '}' :: tail).span Json.digit =
-      (Nat.toDigits 10 n, '}' :: tail) := by
-    rw [List.span_eq_takeWhile_dropWhile, List.takeWhile_append_of_pos hdig,
-      List.dropWhile_append_of_pos hdig]
-    simp [Json.digit]
-  obtain ⟨d, ds, hd⟩ : ∃ d ds, Nat.toDigits 10 n = d :: ds :=
-    List.exists_cons_of_ne_nil Nat.toDigits_ne_nil
-  have hminus : d ≠ '-' := by
-    have := hdig d (by simp [hd])
-    rintro rfl
-    simp [Json.digit] at this
-  have hlead : ((d :: ds).head? = some '0' && (d :: ds).length > 1) = false := by
-    rcases Nat.eq_zero_or_pos n with rfl | hn
-    · simp [Nat.toDigits_zero] at hd
-      simp [← hd.2]
-    · have := head_toDigits_ne_zero n hn
-      simp_all
-  have hval : Json.digitsValue (d :: ds ++ []) = n := by
-    rw [List.append_nil, ← hd, Json.digitsValue, digitsValue_eq _ hdig,
-      Nat.ofDigitChars_ten_toDigits]
-  rw [hd] at hspan
-  unfold Json.number
-  rw [hd, List.cons_append]
+/-- A string of characters that need no escape is read through its closing quotation mark. -/
+private theorem string_plain {text : String} {p : text.Pos} {s rest : List Char} (fuel : Nat)
+    (acc : String) (hs : ∀ c ∈ s, Json.plain c = true) (h : after p = s ++ '"' :: rest) :
+    ∃ q, Json.string (fuel + 1) p acc = some (acc ++ String.ofList s, q) ∧ after q = rest := by
+  -- The run without an escape is the whole string, and the quotation mark stops it.
+  have stop : after (Json.plainEnd p) = '"' :: rest := by
+    rw [Json.after_plainEnd, h, List.dropWhile_append_of_pos hs,
+      List.dropWhile_cons_of_neg (by simp [Json.plain])]
+  have piece : text.extract p (Json.plainEnd p) = String.ofList s := by
+    rw [Json.extract_plainEnd, h, List.takeWhile_append_of_pos hs,
+      List.takeWhile_cons_of_neg (by simp [Json.plain]), List.append_nil]
+  obtain ⟨hq, get, next⟩ := after_eq_cons stop
+  refine ⟨_, ?_, next⟩
+  rw [Json.string]
+  simp only [piece, hq, get, dite_false, ite_true]
   split
-  rename_i minus rest heq
-  have : (minus, rest) = (false, d :: (ds ++ '}' :: tail)) := by
-    rw [← heq]
-    split <;> simp_all
-  simp only [Prod.mk.injEq] at this
-  obtain ⟨rfl, rfl⟩ := this
-  simp only [List.cons_append] at hspan
-  simp only [hspan]
-  simp only [List.append_nil] at hval
-  simp only [List.head?_cons, Option.some.injEq, List.length_cons, Bool.and_eq_false_imp,
-    decide_eq_true_eq, decide_eq_false_iff_not, not_lt] at hlead
-  simpa [hval] using fun h => List.eq_nil_of_length_eq_zero (by have := hlead h; omega)
+  · rename_i empty
+    simp [String.isEmpty_iff.1 empty]
+  · rfl
 
-private theorem value_string (fuel : Nat) (s rest : List Char) (hs : ∀ c ∈ s, Plain c) :
-    Json.value (fuel + 1) ('"' :: (s ++ '"' :: rest)) = some (.str (String.ofList s), rest) := by
-  rw [Json.value]
-  simp [Json.whitespace]
-  rw [string_plain rest s [] _ hs (by simp)]
-  simp
-
-private theorem value_number (fuel n : Nat) (tail : List Char) :
-    Json.value (fuel + 1) (Nat.toDigits 10 n ++ '}' :: tail) =
-      some (.num ⟨n, 0⟩, '}' :: tail) := by
+/-- The decimal digits of a natural number and a closing brace read as that number. -/
+private theorem number_toDigits {text : String} {p : text.Pos} (n : Nat) (tail : List Char)
+    (h : after p = Nat.toDigits 10 n ++ '}' :: tail) :
+    ∃ q, Json.number p = some (⟨n, 0⟩, q) ∧ after q = '}' :: tail := by
+  have brace : ∀ c ∈ ('}' :: tail).head?, Json.digit c = false := by simp [Json.digit]
   obtain ⟨d, ds, hd⟩ : ∃ d ds, Nat.toDigits 10 n = d :: ds :=
     List.exists_cons_of_ne_nil Nat.toDigits_ne_nil
-  have hdig := digit_of_mem_toDigits (c := d) (n := n) (by simp [hd])
-  have hnum := number_toDigits n tail
-  rw [hd] at hnum
+  have hdig := Json.digit_of_mem_toDigits (c := d) (n := n) (by simp [hd])
+  -- No minus sign comes first.
+  have minus : Json.expect p '-' = none := by
+    refine expect_eq_none ?_
+    rw [h, hd]
+    rintro ⟨⟩
+    revert hdig
+    decide
+  -- The digits read as the number, and a brace follows them.
+  obtain ⟨q, eq, rest⟩ := Json.digits_eq p 0 0
+  rw [h, Json.takeWhile_toDigits n _ brace, Json.foldl_digitStep_toDigits] at eq
+  rw [h, Json.dropWhile_toDigits n _ brace] at rest
+  -- A leading zero comes only in 0 itself, which has one digit.
+  have lead : (Json.expect p '0').isSome = true → (Nat.toDigits 10 n).length ≤ 1 := by
+    rcases Nat.eq_zero_or_pos n with rfl | pos
+    · simp [Nat.toDigits_zero]
+    · rw [expect_eq_none (by rw [h, hd]; simpa [hd] using Json.head_toDigits_ne_zero n pos)]
+      simp
+  have length : (Nat.toDigits 10 n).length ≠ 0 := by simp [hd]
+  -- No fraction and no exponent follow.
+  have dot : Json.expect q '.' = none := expect_eq_none (by simp [rest])
+  have small : Json.expect q 'e' = none := expect_eq_none (by simp [rest])
+  have large : Json.expect q 'E' = none := expect_eq_none (by simp [rest])
+  refine ⟨q, ?_, rest⟩
+  simp only [Json.number, minus, eq, dot]
+  simp [small, large, length, bind, Option.bind, pure]
+  exact lead
+
+/-- Whitespace skipped before a character that is not whitespace leaves the position. -/
+private theorem skipWhitespace_eq {text : String} {p : text.Pos} {c : Char} {cs : List Char}
+    (h : after p = c :: cs) (hc : Json.whitespace c = false) : Json.skipWhitespace p = p :=
+  eq_of_after_eq (by rw [Json.after_skipWhitespace, h, List.dropWhile_cons_of_neg (by simp [hc])])
+
+/-- A string of characters that need no escape reads as a value. -/
+private theorem value_string {text : String} {p : text.Pos} (fuel : Nat) (s rest : List Char)
+    (hs : ∀ c ∈ s, Json.plain c = true) (h : after p = '"' :: (s ++ '"' :: rest)) :
+    ∃ q, Json.value (fuel + 2) p = some (.str (String.ofList s), q) ∧ after q = rest := by
+  obtain ⟨hp, get, next⟩ := after_eq_cons h
+  obtain ⟨q, str, after_q⟩ := string_plain fuel "" hs next
+  refine ⟨q, ?_, after_q⟩
+  rw [Json.value, skipWhitespace_eq h (by decide)]
+  simp [hp, get, str]
+
+/-- The decimal digits of a natural number and a closing brace read as a value. -/
+private theorem value_number {text : String} {p : text.Pos} (fuel n : Nat) (tail : List Char)
+    (h : after p = Nat.toDigits 10 n ++ '}' :: tail) :
+    ∃ q, Json.value (fuel + 1) p = some (.num ⟨n, 0⟩, q) ∧ after q = '}' :: tail := by
+  obtain ⟨d, ds, hd⟩ : ∃ d ds, Nat.toDigits 10 n = d :: ds :=
+    List.exists_cons_of_ne_nil Nat.toDigits_ne_nil
+  have hdig := Json.digit_of_mem_toDigits (c := d) (n := n) (by simp [hd])
   simp only [Json.digit, Bool.and_eq_true, decide_eq_true_eq] at hdig
-  rw [Json.value, hd, List.cons_append, List.dropWhile_cons_of_neg (by
-    simp only [Json.whitespace, Bool.or_eq_true, decide_eq_true_eq]
-    rintro (((rfl | rfl) | rfl) | rfl) <;> revert hdig <;> decide)]
-  split <;> simp_all
+  have h' : after p = d :: (ds ++ '}' :: tail) := by rw [h, hd, List.cons_append]
+  obtain ⟨hp, get, -⟩ := after_eq_cons h'
+  obtain ⟨q, num, after_q⟩ := number_toDigits n tail h
+  refine ⟨q, ?_, after_q⟩
+  have white : Json.whitespace d = false := by
+    simp only [Json.whitespace, Bool.or_eq_false_iff, decide_eq_false_iff_not]
+    refine ⟨⟨⟨?_, ?_⟩, ?_⟩, ?_⟩ <;> rintro rfl <;> revert hdig <;> decide
+  rw [Json.value, skipWhitespace_eq h' white]
+  have : d ≠ '"' ∧ d ≠ '{' ∧ d ≠ '[' ∧ d ≠ 't' ∧ d ≠ 'f' ∧ d ≠ 'n' := by
+    refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩ <;> rintro rfl <;> revert hdig <;> decide
+  simp [hp, get, this, num]
 
-private theorem object_close (fuel : Nat) (key rest tail : List Char) (item : Json.Value)
-    (acc : List (String × Json.Value)) (empty : Bool) (hk : ∀ c ∈ key, Plain c)
-    (h : Json.value fuel rest = some (item, '}' :: tail)) :
-    Json.object (fuel + 1) ('"' :: (key ++ '"' :: ':' :: rest)) acc empty =
-      some ((String.ofList key, item) :: acc, tail) := by
+/-- A member of plain name whose value ends the object closes it. -/
+private theorem object_close {text : String} {p : text.Pos} (fuel : Nat)
+    (key rest tail : List Char) (item : Base.Json.Value) (acc : List (String × Base.Json.Value))
+    (empty : Bool) (hk : ∀ c ∈ key, Json.plain c = true)
+    (h : after p = '"' :: (key ++ '"' :: ':' :: rest))
+    (hv : ∀ r : text.Pos, after r = rest →
+      ∃ q, Json.value (fuel + 1) r = some (item, q) ∧ after q = '}' :: tail) :
+    ∃ q, Json.object (fuel + 2) p acc empty =
+        some (((String.ofList key, item) :: acc).reverse, q) ∧ after q = tail := by
+  obtain ⟨hp, get, next⟩ := after_eq_cons h
+  obtain ⟨q₁, str, after₁⟩ := string_plain fuel "" hk next
+  obtain ⟨q₂, colon, after₂⟩ := expect_of_after after₁
+  obtain ⟨q₃, val, after₃⟩ := hv q₂ after₂
+  obtain ⟨hq, close, after₄⟩ := after_eq_cons after₃
+  refine ⟨_, ?_, after₄⟩
   rw [Json.object]
-  simp only [List.length_append, List.length_cons]
-  rw [string_plain _ key [] _ hk (by omega)]
-  simp [Json.whitespace, h]
+  simp [hp, get, str, skipWhitespace_eq after₁ (by decide), colon, val,
+    skipWhitespace_eq after₃ (by decide), hq, close]
 
-private theorem object_comma (fuel : Nat) (key rest tail : List Char) (item : Json.Value)
-    (acc : List (String × Json.Value)) (empty : Bool) (hk : ∀ c ∈ key, Plain c)
-    (h : Json.value fuel rest = some (item, ',' :: tail)) :
-    Json.object (fuel + 1) ('"' :: (key ++ '"' :: ':' :: rest)) acc empty =
-      Json.object fuel (tail.dropWhile Json.whitespace) ((String.ofList key, item) :: acc)
-        false := by
+/-- A member of plain name whose value a comma follows continues the object. -/
+private theorem object_comma {text : String} {p : text.Pos} (fuel : Nat)
+    (key rest tail : List Char) (item : Base.Json.Value) (acc : List (String × Base.Json.Value))
+    (empty : Bool) (hk : ∀ c ∈ key, Json.plain c = true)
+    (h : after p = '"' :: (key ++ '"' :: ':' :: rest))
+    (hv : ∀ r : text.Pos, after r = rest →
+      ∃ q, Json.value (fuel + 1) r = some (item, q) ∧ after q = ',' :: tail) :
+    ∃ q, after q = tail.dropWhile Json.whitespace ∧ Json.object (fuel + 2) p acc empty =
+        Json.object (fuel + 1) q ((String.ofList key, item) :: acc) false := by
+  obtain ⟨hp, get, next⟩ := after_eq_cons h
+  obtain ⟨q₁, str, after₁⟩ := string_plain fuel "" hk next
+  obtain ⟨q₂, colon, after₂⟩ := expect_of_after after₁
+  obtain ⟨q₃, val, after₃⟩ := hv q₂ after₂
+  obtain ⟨hq, comma, after₄⟩ := after_eq_cons after₃
+  refine ⟨_, by rw [Json.after_skipWhitespace, after₄], ?_⟩
   rw [Json.object]
-  simp only [List.length_append, List.length_cons]
-  rw [string_plain _ key [] _ hk (by omega)]
-  simp [Json.whitespace, h]
+  simp [hp, get, str, skipWhitespace_eq after₁ (by decide), colon, val,
+    skipWhitespace_eq after₃ (by decide), hq, comma]
+
+/-- An object whose first member comes right after its opening brace reads as a value. -/
+private theorem value_object {text : String} {p : text.Pos} (fuel : Nat) (chars tail : List Char)
+    (members : List (String × Base.Json.Value)) (h : after p = '{' :: '"' :: chars)
+    (ho : ∀ r : text.Pos, after r = '"' :: chars →
+      ∃ q, Json.object fuel r [] true = some (members, q) ∧ after q = tail) :
+    ∃ q, Json.value (fuel + 1) p = some (.obj members, q) ∧ after q = tail := by
+  obtain ⟨hp, get, next⟩ := after_eq_cons h
+  obtain ⟨q, obj, after_q⟩ := ho _ next
+  refine ⟨q, ?_, after_q⟩
+  rw [Json.value, skipWhitespace_eq h (by decide)]
+  simp [hp, get, skipWhitespace_eq next (by decide), obj]
+
+/-- A text whose value runs to its end reads as that value. -/
+private theorem read_eq {text : String} {v : Base.Json.Value}
+    (h : ∃ q, Json.value (2 * text.length + 1) text.startPos = some (v, q) ∧ after q = []) :
+    Json.read text = some v := by
+  obtain ⟨q, val, after_q⟩ := h
+  obtain rfl := (after_eq_nil_iff).1 after_q
+  have rest : Json.skipWhitespace text.endPos = text.endPos :=
+    eq_of_after_eq (by simp [Json.after_skipWhitespace, (after_eq_nil_iff).2 rfl])
+  simp [Json.read, val, rest, bind, Option.bind]
 
 /-- The builder's header names HS256 and no critical extension. -/
 theorem algorithm_headerPart : algorithm headerPart = .ok "HS256" := by
-  have hobj : Json.object 55 ['"', 'a', 'l', 'g', '"', ':', '"', 'H', 'S', '2', '5', '6', '"', ',',
-      '"', 't', 'y', 'p', '"', ':', '"', 'J', 'W', 'T', '"', '}'] [] true =
-      some ([(String.ofList ['t', 'y', 'p'], .str (String.ofList ['J', 'W', 'T'])),
-        (String.ofList ['a', 'l', 'g'], .str (String.ofList ['H', 'S', '2', '5', '6']))], []) :=
-    (object_comma 54 ['a', 'l', 'g'] _ _ _ _ _ (by simp [Plain])
-      (value_string 53 ['H', 'S', '2', '5', '6'] _ (by simp [Plain]))).trans
-      (object_close 53 ['t', 'y', 'p'] _ _ _ _ _ (by simp [Plain])
-        (value_string 52 ['J', 'W', 'T'] _ (by simp [Plain])))
+  have text : after "{\"alg\":\"HS256\",\"typ\":\"JWT\"}".startPos = '{' :: '"' ::
+      (['a', 'l', 'g'] ++ '"' :: ':' :: ('"' :: (['H', 'S', '2', '5', '6'] ++ '"' :: ',' ::
+        ('"' :: (['t', 'y', 'p'] ++ '"' :: ':' :: ('"' :: (['J', 'W', 'T'] ++
+          '"' :: ['}']))))))) := by
+    rw [Json.after_startPos]
+    simp
+  have read : Json.read "{\"alg\":\"HS256\",\"typ\":\"JWT\"}" = some (.obj
+      [(String.ofList ['a', 'l', 'g'], .str (String.ofList ['H', 'S', '2', '5', '6'])),
+        (String.ofList ['t', 'y', 'p'], .str (String.ofList ['J', 'W', 'T']))]) := by
+    have length : 2 * "{\"alg\":\"HS256\",\"typ\":\"JWT\"}".length + 1 = 54 + 1 := by
+      rw [← String.length_toList]
+      simp
+    refine read_eq ?_
+    rw [length]
+    refine value_object 54 _ [] _ text fun r hr => ?_
+    -- The first member, then a comma, then the last member and the closing brace.
+    have first := object_comma 52 ['a', 'l', 'g']
+      ('"' :: (['H', 'S', '2', '5', '6'] ++ '"' :: ',' :: '"' :: (['t', 'y', 'p'] ++ '"' :: ':' ::
+        '"' :: (['J', 'W', 'T'] ++ ['"', '}']))))
+      ('"' :: (['t', 'y', 'p'] ++ '"' :: ':' :: '"' :: (['J', 'W', 'T'] ++ ['"', '}'])))
+      (.str (String.ofList ['H', 'S', '2', '5', '6'])) [] true (by simp [Json.plain]) hr
+      fun r hr => value_string 51 ['H', 'S', '2', '5', '6'] _ (by simp [Json.plain]) hr
+    obtain ⟨q, after_q, step⟩ := first
+    rw [List.dropWhile_cons_of_neg (by decide)] at after_q
+    obtain ⟨q', close, after_q'⟩ := object_close (p := q) 51 ['t', 'y', 'p']
+      ('"' :: (['J', 'W', 'T'] ++ ['"', '}'])) [] (.str (String.ofList ['J', 'W', 'T']))
+      [(String.ofList ['a', 'l', 'g'], .str (String.ofList ['H', 'S', '2', '5', '6']))] false
+      (by simp [Json.plain]) after_q
+      fun r hr => value_string 50 ['J', 'W', 'T'] _ (by simp [Json.plain]) hr
+    exact ⟨q', by rw [step, close]; rfl, after_q'⟩
   rw [algorithm, headerPart, objectFields_encode]
-  simp only [Json.fields, String.reduceToList]
-  simp [Json.whitespace]
-  rw [hobj]
-  simp [List.lookup]
+  simp only [Json.fields, read]
+  simp [List.lookup, Json.scalar]
   rfl
 
 /-- The builder's claims read back as its integral issued-at time. -/
 theorem issuedAt_claimsPart (time : Nat) :
     issuedAt headerPart (claimsPart time) = .ok ⟨time, 0⟩ := by
-  have hobj (m : Nat) : Json.object (m + 2) ('"' :: 'i' :: 'a' :: 't' :: '"' :: ':' ::
-      (Nat.toDigits 10 time ++ ['}'])) [] true = some ([("iat", .num ⟨time, 0⟩)], []) := by
-    refine (object_close (m + 1) ['i', 'a', 't'] _ _ _ _ _ (by simp [Plain])
-      (value_number m time [])).trans ?_
+  have text : after ("{\"iat\":" ++ time.repr ++ "}").startPos = '{' :: '"' ::
+      (['i', 'a', 't'] ++ '"' :: ':' :: (Nat.toDigits 10 time ++ ['}'])) := by
+    rw [Json.after_startPos, String.toList_append, String.toList_append, Nat.toList_repr]
+    rfl
+  have length : 2 * ("{\"iat\":" ++ time.repr ++ "}").length + 1 =
+      (2 * (Nat.toDigits 10 time).length + 12) + 5 := by
+    rw [← String.length_toList, String.toList_append, String.toList_append, Nat.toList_repr]
+    simp only [List.length_append]
     simp
+    omega
+  have read : Json.read ("{\"iat\":" ++ time.repr ++ "}") =
+      some (.obj [("iat", .num ⟨time, 0⟩)]) := by
+    refine read_eq ?_
+    rw [length]
+    refine value_object _ _ [] _ text fun r hr => ?_
+    obtain ⟨q, close, after_q⟩ := object_close _ ['i', 'a', 't'] _ [] _ [] true
+      (by simp [Json.plain]) hr fun r hr => value_number _ time [] hr
+    exact ⟨q, close, after_q⟩
   rw [issuedAt, algorithm_headerPart]
-  simp only [claimsPart, objectFields_encode, Json.fields, String.toList_append, Nat.toList_repr,
-    String.reduceToList]
-  simp [Json.whitespace]
-  rw [show ∀ k : Nat, 2 * (k + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1) + 1 = (2 * k + 15) + 2 from
-    fun k => by omega, hobj]
-  simp [List.lookup, bind, Except.bind]
+  simp only [claimsPart, objectFields_encode, Json.fields, read]
+  simp [List.lookup, Json.scalar, bind, Except.bind]
   rfl
 
 /-- A 32-byte secret always builds the signed compact form of the builder's two parts. -/
@@ -402,7 +457,9 @@ theorem check_build {secret : ByteArray} {time clock : Nat} {token : String}
   rw [check, authenticate_build hb]
   exact (within_nat_iff time clock).2 hclock
 
-/-- A token built with a 32-byte secret passes with it at every clock within 60 seconds. -/
+/-- A token built with a 32-byte secret passes with it at every clock within 60 seconds.
+
+Both endpoints of that window are included. -/
 theorem check_build_of_size {secret : ByteArray} {time clock : Nat} (hs : secret.size = 32)
     (hclock : clock ≤ time + 60 ∧ time ≤ clock + 60) :
     check secret (compact headerPart (claimsPart time)

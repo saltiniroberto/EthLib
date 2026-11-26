@@ -26,10 +26,15 @@ namespace EthLib.Consensus
 
 It is the room between that bound and the largest score that fits with the largest cap.
 
-That room is divided by the score bias, which must be positive; at zero the horizon is zero.
+That room is divided by the score bias, which must be positive.
+
+At a zero bias the horizon is zero.
 
 The bound at the start must fit with the largest cap, else the horizon is zero too. -/
 def Preset.horizon (preset : Preset) (config : Config) (scoreStart : Nat) : Nat :=
+  -- The inactivity penalty multiplies an effective balance by a score, and that product must fit.
+  --
+  -- So a bound on the scores holds only for this many epochs.
   ((2 ^ 64 - 1) / preset.largestEffectiveBalance - scoreStart) /
     config.INACTIVITY_SCORE_BIAS.toNat
 

@@ -7,19 +7,13 @@ public import EthLib.Execution.Blocks.Transition
 
 The opcode trace of a transaction, as the opcode logger of the debug methods returns it.
 
-It holds one entry for each step of a frame with code, up to a bound.
+Where the source leaves a choice open, the docs of each field say what this specification picks.
 
-A step past the end of the code runs STOP, and it has an entry too.
+Source: [`opcode-tracer.yaml`][schema], at commit `1ca0818` of execution-apis.
 
-A frame with no code has none, so a plain transfer gives no entry.
+That schema gives the entries, the configuration and the trace.
 
-The trace is an observer of the one interpreter, so it changes nothing in the run.
-
-[`opcode-tracer.yaml`][schema] defines the entries, the configuration and the trace.
-
-Where it leaves a choice open, the docs of each field say what this specification picks.
-
-[schema]: https://github.com/ethereum/execution-apis/blob/68d76a5b1c09dff023782d97eec6ce87a6f6505e/src/schemas/opcode-tracer.yaml
+[schema]: https://github.com/ethereum/execution-apis/blob/1ca0818569467cff85b7f41372f22e728d5daa14/src/schemas/opcode-tracer.yaml
 -/
 
 @[expose] public section
@@ -151,11 +145,7 @@ structure StructLog where
 
   A call that starts no message gets that gas back in the same step, so it counts only its price.
 
-  The source asks for the price that the step would charge if it succeeded.
-
-  A step that fails does not give that price.
-
-  So it counts all the gas left, which its halt burns. -/
+  A step that fails counts all the gas left, which its halt burns. -/
   gasCost : Nat
   /-- The depth of the frame, 1 for the frame of the transaction. -/
   depth : Nat
@@ -203,7 +193,9 @@ structure TraceConfig where
 structure Tracer where
   /-- The entries so far, oldest first. -/
   logs : Array StructLog := #[]
-  /-- For each account, the slots that the trace has seen, with their last values. -/
+  /-- For each account, the slots that the trace has seen, with their last values.
+
+  It stays as it was when the configuration disables the storage. -/
   slots : List (Address × List (Bytes32 × U256)) := []
   /-- The refund counters of the frames that called the current one, outermost first. -/
   refunds : List Int := []
@@ -218,6 +210,10 @@ def setSlot (slots : List (Bytes32 × U256)) (key : Bytes32) (value : U256) :
 def stepCost {fork : Fork} {Meter : Type} [GasMeter Meter] (evm : Evm fork Meter) :
     Except EvmError (StepResult fork Meter) → Nat
   -- The gas that the step charges, memory growth and cold access included.
+  --
+  -- A call that starts no message gets its passed gas back in the same step.
+  --
+  -- So it counts only its price.
   | .ok (.next after) => GasMeter.gasLeft evm.gas - GasMeter.gasLeft after.gas
   -- A call or a creation: the gas taken before its message runs, the gas it passes included.
   --
@@ -225,7 +221,9 @@ def stepCost {fork : Fork} {Meter : Type} [GasMeter Meter] (evm : Evm fork Meter
   | .ok (.child caller _ _) => GasMeter.gasLeft evm.gas - GasMeter.gasLeft caller.gas
   -- A failed step: all the gas that the frame holds, which its halt burns.
   --
-  -- The source asks for the cost on success, which a failed step does not have.
+  -- The source asks for the price that the step would charge if it succeeded.
+  --
+  -- A step that fails does not give that price.
   | .error _ => GasMeter.gasLeft evm.gas
 
 /-- The slot that an SLOAD or SSTORE step reads or writes, with its value after the step.
@@ -267,9 +265,7 @@ def stepOp {fork : Fork} {Meter : Type} [GasMeter Meter] (evm : Evm fork Meter) 
 
 A frame with no code adds no entry, so a plain transfer has none.
 
-A frame with code adds one for each step, the STOP past the end of its code included.
-
-A step past the bound adds no entry. -/
+A frame with code adds one for each step. -/
 def Tracer.record (config : TraceConfig) {fork : Fork} {Meter : Type} [GasMeter Meter]
     (evm : Evm fork Meter) (result : Except EvmError (StepResult fork Meter))
     (tracer : Tracer) : Tracer :=
@@ -278,15 +274,20 @@ def Tracer.record (config : TraceConfig) {fork : Fork} {Meter : Type} [GasMeter 
   -- Past the step limit no entry is added, and a limit of 0 sets no bound.
   if evm.code.size = 0 ∨ (config.limit ≠ 0 ∧ config.limit ≤ tracer.logs.size) then tracer
   else
+    -- A step past the end of its code runs STOP, and adds an entry too.
     let op := stepOp evm
     let account := evm.message.currentTarget
-    let storageOp := op = some .sload ∨ op = some .sstore
     let touched := touchedSlot op evm result
-    let seen := (tracer.slots.lookup account).getD []
-    let seen := match touched with
+    -- Only a trace that prints the storage keeps the slots it has seen.
+    --
+    -- Each update walks every seen slot, so a trace without the storage keeps none.
+    let keep := config.disableStorage = false ∧ (op = some .sload ∨ op = some .sstore)
+    let seen := if config.disableStorage then [] else
+      let seen := (tracer.slots.lookup account).getD []
+      match touched with
       | some (key, value) => setSlot seen key value
       | none => seen
-    let slots := if storageOp then (account, seen) :: tracer.slots.filter (·.1 != account)
+    let slots := if keep then (account, seen) :: tracer.slots.filter (·.1 != account)
       else tracer.slots
     let callers := tracer.refunds.take evm.message.depth
     let entry : StructLog :=
@@ -326,7 +327,9 @@ structure TransactionTrace where
   gas : Nat
   /-- Whether its message failed: a revert or an exceptional halt.
 
-  The source names a revert and a lack of gas; this specification counts every halt. -/
+  The source names a revert and a lack of gas.
+
+  This specification counts every halt. -/
   failed : Bool
   /-- The output of its message. -/
   returnValue : ByteArray
@@ -345,7 +348,9 @@ def TransactionTrace.ofRun (output : TransactionOutput) (tracer : Tracer) : Tran
 
 /-- Run a transaction on the block state `block` at `fork`, with the opcode logger.
 
-It gives what the run gives, and the logger at its end. -/
+It gives what the run gives, and the logger at its end.
+
+The logger is an observer of the one interpreter, so it changes nothing in the run. -/
 def traceRun {fork : Fork} (config : TraceConfig) (env : BlockEnvironment fork)
     (block : BlockState) (included : Included) (tx : Transaction)
     (precompiles : Address → Option Address := some) (lifted : LiftedRules := {}) :

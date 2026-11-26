@@ -7,21 +7,9 @@ public import EthLib.Execution.Proofs.Evm.Logic.Rules
 
 A table of entries in a code compares the top word of the stack with a key in each entry.
 
-Each entry is DUP1, a push of its key, EQ, a push of its destination, and JUMPI.
-
-The key takes `n` bytes and the destination `m` bytes, from 1 to 32 each, in every entry.
-
-An entry then takes `n + m + 5` bytes of code.
-
 The run jumps to the destination of the first entry whose key is the word.
 
 When no key is the word, the run goes on past the table.
-
-Each entry that the run tests costs 22 gas, at every fork with the one-counter meter.
-
-The stack keeps the word, and memory, the state and the substate stay as they are.
-
-Each destination must be a valid destination of a jump, and the stack must have room for two words.
 -/
 
 @[expose] public section
@@ -36,7 +24,9 @@ variable {fork : Fork}
 /-- The code holds the byte `b` at the index `i`. -/
 def ByteAt (code : ByteArray) (i : Nat) (b : UInt8) : Prop := ∃ h : i < code.size, code[i] = b
 
-/-- The size of an entry: DUP1, the push of its key, EQ, the push of its destination, JUMPI. -/
+/-- The size of an entry: DUP1, the push of its key, EQ, the push of its destination, JUMPI.
+
+That is `n + m + 5` bytes of code. -/
 abbrev entrySize (n m : Fin 33) : Nat := 1 + (1 + n) + 1 + (1 + m) + 1
 
 /-- A table of entries in the code from `pc`, each with a key of `n` bytes and a destination of `m`.
@@ -45,6 +35,7 @@ Each destination is a valid destination of a jump. -/
 def Table (code : ByteArray) (n m : Fin 33) : Nat → List (U256 × U256) → Prop
   | _, [] => True
   | pc, (key, dest) :: entries =>
+    -- DUP1, a push of the key, EQ, a push of the destination, and JUMPI.
     ByteAt code pc 0x80 ∧ ByteAt code (pc + 1) (0x5f + UInt8.ofNat n.val) ∧
       pushData code (pc + 1) n = key ∧ ByteAt code (pc + 1 + (1 + n)) 0x14 ∧
       ByteAt code (pc + 1 + (1 + n) + 1) (0x5f + UInt8.ofNat m.val) ∧
@@ -73,12 +64,20 @@ variable {code : ByteArray} {message : Message fork} {memory : ByteArray}
 
 When no key is `x`, the run goes on past the table.
 
-It pays 22 gas for each entry it tests, and keeps the word on the stack. -/
-theorem branchTable {n m : Fin 33} (hn : n.val ≠ 0) (hm : m.val ≠ 0) {x : U256}
+It pays 22 gas for each entry it tests, and keeps the word on the stack.
+
+The key takes `n` bytes and the destination `m` bytes, from 1 to 32 each, in every entry.
+
+It holds over the steps from frames that are monotone in gas. -/
+theorem branchTableG {n m : Fin 33} (hn : n.val ≠ 0) (hm : m.val ≠ 0) {x : U256}
+    -- The stack must have room for two words.
     {rest : List U256} (hstack : rest.length + 2 < STACK_LIMIT) :
+    -- Each destination must be a valid destination of a jump.
     ∀ {pc gas : Nat} {entries : List (U256 × U256)}, Table code n m pc entries →
+      -- The price holds at every fork with the one-counter meter.
       22 * tested x entries ≤ gas →
-      Hoare fork (At code message pc (x :: rest) memory gas state substate returnData)
+      HoareG fork (At code message pc (x :: rest) memory gas state substate returnData)
+        -- The stack keeps the word, and memory, the state and the substate stay as they are.
         (At code message (branch x pc (entrySize n m) entries) (x :: rest) memory
           (gas - 22 * tested x entries) state substate returnData)
   | pc, gas, [], _, _ => Triple.of_imp fun _ h => h
@@ -87,22 +86,22 @@ theorem branchTable {n m : Fin 33} (hn : n.val ≠ 0) (hm : m.val ≠ 0) {x : U2
     have h22 : 22 ≤ gas := by
       simp only [tested] at hgas
       split at hgas <;> omega
-    have h1 := dup1 (fork := fork) (code := code) (message := message) (memory := memory)
+    have h1 := dup1G (fork := fork) (code := code) (message := message) (memory := memory)
       (state := state) (substate := substate) (returnData := returnData)
       (pc := pc) (x := x) (rest := rest) (gas := gas)
       l0 b0 (by omega) (by simp only [List.length_cons]; omega)
-    have h2 := push (fork := fork) (code := code) (message := message) (memory := memory)
+    have h2 := pushG (fork := fork) (code := code) (message := message) (memory := memory)
       (state := state) (substate := substate) (returnData := returnData)
       (pc := pc + 1) (stack := x :: x :: rest)
       (gas := gas - 3) (n := n) (word := key) hn l1 b1 (decode_push n hn) hkey (by omega)
       (by simp only [List.length_cons]; omega)
-    have h3 := binary (fork := fork) (code := code) (message := message) (memory := memory)
+    have h3 := binaryG (fork := fork) (code := code) (message := message) (memory := memory)
       (state := state) (substate := substate) (returnData := returnData)
       (pc := pc + 1 + (1 + n)) (x := key) (y := x)
       (rest := x :: rest) (gas := gas - 3 - 3) l2 b2
       (ofByte_of_decode (op := .eq) rfl (Fork.frontier_le _)) instruction_eq
       (by simp only [OPCODE_EQ, VERY_LOW]; omega)
-    have h4 := push (fork := fork) (code := code) (message := message) (memory := memory)
+    have h4 := pushG (fork := fork) (code := code) (message := message) (memory := memory)
       (state := state) (substate := substate) (returnData := returnData)
       (pc := pc + 1 + (1 + n) + 1)
       (stack := equal key x :: x :: rest) (gas := gas - 3 - 3 - OPCODE_EQ) (n := m) (word := dest)
@@ -110,7 +109,7 @@ theorem branchTable {n m : Fin 33} (hn : n.val ≠ 0) (hm : m.val ≠ 0) {x : U2
       (by simp only [List.length_cons]; omega)
     have h14 := ((h1.seq h2).seq h3).seq h4
     by_cases hk : key = x
-    · have h5 := jumpi_taken (fork := fork) (code := code) (message := message) (memory := memory)
+    · have h5 := jumpi_takenG (fork := fork) (code := code) (message := message) (memory := memory)
         (state := state) (substate := substate) (returnData := returnData)
         (pc := pc + 1 + (1 + n) + 1 + (1 + m))
         (destination := dest) (condition := equal key x) (rest := x :: rest)
@@ -118,10 +117,10 @@ theorem branchTable {n m : Fin 33} (hn : n.val ≠ 0) (hm : m.val ≠ 0) {x : U2
         (by simp [equal, hk]) valid
       have h := h14.seq h5
       simp only [branch, tested, hk, ite_true]
-      exact Hoare.gas_eq h (by simp only [OPCODE_EQ, VERY_LOW]; omega)
+      exact HoareG.gas_eq h (by simp only [OPCODE_EQ, VERY_LOW]; omega)
     · have heq : equal key x = 0 := by simp [equal, hk]
       rw [heq] at h14
-      have h5 := jumpi_zero (fork := fork) (code := code) (message := message) (memory := memory)
+      have h5 := jumpi_zeroG (fork := fork) (code := code) (message := message) (memory := memory)
         (state := state) (substate := substate) (returnData := returnData)
         (pc := pc + 1 + (1 + n) + 1 + (1 + m))
         (destination := dest) (rest := x :: rest) (gas := gas - 3 - 3 - OPCODE_EQ - 3) l4 b4
@@ -131,12 +130,32 @@ theorem branchTable {n m : Fin 33} (hn : n.val ≠ 0) (hm : m.val ≠ 0) {x : U2
         omega
       rw [hpc] at h5
       simp only [tested, hk, ite_false] at hgas
-      have h15 := Hoare.gas_eq (h14.seq h5) (gas' := gas - 22)
+      have h15 := HoareG.gas_eq (h14.seq h5) (gas' := gas - 22)
         (by simp only [OPCODE_EQ, VERY_LOW]; omega)
-      have ih := branchTable (x := x) (pc := pc + entrySize n m) (gas := gas - 22) hn hm hstack
+      have ih := branchTableG (x := x) (pc := pc + entrySize n m) (gas := gas - 22) hn hm hstack
         table (by omega)
       simp only [branch, tested, hk, ite_false]
-      exact Hoare.gas_eq (h15.seq ih) (by omega)
+      exact HoareG.gas_eq (h15.seq ih) (by omega)
+
+/-- A table of keys sends the word `x` to the destination of the first entry with key `x`.
+
+When no key is `x`, the run goes on past the table.
+
+It pays 22 gas for each entry it tests, and keeps the word on the stack.
+
+The key takes `n` bytes and the destination `m` bytes, from 1 to 32 each, in every entry. -/
+theorem branchTable {n m : Fin 33} (hn : n.val ≠ 0) (hm : m.val ≠ 0) {x : U256}
+    -- The stack must have room for two words.
+    {rest : List U256} (hstack : rest.length + 2 < STACK_LIMIT) :
+    -- Each destination must be a valid destination of a jump.
+    ∀ {pc gas : Nat} {entries : List (U256 × U256)}, Table code n m pc entries →
+      -- The price holds at every fork with the one-counter meter.
+      22 * tested x entries ≤ gas →
+      Hoare fork (At code message pc (x :: rest) memory gas state substate returnData)
+        -- The stack keeps the word, and memory, the state and the substate stay as they are.
+        (At code message (branch x pc (entrySize n m) entries) (x :: rest) memory
+          (gas - 22 * tested x entries) state substate returnData) :=
+  fun table hgas => (branchTableG hn hm hstack table hgas).toHoare
 
 /-- When no key of the table is `x`, the run goes past all its entries. -/
 theorem branch_of_forall_ne {x : U256} {size : Nat} :

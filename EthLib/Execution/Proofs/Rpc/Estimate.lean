@@ -16,8 +16,6 @@ The result of `eth_createAccessList` lists what the call read or wrote.
 
 Its gas used and its error are those of the call with that list.
 
-Before Berlin, the method rejects a request whose call runs, with code -32000.
-
 Both methods ignore the type of the request, as `eth_call` does.
 -/
 

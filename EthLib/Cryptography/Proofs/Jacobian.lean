@@ -14,16 +14,6 @@ Doubling and addition of forms give the forms of the group's sums.
 So double and add on forms computes `k P`, and one shared chain of doublings computes `k P + l Q`.
 
 The proofs hold over any field of characteristic other than 2.
-
-A change of field representation commutes with every formula, on every form.
-
-It commutes with the conversion back too, when it keeps the inverse.
-
-So forms mod a prime `m` other than 2 follow the law through their values in `ZMod m`.
-
-A point of a short Weierstrass curve converts to a form and back.
-
-So double and add on points computes `k P`, in any representation of any such field.
 -/
 
 @[expose] public section
@@ -100,9 +90,39 @@ theorem mulBits_succ (a : F) (fuel k : Nat) (p : Coords F) :
     simp [mulBits, mulBits_scalar_zero]
   · simp [mulBits, hk]
 
+/-- Starting one bit later is reading both scalars one bit later. -/
+theorem mulAddBits_succ_start (a : F) (p q pq : Coords F)
+    (kb lb : Nat → Bool) (fuel s : Nat) :
+    mulAddBits a p q pq kb lb fuel (s + 1) =
+      mulAddBits a p q pq (fun i => kb (i + 1)) (fun i => lb (i + 1)) fuel s := by
+  induction fuel generalizing s with
+  | zero => rfl
+  | succ fuel ih => simp only [mulAddBits, ih]
+
+/-- `k P + l Q = 2 ((k / 2) P + (l / 2) Q) + (k mod 2) P + (l mod 2) Q`. -/
+theorem mulAddAux_succ (a : F) (p q pq : Coords F)
+    (fuel k l : Nat) :
+    mulAddAux a p q pq (fuel + 1) k l =
+      let acc := double a (mulAddAux a p q pq fuel (k / 2) (l / 2))
+      if k % 2 = 1 then
+        if l % 2 = 1 then add a acc pq else add a acc p
+      else if l % 2 = 1 then add a acc q else acc := by
+  -- Bit `i + 1` of a scalar is bit `i` of its half.
+  have hk : (fun i => k.testBit (i + 1)) = (k / 2).testBit :=
+    funext fun i => (Nat.testBit_div_two k i).symm
+  have hl : (fun i => l.testBit (i + 1)) = (l / 2).testBit :=
+    funext fun i => (Nat.testBit_div_two l i).symm
+  simp only [mulAddAux, mulAddBits, mulAddBits_succ_start, hk, hl, Nat.testBit_zero,
+    decide_eq_true_eq]
+
 end Steps
 
-/-! ## A change of field representation -/
+/-! ## A change of field representation
+
+A change of field representation commutes with every formula, on every form.
+
+It commutes with the conversion back too, when it keeps the inverse.
+-/
 
 /-- A map between two representations of one field.
 
@@ -192,7 +212,7 @@ theorem map_mulAddAux (a : F) (p q pq : Coords F) (fuel k l : Nat) :
   induction fuel generalizing k l with
   | zero => exact map_infinity hf
   | succ fuel ih =>
-    simp only [mulAddAux]
+    simp only [mulAddAux_succ]
     split_ifs <;> simp only [map_add hf, map_double hf, ih]
 
 /-- Two products with shared doublings commute with the change of representation. -/
@@ -247,7 +267,7 @@ theorem mulAddAux_succ [NeZero m] (a : Fin m) (p q pq : Jacobian m) (fuel k l : 
       if k % 2 = 1 then
         if l % 2 = 1 then add a acc pq else add a acc p
       else if l % 2 = 1 then add a acc q else acc := by
-  simp only [mulAddAux, Coords.mulAddAux]
+  simp only [mulAddAux, Coords.mulAddAux_succ]
   split_ifs <;> rfl
 
 /-- The chain starts from `P + Q`. -/
@@ -530,7 +550,7 @@ theorem onCurve_mulAddAux {p q pq : Coords K} (hp : OnCurve A B p) (hq : OnCurve
   | zero => exact onCurve_infinity
   | succ fuel ih =>
     have hacc := (double_spec h2 (ih (k / 2) (l / 2))).1
-    simp only [mulAddAux]
+    simp only [mulAddAux_succ]
     split_ifs
     · exact (add_spec h2 hacc hpq).1
     · exact (add_spec h2 hacc hp).1
@@ -546,7 +566,7 @@ theorem toPoint_mulAddAux {p q pq : Coords K} (hp : OnCurve A B p) (hq : OnCurve
   | zero =>
     obtain rfl : k = 0 := by simpa using hk
     obtain rfl : l = 0 := by simpa using hl
-    simp [mulAddAux, toPoint_of_z_eq_zero (rfl : (infinity : Coords K).z = 0)]
+    simp [mulAddAux, mulAddBits, toPoint_of_z_eq_zero (rfl : (infinity : Coords K).z = 0)]
   | succ fuel ih =>
     have hk2 : k / 2 < 2 ^ fuel := by rw [Nat.pow_succ] at hk; omega
     have hl2 : l / 2 < 2 ^ fuel := by rw [Nat.pow_succ] at hl; omega
@@ -556,7 +576,7 @@ theorem toPoint_mulAddAux {p q pq : Coords K} (hp : OnCurve A B p) (hq : OnCurve
     -- `k = 2 (k / 2) + k mod 2`, and likewise for `l`.
     have ek := Nat.div_add_mod k 2
     have el := Nat.div_add_mod l 2
-    simp only [mulAddAux]
+    simp only [mulAddAux_succ]
     split_ifs with hk1 hl1 hl1
     · rw [(add_spec h2 hacc hpq).2, hdbl, hsum]
       conv_rhs => rw [← ek, ← el, hk1, hl1]
@@ -679,7 +699,10 @@ theorem toAffine_of_z_ne_zero {p : Jacobian m} (hz : p.z ≠ 0) :
     by simp [toAffine, Coords.toAffine, hz], ?_, ?_⟩ <;>
     simp [affX, affY, div_eq_mul_inv, pow_succ, mul_assoc]
 
-/-! ## The group law, from the coordinates in `ZMod m` -/
+/-! ## The group law, from the coordinates in `ZMod m`
+
+Forms mod a prime `m` other than 2 follow the law through their values in `ZMod m`.
+-/
 
 section Law
 
@@ -788,7 +811,12 @@ namespace EthLib.Cryptography.ShortWeierstrass.Point
 
 open Jacobian (toZ)
 
-/-! ## Points of a curve as forms, over a field -/
+/-! ## Points of a curve as forms, over a field
+
+A point of a short Weierstrass curve converts to a form and back.
+
+So double and add on points computes `k P`, in any representation of any such field.
+-/
 
 section Field
 

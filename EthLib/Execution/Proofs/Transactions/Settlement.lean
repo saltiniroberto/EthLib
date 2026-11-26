@@ -7,47 +7,9 @@ public import EthLib.Execution.Transactions.Settlement
 /-!
 # Proofs: the settlement of the gas of a transaction
 
-A transaction whose gas limit covers its least gas limit never uses more gas than that limit.
+The theorems bound the refund, the gas used and the price per gas of a transaction.
 
-From Pectra, it uses at least the call data floor.
-
-The refund is at most half of the gas used, and from London at most a fifth.
-
-The price per gas of a transaction with a maximum fee never exceeds that maximum fee.
-
-The wei of the gas limit split exactly into the refund, the priority fee and the burned fee.
-
-Before London the base fee is 0, so nothing is burned.
-
-From Spurious Dragon to Paris, a fee of 0 creates no beneficiary and deletes an empty one.
-
-From Glamsterdam, the execution gas and the reservoir split the gas past the intrinsic gas.
-
-The execution gas is at most `2^24` minus the intrinsic gas.
-
-The reservoir is the gas limit past `2^24`.
-
-The execution gas that a block counts for a transaction is at least the call data floor.
-
-It is also at least the gas used before the refund, minus the state gas.
-
-So it is at least the gas that the sender pays, minus the state gas.
-
-Before Glamsterdam, a block counts the gas that the sender pays.
-
-So the gas used in the header is the sum of the gas of the transactions.
-
-Crediting an amount below `2^256` creates that ether at the address.
-
-Crediting at least `2^256` fails as an overflow of the balance.
-
-Settling the gas reports the gas used that the settlement counts.
-
-With no rule lifted, a transaction pays at the base fee of its block.
-
-Buying the gas takes exactly the fee from the sender and adds one to its nonce.
-
-It fails if the sender does not hold the fee.
+They also describe its payments, the gas that a block counts for it, and the purchase of its gas.
 -/
 
 @[expose] public section
@@ -69,6 +31,7 @@ open EthLib.Execution.Fees.BlobBaseFee (calculateTotalBlobGas)
 theorem gasRefund_le_half (fork : Fork) (used refundCounter : Nat) :
     gasRefund fork used refundCounter ≤ used / 2 := by
   unfold gasRefund maxRefundQuotient
+  dsimp only [Evm.gasSchedule]
   split
   · exact Nat.le_trans (Nat.min_le_left _ _) (Nat.div_le_div_left (by omega) (by omega))
   · exact Nat.min_le_left _ _
@@ -76,7 +39,7 @@ theorem gasRefund_le_half (fork : Fork) (used refundCounter : Nat) :
 /-- From London, the refund is at most a fifth of the gas used before it. -/
 theorem gasRefund_le_fifth {fork : Fork} (hFork : fork ≥ .london) (used refundCounter : Nat) :
     gasRefund fork used refundCounter ≤ used / 5 := by
-  simp only [gasRefund, maxRefundQuotient, hFork, ↓reduceIte]
+  simp only [gasRefund, maxRefundQuotient, Evm.gasSchedule, hFork, ↓reduceIte]
   exact Nat.min_le_left _ _
 
 /-- The refund is at most the refund counter. -/
@@ -143,7 +106,7 @@ theorem le_effectiveGasPrice {baseFee : Nat} {tx : Transaction}
 
 /-! ## The payments -/
 
-/-- The wei of the gas limit split into the refund, the priority fee and the burned fee.
+/-- The wei of the gas limit split exactly into the refund, the priority fee and the burned fee.
 
 The gas limit must cover the least gas limit, and the price per gas must cover the base fee. -/
 theorem settlement_conserves {fork : Fork} {sender : Address} {tx : Transaction} {baseFee : Nat}
@@ -174,6 +137,43 @@ theorem baseFeeOf_of_lt_london {fork : Fork} (hFork : fork < .london)
 /-! ## The beneficiary -/
 
 open EthLib.Execution.State (TransactionState)
+open EthLib.Execution.Evm (BlockEnvironment)
+
+/-- A credit of ether fails only for a balance that would overflow at its address. -/
+theorem error_creditEther {fork : Fork} {state : TransactionState} {address : Address}
+    {amount : Nat} {e : State.StateError} (h : creditEther fork state address amount = .error e) :
+    e = .balanceOverflow address := by
+  unfold creditEther at h
+  split at h
+  · exact TransactionState.error_createEther h
+  · exact (Except.error.inj h).symm
+
+/-- The purchase of gas fails only with a short balance of the sender. -/
+theorem error_buyGas {fork : Fork} {env : BlockEnvironment fork} {state : TransactionState}
+    {sender : Address} {tx : Transaction} {lifted : LiftedRules} {e : State.StateError}
+    (h : buyGas env state sender tx lifted = .error e) : e = .insufficientBalance sender := by
+  unfold buyGas at h
+  obtain ⟨mid, hmid⟩ := TransactionState.incrementNonce_isOk fork state sender
+  simp only [hmid, bind, Except.bind] at h
+  have h := TransactionState.modifyState_eq_error.mp h
+  split at h
+  · cases h
+  · exact (Except.error.inj h).symm
+
+/-- The settlement of gas fails only for a balance that would overflow. -/
+theorem error_settleGas {fork : Fork} {env : BlockEnvironment fork} {state : TransactionState}
+    {sender : Address} {tx : Transaction} {gasLeft refund : Nat} {lifted : LiftedRules}
+    {e : State.StateError} (h : settleGas env state sender tx gasLeft refund lifted = .error e) :
+    ∃ address, e = .balanceOverflow address := by
+  unfold settleGas at h
+  rcases Base.bind_eq_error h with h | ⟨_, -, h⟩
+  · exact ⟨_, error_creditEther h⟩
+  rcases Base.bind_eq_error h with h | ⟨_, -, h⟩
+  · unfold payBeneficiary at h
+    split at h
+    · cases h
+    · exact ⟨_, error_creditEther h⟩
+  · cases h
 
 /-- From Spurious Dragon to Paris, a fee of 0 to an absent beneficiary leaves the state as it is.
 

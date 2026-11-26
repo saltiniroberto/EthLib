@@ -60,9 +60,9 @@ def requestDesc (preset : Preset) (config : Config) (fork : Fork) (id : Protocol
 /-- The length bounds of the request payload of a protocol version at a fork, if it has one. -/
 def requestBounds (preset : Preset) (config : Config) (fork : Fork) (id : ProtocolId) :
     Option (UInt64 × UInt64) :=
-  (requestDesc preset config fork id).map Networking.ReqResp.payloadBounds
+  (requestDesc preset config fork id).map (Networking.ReqResp.payloadBounds config.MAX_PAYLOAD_SIZE)
 
-/-- Why a protocol or a topic has no length bound. -/
+/-- Why a protocol, a topic or a response chunk has no length bound. -/
 inductive BoundsError where
   /-- The fork does not define the protocol version.
 
@@ -74,6 +74,14 @@ inductive BoundsError where
 
   The error gives the name of the topic and the fork. -/
   | topicNotAtFork (topic : String) (fork : Fork)
+  /-- No epoch of the chain has the digest of a successful response chunk.
+
+  So the digest names no fork, and the chunk has no type and no bounds. -/
+  | unknownDigest (digest : ForkDigest)
+  /-- Only the far future epoch has the digest of a successful response chunk.
+
+  An epoch has at least two slots, so no slot has that epoch, and no payload has the digest. -/
+  | unscheduledDigest (digest : ForkDigest)
   deriving DecidableEq, Repr
 
 /-- The stable code of an error, one per constructor.
@@ -87,6 +95,8 @@ def BoundsError.code : BoundsError → UInt32
   | .notAtFork .. => 301
   | .noRequest _ => 302
   | .topicNotAtFork .. => 303
+  | .unknownDigest _ => 305
+  | .unscheduledDigest _ => 306
 
 /-- The message of an error, with the protocol or the topic and the fork. -/
 instance : ToString BoundsError where
@@ -94,6 +104,9 @@ instance : ToString BoundsError where
     | .notAtFork protocol fork => s!"{protocol} is not a protocol of {fork.name}"
     | .noRequest protocol => s!"{protocol} carries no request"
     | .topicNotAtFork topic fork => s!"{topic} is not a topic of {fork.name}"
+    | .unknownDigest digest => s!"no epoch of the chain has the digest {hexString digest.toList}"
+    | .unscheduledDigest digest =>
+      s!"only the far future epoch has the digest {hexString digest.toList}"
 
 /-- The code and the message of an error, as the C exports return them. -/
 def BoundsError.fault (error : BoundsError) : UInt32 × String :=

@@ -9,19 +9,9 @@ public import EthLib.Consensus.Proofs.Transition.Totality.Upgrades
 
 The upgrade from each fork to the next has a totality theorem under its own conditions.
 
-The upgrades to Bellatrix, Capella and Deneb only carry fields, so they never fail.
-
-The upgrade to Heze succeeds exactly when the two deposit indices are equal.
-
 The upgrades due at a slot then succeed when a property of states holds at the start.
 
-Each due upgrade must succeed from a state with the property, and keep it.
-
 Before Altair, a run of slots that ends two epochs later clears the pending attestations.
-
-One epoch moves the list of the current epoch to the previous one, and starts an empty list.
-
-So two epochs later both lists are empty, and the upgrade to Altair has none to translate.
 -/
 
 @[expose] public section
@@ -72,8 +62,7 @@ def UpgradeReady (forked : ForkedBeaconState preset) : Prop :=
       (∀ offset ≤ preset.MIN_SEED_LOOKAHEAD.toNat,
         PtcDrawable pre (getCurrentEpoch pre + offset.toUInt64)) ∧
       pendingAmount (pre.pendingDeposits (by decide)).data.toList < 2 ^ 64
-  | ⟨.glamsterdam, pre⟩ =>
-    pre.eth1DepositIndex (by decide) = pre.depositRequestsStartIndex (by decide)
+  | ⟨.glamsterdam, _⟩ => True
   | _ => False
 
 /-- The upgrade to the next fork succeeds under the conditions of that upgrade. -/
@@ -86,6 +75,7 @@ theorem upgradeNext_exists_ok {forked : ForkedBeaconState preset}
     obtain ⟨post, ok⟩ := upgradeToAltair_exists_ok (config := config) room look members
       drawable translated
     exact ⟨⟨⟨.altair, post⟩, (by decide : Fork.phase0 < .altair)⟩, by simp [upgradeNext, ok]⟩
+  -- The upgrades to Bellatrix, Capella and Deneb only carry fields, so they never fail.
   | altair => exact ⟨_, rfl⟩
   | bellatrix => exact ⟨_, rfl⟩
   | shapella => exact ⟨_, rfl⟩
@@ -103,9 +93,10 @@ theorem upgradeNext_exists_ok {forked : ForkedBeaconState preset}
       look slotRoom perEpoch drawable funded
     exact ⟨⟨⟨.glamsterdam, post⟩, (by decide : Fork.fusaka < .glamsterdam)⟩,
       by simp [upgradeNext, ok]⟩
+  -- The upgrade to Heze always succeeds.
   | glamsterdam =>
     have ok : upgradeToHeze config pre = .ok (upgradeHezeFields config pre) :=
-      upgradeToHeze_ok_iff.mpr ⟨ready, rfl⟩
+      upgradeToHeze_ok_iff.mpr rfl
     exact ⟨⟨⟨.hegota, upgradeHezeFields config pre⟩, (by decide : Fork.glamsterdam < .hegota)⟩,
       by simp [upgradeNext, ok]⟩
   | _ => exact ready.elim
@@ -215,13 +206,18 @@ private theorem advanceSlots_pending {fork : Fork} (before : fork < .altair) :
 
 The epoch at the end must be at least two more than the epoch at the start.
 
-Both the list of the previous epoch and the list of the current epoch are then empty. -/
+Both the list of the previous epoch and the list of the current epoch are then empty.
+
+The upgrade to Altair then has none to translate. -/
 theorem advanceSlots_pendingAttestations_empty {fork : Fork} {state after : BeaconState preset fork}
     (before : fork < .altair) {count : Nat}
     (computed : advanceSlots config checks count state = .ok after)
     (later : (getCurrentEpoch state).toNat + 2 ≤ (getCurrentEpoch after).toNat) :
     (after.previousEpochAttestations before).data = #[] ∧
       (after.currentEpochAttestations before).data = #[] :=
+  -- One epoch moves the list of the current epoch to the previous one, and starts an empty list.
+  --
+  -- So two epochs later both lists are empty.
   (advanceSlots_pending before count computed).2.2 later
 
 end EthLib.Consensus

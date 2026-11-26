@@ -10,11 +10,9 @@ import EthLib.Cryptography.Proofs.AltBn128.PairingAte
 
 Let `P_i = a_i P1` and `Q_i = b_i P2`, for scalars `a_i` and `b_i` in `ZMod q`.
 
-Then `prod_i e(P_i, Q_i) = e(P1, P2)^(sum_i a_i * b_i)`, and `e(P1, P2)` has prime order `q`.
-
-So the product is 1, and ECPAIRING returns the word 1, exactly when `sum_i a_i * b_i = 0`.
-
 Every pair that ECPAIRING decodes holds such multiples of `P1` and `P2`.
+
+ECPAIRING returns the word 1 exactly when `sum_i a_i * b_i = 0`.
 
 The pairing law is proved in `PairingAte.lean`, so no theorem here assumes it.
 
@@ -27,8 +25,9 @@ Source: [EIP-197][eip197], section Specification.
 
 namespace EthLib.Execution.Evm.Precompiles.AltBn128
 
-open EthLib.Base (Fork bytesToNat natToBytes natToBytes_length bytesToNat_natToBytes_of_lt
-  natToBytes_zero_right mapM_eq_ok_map mapM_ok_getElem mapM_ok_length)
+open EthLib.Base (Fork ByteOrder.ofBE ByteOrder.toBE ByteOrder.length_toList_toBE
+  ByteOrder.ofBE_toBE_of_lt ByteOrder.toList_toBE_zero_right mapM_eq_ok_map mapM_ok_getElem
+  mapM_ok_length)
 open EthLib.Cryptography.AltBn128
 open EthLib.Execution.Evm (bufferRead)
 
@@ -111,6 +110,9 @@ theorem ecpairing_eq_one_iff {fork : Fork} {data : ByteArray} {gas : Nat} {out :
   obtain ⟨-, -, pairs', hdec', rfl⟩ := (ecpairing_eq_ok_iff fork data gas out).mp h
   rw [hdec] at hdec'
   cases hdec'
+  -- `prod_i e(P_i, Q_i) = e(P1, P2)^(sum_i a_i * b_i)`, and `e(P1, P2)` has prime order `q`.
+  --
+  -- So the product is 1 exactly when `sum_i a_i * b_i = 0`.
   rw [← pairingLaws.pairingCheck_iff pairs a b ha hb hrep]
   constructor
   · intro hout
@@ -150,15 +152,15 @@ theorem ecpairing_eq_zero_iff {fork : Fork} {data : ByteArray} {gas : Nat} {out 
 /-- The 128 bytes of a point of the twist. -/
 theorem length_g2ToBytes : (q : Point2) → (g2ToBytes q).length = 128
   | .infinity => by simp [g2ToBytes]
-  | .affine _ _ => by simp [g2ToBytes, natToBytes_length]
+  | .affine _ _ => by simp [g2ToBytes]
 
 /-- A coordinate fits in 32 bytes, since `p < 2^256`. -/
 private theorem fp_lt_two_pow (x : Fp) : x.val < 256 ^ 32 :=
   Nat.lt_trans x.isLt (by decide)
 
 /-- The 32 bytes of an element of `Fp` decode back to it. -/
-theorem bytesToFp_natToBytes (x : Fp) : bytesToFp (natToBytes 32 x.val) = .ok x := by
-  simp [bytesToFp, bytesToNat_natToBytes_of_lt (fp_lt_two_pow x), x.isLt]
+theorem bytesToFp_toBE (x : Fp) : bytesToFp ((ByteOrder.toBE 32 x.val).toList) = .ok x := by
+  simp [bytesToFp, ByteOrder.ofBE_toBE_of_lt (fp_lt_two_pow x), x.isLt]
 
 /-- The point `(0, 0)` is not on the twist, since `b2 ≠ 0`. -/
 theorem isOnCurve_point2_zero : (Point2.affine ⟨0, 0⟩ ⟨0, 0⟩).isOnCurve = false := by
@@ -187,23 +189,30 @@ theorem bytesToG2_g2ToBytes {q : Point2} (hq : q.isOnCurve = true) :
     bytesToG2 (g2ToBytes q) = .ok q := by
   cases q with
   | infinity =>
-    have h0 : natToBytes 32 0 = List.replicate 32 0 := natToBytes_zero_right 32
+    have h0 : (ByteOrder.toBE 32 0).toList
+        = List.replicate 32 0 := ByteOrder.toList_toBE_zero_right 32
     have hbytes : g2ToBytes .infinity =
-        natToBytes 32 0 ++ (natToBytes 32 0 ++ (natToBytes 32 0 ++ natToBytes 32 0)) := by
+        (ByteOrder.toBE 32 0).toList
+          ++ ((ByteOrder.toBE 32 0).toList
+            ++ ((ByteOrder.toBE 32 0).toList ++ (ByteOrder.toBE 32 0).toList)) := by
       simp [g2ToBytes, h0]
-    have hl0 : (natToBytes 32 0).length = 32 := natToBytes_length 32 0
-    have hzero : bytesToFp (natToBytes 32 0) = .ok 0 := bytesToFp_natToBytes 0
+    have hl0 : ((ByteOrder.toBE 32 0).toList).length = 32 := ByteOrder.length_toList_toBE 32 0
+    have hzero : bytesToFp ((ByteOrder.toBE 32 0).toList) = .ok 0 := bytesToFp_toBE 0
     rw [bytesToG2, hbytes, List.take_left' hl0, List.drop_left' hl0, List.take_left' hl0,
       drop_64_of_four hl0 hl0, List.take_left' hl0, drop_96_of_four hl0 hl0 hl0]
     simp [hzero, bind, Except.bind, pure, Except.pure]
   | affine x y =>
     have hassoc : g2ToBytes (.affine x y) =
-        natToBytes 32 x.c1.val ++
-          (natToBytes 32 x.c0.val ++ (natToBytes 32 y.c1.val ++ natToBytes 32 y.c0.val)) := by
+        (ByteOrder.toBE 32 x.c1.val).toList ++
+          ((ByteOrder.toBE 32 x.c0.val).toList
+            ++ ((ByteOrder.toBE 32 y.c1.val).toList ++ (ByteOrder.toBE 32 y.c0.val).toList)) := by
       simp [g2ToBytes, List.append_assoc]
-    have hx1 : (natToBytes 32 x.c1.val).length = 32 := natToBytes_length 32 x.c1.val
-    have hx0 : (natToBytes 32 x.c0.val).length = 32 := natToBytes_length 32 x.c0.val
-    have hy1 : (natToBytes 32 y.c1.val).length = 32 := natToBytes_length 32 y.c1.val
+    have hx1 : ((ByteOrder.toBE 32 x.c1.val).toList).length
+        = 32 := ByteOrder.length_toList_toBE 32 x.c1.val
+    have hx0 : ((ByteOrder.toBE 32 x.c0.val).toList).length
+        = 32 := ByteOrder.length_toList_toBE 32 x.c0.val
+    have hy1 : ((ByteOrder.toBE 32 y.c1.val).toList).length
+        = 32 := ByteOrder.length_toList_toBE 32 y.c1.val
     have hnz : ¬(x.c0 = 0 ∧ x.c1 = 0 ∧ y.c0 = 0 ∧ y.c1 = 0) := by
       rintro ⟨hc0, hc1, hd0, hd1⟩
       have hx : x = ⟨0, 0⟩ := Fp2.ext hc0 hc1
@@ -212,12 +221,82 @@ theorem bytesToG2_g2ToBytes {q : Point2} (hq : q.isOnCurve = true) :
       cases hq
     rw [bytesToG2, hassoc, List.take_left' hx1, List.drop_left' hx1, List.take_left' hx0,
       drop_64_of_four hx1 hx0, List.take_left' hy1, drop_96_of_four hx1 hx0 hy1]
-    simp only [bytesToFp_natToBytes, hq, bind, Except.bind, pure, Except.pure, ↓reduceIte]
+    simp only [bytesToFp_toBE, hq, bind, Except.bind, pure, Except.pure, ↓reduceIte]
     split
     · rename_i hzero
       exact absurd ⟨congrArg Cryptography.Fp2.c0 hzero.1, congrArg Cryptography.Fp2.c1 hzero.1,
         congrArg Cryptography.Fp2.c0 hzero.2, congrArg Cryptography.Fp2.c1 hzero.2⟩ hnz
     · rfl
+
+/-- 32 bytes that decode to an element of `Fp` are the 32 bytes of that element. -/
+theorem toBE_of_bytesToFp {raw : List UInt8} {x : Fp} (hlen : raw.length = 32)
+    (h : bytesToFp raw = .ok x) : (ByteOrder.toBE 32 x.val).toList = raw := by
+  dsimp only [bytesToFp] at h
+  split at h
+  · cases h
+    exact EthLib.Base.ByteOrder.toList_toBE_ofBE_of_length hlen
+  · cases h
+
+/-- Each 128 bytes that the decoder accepts are the encoding of the point that it returns.
+
+The decoder splits its input at bytes 32, 64 and 96, and reads an input of any length.
+
+So the theorem takes 128 bytes, the length that ECPAIRING reads for each point. -/
+theorem g2ToBytes_bytesToG2 {raw : List UInt8} {q : Point2} (hlen : raw.length = 128)
+    (h : bytesToG2 raw = .ok q) : g2ToBytes q = raw := by
+  -- The input is its four blocks of 32 bytes, one after another.
+  have hsplit : raw.take 32 ++ ((raw.drop 32).take 32 ++ ((raw.drop 64).take 32 ++
+      raw.drop 96)) = raw := by
+    have e3 : (raw.drop 64).take 32 ++ raw.drop 96 = raw.drop 64 := by
+      simpa [List.drop_drop] using List.take_append_drop 32 (raw.drop 64)
+    have e2 : (raw.drop 32).take 32 ++ raw.drop 64 = raw.drop 32 := by
+      simpa [List.drop_drop] using List.take_append_drop 32 (raw.drop 32)
+    rw [e3, e2, List.take_append_drop]
+  simp only [bytesToG2, bind, Except.bind, pure, Except.pure, throw, throwThe,
+    MonadExceptOf.throw] at h
+  cases hx1 : bytesToFp (raw.take 32) with
+  | error e => simp [hx1] at h
+  | ok x1 =>
+  cases hx0 : bytesToFp ((raw.drop 32).take 32) with
+  | error e => simp [hx1, hx0] at h
+  | ok x0 =>
+  cases hy1 : bytesToFp ((raw.drop 64).take 32) with
+  | error e => simp [hx1, hx0, hy1] at h
+  | ok y1 =>
+  cases hy0 : bytesToFp (raw.drop 96) with
+  | error e => simp [hx1, hx0, hy1, hy0] at h
+  | ok y0 =>
+  simp only [hx1, hx0, hy1, hy0] at h
+  -- Each block is the 32 bytes of the element that it decodes to.
+  have e1 := toBE_of_bytesToFp (by simp [hlen]) hx1
+  have e0 := toBE_of_bytesToFp (by simp [hlen]) hx0
+  have f1 := toBE_of_bytesToFp (by simp [hlen]) hy1
+  have f0 := toBE_of_bytesToFp (by simp [hlen]) hy0
+  split at h
+  · -- The zero coordinates are the 128 zero bytes of the point at infinity.
+    rename_i hzero
+    cases h
+    obtain ⟨hx, hy⟩ := hzero
+    have hx0' : x0 = 0 := congrArg Cryptography.Fp2.c0 hx
+    have hx1' : x1 = 0 := congrArg Cryptography.Fp2.c1 hx
+    have hy0' : y0 = 0 := congrArg Cryptography.Fp2.c0 hy
+    have hy1' : y1 = 0 := congrArg Cryptography.Fp2.c1 hy
+    subst hx0' hx1' hy0' hy1'
+    rw [← hsplit, ← e1, ← e0, ← f1, ← f0]
+    simp [g2ToBytes, ByteOrder.toList_toBE_zero_right]
+  · split at h
+    · cases h
+      rw [← hsplit, ← e1, ← e0, ← f1, ← f0]
+      simp [g2ToBytes, List.append_assoc]
+    · cases h
+
+/-- 128 bytes decode to a point exactly when the point is on the twist and the bytes encode it.
+
+The decoder reads any length, so the theorem takes the 128 bytes that ECPAIRING reads. -/
+theorem bytesToG2_eq_ok_iff {raw : List UInt8} (hlen : raw.length = 128) (q : Point2) :
+    bytesToG2 raw = .ok q ↔ q.isOnCurve = true ∧ g2ToBytes q = raw :=
+  ⟨fun h => ⟨bytesToG2_isOnCurve h, g2ToBytes_bytesToG2 hlen h⟩,
+    fun ⟨hq, hraw⟩ => hraw ▸ bytesToG2_g2ToBytes hq⟩
 
 /-- The 192 bytes of a pair: its point of the curve, then its point of the twist. -/
 def encodePair (pair : Point × Point2) : List UInt8 :=
@@ -246,7 +325,7 @@ private theorem bufferRead_of_le {bytes : List UInt8} {start size : Nat}
   · intro j hj _
     rw [bufferRead_length] at hj
     have hlt : start + j < bytes.length := by omega
-    simp [bufferRead_eq, EthLib.Base.byteAt_eq_getD, Array.getD_eq_getD_getElem?,
+    simp [bufferRead_eq, EthLib.Base.byteAtOrZero_eq_getD, Array.getD_eq_getD_getElem?,
       List.getElem?_eq_getElem hlt]
 
 /-- Dropping `size * i` bytes from blocks of `size` bytes leaves the blocks from `i` on. -/

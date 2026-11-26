@@ -13,14 +13,6 @@ The beacon chain reads a payload request directly, through its model of the exec
 Between two nodes, the request travels instead as the JSON parameters of the method.
 
 From Bellatrix to Gloas, the method on a chain answers valid exactly when the model accepts.
-
-The last block of the chain must pass the terminal block check, which only the method makes.
-
-A chain without the parent of the payload gives no valid answer on either route.
-
-From Heze the request reads back at version 6, with its inclusion list.
-
-Its block does not run yet, since the execution rules of Bogota are not in this library.
 -/
 
 public section
@@ -187,7 +179,7 @@ The block comes from the payload at that fork, with the decoded root, requests, 
 Its blob transactions carry the decoded versioned hashes, when they are given. -/
 private theorem of_checkNewPayload_ok {config : ChainConfig} {version : Nat}
     {params : Lean.Json} {any : Json.AnyPayload} {amsterdam : Option (ByteArray × UInt64)}
-    {hashes : Option (List Hash32)} {beaconRoot : Option Hash32}
+    {hashes : Option (List Cryptography.Kzg.VersionedHash)} {beaconRoot : Option Hash32}
     {requests : Option (List ByteArray)}
     (hDecode : newPayloadParams version params =
       .ok (any, amsterdam, hashes, beaconRoot, requests))
@@ -288,8 +280,10 @@ private theorem valid_iff_accepts_of_json {transition : TransitionConfiguration}
     by_cases electra : Fork.pectra ≤ fork <;> simp [sinceValue, electra, four]
   -- The hashes are written from Deneb, as those of the request.
   have hHashes : ∀ hs, (if 3 ≤ newPayloadVersion fork then
-      some (((sinceValue r.versionedHashes).map (·.data.toList)).getD []) else none) = some hs →
-      ∀ deneb : Fork.dencun ≤ fork, hs = (r.versionedHashes deneb).data.toList := by
+      some (((sinceValue r.versionedHashes).map (·.data.toList)).getD [])
+      else none) = some hs →
+      ∀ deneb : Fork.dencun ≤ fork,
+        hs = (r.versionedHashes deneb).data.toList := by
     intro hs e deneb
     simp [sinceValue, deneb, three] at e
     exact e.symm
@@ -303,7 +297,8 @@ private theorem valid_iff_accepts_of_json {transition : TransitionConfiguration}
           ((sinceValue r.parentBeaconBlockRoot).getD 0) ((sinceValue requests).getD [])) =
         .ok (any', amsterdam,
           if 3 ≤ newPayloadVersion fork then
-            some (((sinceValue r.versionedHashes).map (·.data.toList)).getD []) else none,
+            some (((sinceValue r.versionedHashes).map (·.data.toList)).getD [])
+          else none,
           if 3 ≤ newPayloadVersion fork then
             some ((sinceValue r.parentBeaconBlockRoot).getD 0) else none,
           if 4 ≤ newPayloadVersion fork then some ((sinceValue requests).getD []) else none) ∧
@@ -336,7 +331,8 @@ private theorem valid_iff_accepts_of_json {transition : TransitionConfiguration}
         (hAt _).symm.trans hPl, by rw [← hRoot]; exact hB, by rw [← hRequests]; exact hL,
         by rw [← hA1]; exact hA, by rw [← hA2]; exact hS, hBlock⟩, fun deneb => ?_, post, hST⟩
     have e : (if 3 ≤ newPayloadVersion fork then
-        some (((sinceValue r.versionedHashes).map (·.data.toList)).getD []) else none) =
+        some (((sinceValue r.versionedHashes).map (·.data.toList)).getD [])
+        else none) =
         some (((sinceValue r.versionedHashes).map (·.data.toList)).getD []) := by
       simp [three.mpr deneb]
     rw [hH _ e]
@@ -372,8 +368,8 @@ private theorem valid_iff_accepts_of_json {transition : TransitionConfiguration}
           ((Consensus.NewPayloadRequest.requestsList_eq_ok_iff.mp hReq) electra)
       · simp [sinceValue, electra] at e
     have hHashesB : ∀ hs, (if 3 ≤ newPayloadVersion fork then
-        some (((sinceValue r.versionedHashes).map (·.data.toList)).getD []) else none) =
-        some hs → ExecutionPayload.blobVersionedHashes b.transactions = hs := by
+        some (((sinceValue r.versionedHashes).map (·.data.toList)).getD [])
+        else none) = some hs → ExecutionPayload.blobVersionedHashes b.transactions = hs := by
       intro hs e
       have deneb : Fork.dencun ≤ fork := three.mp (by
         by_contra low
@@ -440,7 +436,12 @@ theorem newPayloadOnChain_valid_iff_accepts {transition : TransitionConfiguratio
       (valid_iff_accepts_of_json hFork hJson hTerminal).mpr hAccept
     exact ⟨_, answer, hJson, hRun, hValid⟩
 
-/-! ## From Heze -/
+/-! ## From Heze
+
+The request reads back at version 6, with its inclusion list.
+
+Its block does not run yet, since the execution rules of Bogota are not in this library.
+-/
 
 /-- From Heze, the JSON of a request reads back at version 6, with the values of the request.
 
@@ -459,7 +460,7 @@ theorem newPayloadV6Params_newPayloadRequestJson (heze : .hegota ≤ fork)
       newPayloadV6Params params = .ok ((any,
         some (⟨(r.executionPayload.blockAccessList (Nat.le_trans (by decide) heze)).data⟩,
           r.executionPayload.slotNumber (Nat.le_trans (by decide) heze)),
-        some (r.versionedHashes (Nat.le_trans (by decide) heze)).data.toList,
+        some ((r.versionedHashes (Nat.le_trans (by decide) heze)).data.toList),
         some (r.parentBeaconBlockRoot (Nat.le_trans (by decide) heze)),
         some ((sinceValue requests).getD [])), list) ∧
       ∃ original, anyPayloadOf r.executionPayload = some original ∧

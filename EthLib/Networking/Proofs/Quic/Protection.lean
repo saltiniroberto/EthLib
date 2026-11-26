@@ -5,6 +5,7 @@ public import EthLib.Cryptography.Proofs.Aes.Gcm
 public import EthLib.Cryptography.Proofs.ChaCha20Poly1305
 import EthLib.Base.Proofs.MapM
 import EthLib.Base.Proofs.Bytes
+import EthLib.Cryptography.Proofs.Aes.Block
 
 /-!
 # Proofs: QUIC packet protection
@@ -98,16 +99,11 @@ theorem sample_applyMask (longHeader : Bool) (offset : Nat) (width : Packet.Pack
     rw [maskByte, ite_eq_right hzero, dite_eq_right hpn, UInt8.xor_zero]
   · rfl
 
-private theorem and_xor (a b c : UInt8) :
-    (a ^^^ b) &&& c = (a &&& c) ^^^ (b &&& c) := by
-  apply UInt8.toNat_inj.mp
-  simp only [UInt8.toNat_and, UInt8.toNat_xor, Nat.and_xor_distrib_right]
-
 /-- Masking low bits preserves the Header Form bit, RFC 9001 §5.4.1. -/
 theorem headerForm_xor (first mask : UInt8) (longHeader : Bool) :
     (first ^^^ (mask &&& (if longHeader then 0x0f else 0x1f))) &&& 0x80 =
       first &&& 0x80 := by
-  rw [and_xor, UInt8.and_assoc]
+  rw [Aes.xor_and, UInt8.and_assoc]
   cases longHeader <;> simp only [Bool.false_eq_true, ↓reduceIte,
     show (0x0f : UInt8) &&& 0x80 = 0 by decide,
     show (0x1f : UInt8) &&& 0x80 = 0 by decide, UInt8.and_zero, UInt8.xor_zero]
@@ -127,7 +123,7 @@ theorem removeHeaderProtection_applyMask (suite : CipherSuite)
       ⟨bytes.extract 0 (offset + width.val + 1),
         bytes.extract (offset + width.val + 1) (bytes.size - 16),
         bytes.extract (bytes.size - 16) bytes.size,
-        bytesToNat (bytes.extract offset (offset + width.val + 1)).data.toList, width⟩ := by
+        ByteOrder.ofBE (bytes.extract offset (offset + width.val + 1)).data.toList, width⟩ := by
   dsimp only
   let first := bytes[0]'(by omega)
   let width := Packet.widthOfFirst first
@@ -245,7 +241,7 @@ theorem unprotect_protect (suite : CipherSuite) (keys : PacketKeys suite)
     | ok u =>
       rw [ho] at hprotect
       have ho' : 0 < offset ∧ header.size = offset + width.val + 1 := ensure_ok_iff.mp ho
-      cases hn : ensure (bytesToNat (header.extract offset header.size).data.toList =
+      cases hn : ensure (ByteOrder.ofBE (header.extract offset header.size).data.toList =
           number.val % 256 ^ (width.val + 1)) Error.packetNumber with
       | error e => rw [hn] at hprotect; cases hprotect
       | ok u =>

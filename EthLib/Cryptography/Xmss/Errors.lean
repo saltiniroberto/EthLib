@@ -3,15 +3,9 @@ module
 public import EthLib.Cryptography.Xmss.Types
 
 /-!
-# `Xmss.Errors`
+# leanXMSS errors
 
-Typed failures for the leanXMSS surface.
-
-Verification is not here.
-
-Bytes that do not parse are a caller error and fail here.
-
-A well-formed signature that does not verify is an ordinary `false`.
+The ways a leanXMSS operation rejects its input.
 -/
 
 @[expose] public section
@@ -20,7 +14,11 @@ namespace EthLib.Cryptography.Xmss
 
 open EthLib.Cryptography.Xmss.Constants
 
-/-- Every way a leanXMSS operation can reject its input. -/
+/-- Every way a leanXMSS operation can reject its input.
+
+Bytes of the wrong length are an error.
+
+A signature that parses but does not verify is not: verification returns `false`. -/
 inductive XmssError where
   /-- A one-time key exhausted every randomizer without reaching a codeword. -/
   | noAdmissibleEncoding (layer : Layer) (key : Nat)
@@ -35,11 +33,8 @@ inductive XmssError where
 
 /-- Human-readable description, used at the C-ABI boundary. -/
 def XmssError.message : XmssError → String
-  -- One line per rejection, phrased for someone reading a Python traceback.
   | .noAdmissibleEncoding layer key =>
       s!"no codeword within the trial limit for key {key} of layer {layer.toNat}"
-  -- The expected length is fixed by the parameter set.
-  -- So it is read from there rather than carried in the error.
   | .badPublicKeySize actual =>
       s!"bad public key size: {actual}, expected {PUB_KEY_SIZE}"
   | .badSignatureSize actual =>

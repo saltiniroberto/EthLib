@@ -13,14 +13,6 @@ From Altair each target flag of the state comes from a vote of a set for the lin
 
 Each upgrade from Altair on keeps that.
 
-It carries the slot, the justified checkpoints, the block roots and the flags of both epochs.
-
-So a vote for the link of a flag stays a vote for that link.
-
-The upgrade from Phase 0 builds the flags of the previous epoch from the pending attestations.
-
-When each of their attesters cast a vote of the set for the link of that epoch, each flag has one.
-
 Gasper §4.4, Definitions 4.5 and 4.6, justify a checkpoint by a supermajority link.
 
 The paper is [arXiv 2003.03052v3](https://arxiv.org/abs/2003.03052v3).
@@ -69,8 +61,12 @@ theorem TargetFlagsVoted.of_upgradeFrame {fork post : Fork} {pre : BeaconState p
     (frame : UpgradeFrame config pre after) (altair : .altair ≤ fork)
     (holds : TargetFlagsVoted votes pre) : TargetFlagsVoted votes after := by
   intro _ current position flagged
+  -- The upgrade carries the slot, the justified checkpoints and the block roots.
+  --
+  -- It also carries the flags of both epochs.
   obtain ⟨vote, voted, link⟩ := holds altair current position (frame.flags altair current
     position flagged)
+  -- So a vote for the link of a flag stays a vote for that link.
   exact ⟨vote, voted, link.of_upgradeFrame frame⟩
 
 /-! ## The upgrade from Phase 0 -/
@@ -122,6 +118,11 @@ theorem TargetFlagsVoted.of_upgradeToAltair {pre : BeaconState preset .phase0}
     {after : BeaconState preset .altair}
     (holds : PendingVoted votes pre) (computed : upgradeToAltair config pre = .ok after) :
     TargetFlagsVoted votes after := by
+  -- The upgrade from Phase 0 builds the flags of the previous epoch from the pending attestations.
+  --
+  -- Suppose each of their attesters cast a vote of the set for the link of that epoch.
+  --
+  -- Then each flag has one.
   have frame := upgradeFrame_upgradeToAltair computed
   obtain ⟨_, folded, _, rfl⟩ := upgradeToAltair_ok computed
   obtain ⟨previousZero, currentZero, -⟩ := carryFields_of_lt_altair (config := config)
@@ -342,10 +343,12 @@ theorem TargetFlagsVoted.of_processUpgrades_of_lt_altair
 theorem JustifiedEarly.of_initializeBeaconStateFromEth1 {fork : Fork}
     {after : BeaconState preset fork} {eth1BlockHash : Hash32} {eth1Timestamp : UInt64}
     {deposits : Array Deposit}
-    (computed : initializeBeaconStateFromEth1 config checks eth1BlockHash eth1Timestamp deposits =
-      .ok after) :
+    {before : fork < .altair}
+    (computed :
+      initializeBeaconStateFromEth1 config checks eth1BlockHash eth1Timestamp deposits before =
+        .ok after) :
     JustifiedEarly after := by
-  obtain ⟨_, _, _, activated, _, frame, rfl⟩ := initializeBeaconStateFromEth1_frame computed
+  obtain ⟨_, _, activated, _, frame, rfl⟩ := initializeBeaconStateFromEth1_frame computed
   intro _
   show activated.previousJustifiedCheckpoint = activated.currentJustifiedCheckpoint
   rw [frame.previousJustified, frame.currentJustified]
@@ -357,8 +360,10 @@ It is at the genesis epoch, so the separation asks nothing of it. -/
 theorem JustifiedSeparated.of_initializeBeaconStateFromEth1 {fork : Fork}
     {after : BeaconState preset fork} {eth1BlockHash : Hash32} {eth1Timestamp : UInt64}
     {deposits : Array Deposit}
-    (computed : initializeBeaconStateFromEth1 config checks eth1BlockHash eth1Timestamp deposits =
-      .ok after) :
+    {before : fork < .altair}
+    (computed :
+      initializeBeaconStateFromEth1 config checks eth1BlockHash eth1Timestamp deposits before =
+        .ok after) :
     JustifiedSeparated after := by
   intro later
   have slot := (initializeBeaconStateFromEth1_checkpoints computed).1
@@ -368,10 +373,12 @@ theorem JustifiedSeparated.of_initializeBeaconStateFromEth1 {fork : Fork}
 /-- Before Altair, the genesis state built from deposits has no pending attestations. -/
 theorem initializeBeaconStateFromEth1_pending {fork : Fork} {after : BeaconState preset fork}
     {eth1BlockHash : Hash32} {eth1Timestamp : UInt64} {deposits : Array Deposit}
-    (computed : initializeBeaconStateFromEth1 config checks eth1BlockHash eth1Timestamp deposits =
-      .ok after) (before : fork < .altair) (current : Bool) :
+    {before : fork < .altair}
+    (computed :
+      initializeBeaconStateFromEth1 config checks eth1BlockHash eth1Timestamp deposits before =
+        .ok after) (current : Bool) :
     recentPending after before current = #[] := by
-  obtain ⟨_, _, _, deposited, activated, _, depositedOk, activatedOk, rfl⟩ :=
+  obtain ⟨_, _, deposited, activated, _, depositedOk, activatedOk, rfl⟩ :=
     initializeBeaconStateFromEth1_ok computed
   let Empty : BeaconState preset fork → Prop := fun state =>
     (state.previousEpochAttestations before).data = #[] ∧

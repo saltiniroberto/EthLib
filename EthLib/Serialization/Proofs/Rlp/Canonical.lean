@@ -4,32 +4,20 @@ import EthLib.Base.Proofs.Bytes
 public import EthLib.Serialization.Proofs.Rlp.RoundTrip
 
 /-!
-# `Serialization.Proofs.Rlp.Canonical`
+# Proofs: RLP decoding is canonical
 
 The decoder accepts only canonical input: if `decode b = .ok x`, then `encode x = .ok b`.
 
 With the round trip, the encoding is a bijection between items and the accepted inputs.
 
 So no item has two accepted encodings, and two decoders that follow this specification agree.
-
-The decoder succeeds exactly on the encodings of items.
-
-The parser reads the same item from a longer input, as a stream decoder needs.
-
-The proof runs the decoder backwards:
-
-1. A prefix that the decoder accepts is the prefix that the encoding writes.
-   A length has no leading zero, and it is at least 56 in the long form.
-2. A byte string that the decoder reads is not one byte below `0x80`.
-   So the encoding writes it with that prefix.
-3. A list payload is shorter than its item, so induction on the number of bytes covers its items.
 -/
 
 @[expose] public section
 
 namespace EthLib.Serialization.Rlp
 
-open EthLib.Base (byteArray_getElem_eq_get!)
+open EthLib.Base (byteArray_eq_of_toList byteArray_getElem_eq_get!)
 
 /-- What an accepted length in the long form is made of. -/
 theorem readLongLength_ok {input : ByteArray} {pos stop : Nat} {kind kind' : PayloadKind}
@@ -48,14 +36,14 @@ theorem readLongLength_ok {input : ByteArray} {pos stop : Nat} {kind kind' : Pay
       · rename_i hHead
         have hEnd : pos + k ≤ input.size := by omega
         rw [readBigEndian_zero input pos k hEnd] at h
-        by_cases hSmall : ofBigEndian (input.extract pos (pos + k)).data.toList < 56
+        by_cases hSmall : Base.ByteOrder.ofBE (input.extract pos (pos + k)).data.toList < 56
         · rw [ite_eq_left hSmall] at h
           cases h
         · rw [ite_eq_right hSmall, Except.ok.injEq, Prod.mk.injEq, Prod.mk.injEq] at h
           obtain ⟨rfl, rfl, rfl⟩ := h
           have hLen := length_extract_toList input pos (pos + k) hEnd
           refine ⟨rfl, rfl, by omega, by omega, ?_, ?_⟩
-          · have := Base.bytesToNat_lt (input.extract pos (pos + k)).data.toList
+          · have := Base.ByteOrder.ofBE_lt (input.extract pos (pos + k)).data.toList
             rwa [hLen, show pos + k - pos = k by omega] at this
           · -- The length bytes have no leading zero, so they are `BE` of the length.
             apply bigEndian_unique
@@ -177,6 +165,7 @@ theorem readItem_canonical {input : ByteArray} {pos stop : Nat} (hStop : stop �
       ∃ e, joinEncodings xs = .ok e ∧ e.data.toList = (input.extract a b).data.toList)
     {x : Item} {next : Nat} (h : readItem input pos stop = .ok (x, next)) :
     ∃ e, encode x = .ok e ∧ (input.extract pos next).data.toList = e.data.toList := by
+  -- The proof runs the decoder backwards.
   unfold readItem at h
   rw [decodeItem_eq] at h
   by_cases hPos : pos < stop
@@ -206,6 +195,8 @@ theorem readItem_canonical {input : ByteArray} {pos stop : Nat} (hStop : stop �
     rw [hRP] at h
     simp only [bind, Except.bind] at h
     -- The prefix the decoder read is the one the encoding writes.
+    --
+    -- A length has no leading zero, and it is at least 56 in the long form.
     obtain ⟨hk, hPreMap⟩ := readPrefix_ok hStop hLow hRP
     obtain ⟨pre, hPre, hPreBytes⟩ := except_map_ok _ _ _ hPreMap
     have hPreSize : pre.size = k + 1 := by
@@ -226,6 +217,9 @@ theorem readItem_canonical {input : ByteArray} {pos stop : Nat} (hStop : stop �
     cases kind with
     | bytes =>
       simp only [exists_prop] at h
+      -- A byte string that the decoder reads is not one byte below `0x80`.
+      --
+      -- So the encoding writes it with that prefix.
       by_cases hOne : length = 1 ∧ pos + 1 + k < input.size ∧ input.get! (pos + 1 + k) < 0x80
       · simp [hOne, Except.map] at h
       simp only [hOne, dite_false, Except.map, Except.ok.injEq, Prod.mk.injEq] at h
@@ -282,6 +276,7 @@ theorem canonical_upTo (n : Nat) :
     (∀ (input : ByteArray) (pos stop : Nat), ∀ hBound : stop ≤ input.size, stop - pos ≤ n →
       ∀ xs, decodeItems input pos stop = .ok xs →
       ∃ e, joinEncodings xs = .ok e ∧ e.data.toList = (input.extract pos stop).data.toList) := by
+  -- A list payload is shorter than its item, so induction on the number of bytes covers its items.
   induction n with
   | zero =>
     refine ⟨fun input pos stop hStop hLen x next h =>
@@ -349,7 +344,7 @@ theorem encode_decode (b : ByteArray) (x : Item) (h : decode b = .ok x) : encode
         simp [readItem, hItem, Except.map]
       obtain ⟨e, hEncode, hBytes⟩ :=
         (canonical_upTo b.size).1 b 0 b.size (Nat.le_refl _) (by omega) _ _ hRead
-      rw [hEncode, byteArray_eq_of_toList e b (by simpa using hBytes.symm)]
+      rw [hEncode, byteArray_eq_of_toList (a := e) (b := b) (by simpa using hBytes.symm)]
     · simp [hEnd] at h
 
 /-- `encode` is a bijection between items and the byte strings that `decode` accepts.

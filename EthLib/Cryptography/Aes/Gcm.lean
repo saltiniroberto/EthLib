@@ -21,7 +21,7 @@ The key is secret, and nothing here is constant-time, the tag comparison include
 
 namespace EthLib.Cryptography.Aes.Gcm
 
-open EthLib.Base (byteAt)
+open EthLib.Base (byteAtOrZero)
 
 /-! ## Blocks as integers
 
@@ -35,7 +35,7 @@ def zeroBlock : Block :=
 
 /-- The XOR of two blocks. -/
 def xorBlock (X Y : Block) : Block :=
-  Vector.zipWith (· ^^^ ·) X Y
+  Base.xorBytes X Y
 
 /-- The integer of `R = 11100001 || 0^120`, SP 800-38D §6.3. -/
 def R : Nat :=
@@ -69,7 +69,7 @@ For the additional data `A`, the result is `A || 0^v` of SP 800-38D §7.1, step 
 def blocksOf (data : ByteArray) : List Block :=
   (List.range ((data.size + 15) / 16)).map fun j =>
     -- Each byte is read in place, and a byte past the end reads as zero.
-    Vector.ofFn fun i => byteAt data (16 * j + i.val)
+    Vector.ofFn fun i => byteAtOrZero data (16 * j + i.val)
 
 /-- GCTR of SP 800-38D §6.5, Algorithm 3.
 

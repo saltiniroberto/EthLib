@@ -374,17 +374,15 @@ theorem grossScan_append (v high : ℕ) {x m y : ForkedBeaconState preset}
 
 /-- The rounding slack of a key with any C-side credit, once for each key.
 
-The credits are the gross credits of its block steps, and an applied deposit.
-
-A proposer reward, a whistleblower reward and a sync reward are block credits.
-
-Consolidation credits count separately, with a band for each queue entry.
-
-The credit budget includes one upward rounding band per credited key. -/
+Consolidation credits count separately, with a band for each queue entry. -/
 def bandC {x y : ForkedBeaconState preset} (tail : Run config checks x y)
     (high v : ℕ) : ℕ :=
+  -- The credits are the gross credits of its block steps, and an applied deposit.
+  --
+  -- A proposer reward, a whistleblower reward and a sync reward are block credits.
   if 0 < Internal.grossScan v high tail +
       (Internal.creditScan (fun _ => false) (fun s => decide (s = .deposits)) v high tail) then
+    -- The credit budget includes one upward rounding band per credited key.
     preset.upwardBand else 0
 
 /-- A sum over the members of a list that pass one of two apart tests is the two sums. -/
@@ -547,21 +545,20 @@ theorem inducedR_of_not_withdrawn (t : PinTerms preset) {x y : ForkedBeaconState
         t.leakAt (t.ebUp i) i) := by
   simp [Internal.inducedR, kept]
 
-/-- The flows that can raise a key's balance on C above R's base, besides its epoch rewards.
-
-They are its credits on C's branch and its sync debits on R's branch and on the shared segment.
-
-They also include the initial penalty of a slashing on R's branch.
-
-The credits `cred` count the key's deposits by default.
-
-For a previous-only key, the caller excludes deposits. -/
+/-- The flows that can raise a key's balance on C above R's base, besides its epoch rewards. -/
 def flowCredit (t : PinTerms preset) {x y : ForkedBeaconState preset}
     (tailC : Run config checks x y) (high : ℕ)
     (eventsC events eventsF : List (BalanceEvent preset)) (i : ℕ)
+    -- The credits `cred` count the key's deposits by default.
+    --
+    -- For a previous-only key, the caller excludes deposits.
     (cred : ℕ := Internal.credC tailC high i) : ℕ :=
+  -- The flows are its credits on C's branch.
+  --
+  -- They include its sync debits on R's branch and on the shared segment.
   cred + Internal.whistC tailC high i + Internal.syncCr eventsC i + Internal.syncD events i +
     Internal.syncD eventsF i +
+    -- They also include the initial penalty of a slashing on R's branch.
     Internal.slashW t i
 
 /-- The gain of a key's flows over the window, at eleven tenths in whole increments.
@@ -1837,7 +1834,7 @@ theorem credited_piece {g : ForkedBeaconState preset}
         · rcases hK i (by split at pos <;> omega) with member | ⟨altair', w, hv, mem⟩
           · exact .inl (Finset.mem_union_right _ member)
           · have committee := (Run.snoc pre (Step.block engine signed due ok)
-                ).currentSyncCommittee_eq_of_same_period early same altair' altair
+                ).currentSyncCommittee_eq_of_same_period same altair' altair
             exact .inr ⟨w, hv, by rw [← committee]; exact mem⟩
         · rcases hB i prior with member | ⟨w, found, mem⟩
           · exact .inl (Finset.mem_union_left _ member)
@@ -1865,7 +1862,7 @@ theorem credited_piece {g : ForkedBeaconState preset}
                 (run_justified_separated (shared.append pre) genesis).1.balancesMatch
             obtain ⟨w, hv, mem⟩ := sync_debit_seat (i := i) altair' synced matchedT (by omega)
             have committee := (Run.snoc pre (Step.block engine signed due ok)
-                ).currentSyncCommittee_eq_of_same_period early same altair' altair
+                ).currentSyncCommittee_eq_of_same_period same altair' altair
             refine ⟨w, hv, ?_⟩
             rw [← committee]
             exact mem
@@ -2208,13 +2205,7 @@ open DirectSafety.Apriori DirectSafety.Apriori.Internal in
 
 The keys of C's run from the finalized block are counted in its committees.
 
-The keys of R's run from the split hold a seat of its committees.
-
-Its first two committees are the current and next ones at the split, which C's run holds too.
-
-So each key counts once, and the later committees of R's run count after C's.
-
-The next committee at the start of a run is the current one at its end, if it crosses a period. -/
+The keys of R's run from the split hold a seat of its committees. -/
 theorem seat_union_card (h : Setting config checks g split fin pulled anc counted V)
     (fromFin : Run config checks ⟨fork, fin⟩ ⟨fork, split⟩)
     (tail : Run config checks ⟨fork, split⟩ ⟨fork, pulled⟩)
@@ -2237,6 +2228,13 @@ theorem seat_union_card (h : Setting config checks g split fin pulled anc counte
         (getCurrentEpoch fin).toNat / max 1 preset.EPOCHS_PER_SYNC_COMMITTEE_PERIOD.toNat + 1 +
       ((getCurrentEpoch pulled).toNat + 2 - anc.finalizedCheckpoint.epoch.toNat) /
         max 1 preset.EPOCHS_PER_SYNC_COMMITTEE_PERIOD.toNat) := by
+  -- The first two committees of R's run are the current and next ones at the split.
+  --
+  -- C's run holds them too.
+  --
+  -- So each key counts once, and the later committees of R's run count after C's.
+  --
+  -- The next committee at the start of a run is the current one at its end, if it crosses a period.
   classical
   obtain ⟨toFin⟩ := h.toFin
   have apart := h.parameters.lookahead
@@ -2318,39 +2316,31 @@ theorem seat_union_card (h : Setting config checks g split fin pulled anc counte
         preset.SYNC_COMMITTEE_SIZE.toNat := fun _ _ => Vector.length_toList
   -- R's first two committees are the current and next ones at the split
   have firstR : LsR 0 = Lcur := by
-    obtain ⟨z, r1, r2, alt, -, per, hL⟩ := familyR 0 (Nat.zero_le _)
-    have earlyZ : z.fork < .glamsterdam :=
-      Nat.lt_of_le_of_lt (fork_le_of_chainSteps r2.chainSteps) h.early
+    obtain ⟨z, r1, -, alt, -, per, hL⟩ := familyR 0 (Nat.zero_le _)
     rw [hL, ← hLcur]
-    exact r1.currentSyncCommittee_eq_of_same_period earlyZ (by rw [hP]; simpa using per) alt
+    exact r1.currentSyncCommittee_eq_of_same_period (by rw [hP]; simpa using per) alt
       altairF
   have secondR : 1 ≤ nR → LsR 1 = Lnext := fun one => by
-    obtain ⟨z, r1, r2, alt, -, per, hL⟩ := familyR 1 one
-    have earlyZ : z.fork < .glamsterdam :=
-      Nat.lt_of_le_of_lt (fork_le_of_chainSteps r2.chainSteps) h.early
+    obtain ⟨z, r1, -, alt, -, per, hL⟩ := familyR 1 one
     rw [hL, ← hLnext]
-    exact r1.currentSyncCommittee_eq_nextSyncCommittee_of_next_period earlyZ
+    exact r1.currentSyncCommittee_eq_nextSyncCommittee_of_next_period
       h.facts.syncPeriod (by rw [hP]; simpa using per) alt altairF
   -- C's committees hold them too
   have firstC : ∃ j ≤ nC, LsC j = Lcur := by
     refine ⟨(getCurrentEpoch split).toNat / P - (getCurrentEpoch fin).toNat / P, by omega, ?_⟩
     obtain ⟨z, r1, r2, alt, cut, per, hL⟩ := familyC
       ((getCurrentEpoch split).toNat / P - (getCurrentEpoch fin).toNat / P) (by omega)
-    have earlyZ : z.fork < .glamsterdam :=
-      Nat.lt_of_le_of_lt (fork_le_of_chainSteps r2.chainSteps) h.early
     rw [hL, ← hLcur]
     rcases Run.prefix_total r1 r2 fromFin tailC cut rfl with ⟨r, -⟩ | ⟨r, -⟩
-    · exact (r.currentSyncCommittee_eq_of_same_period h.early
+    · exact (r.currentSyncCommittee_eq_of_same_period
         (by rw [hP]; simp only; omega) altairF alt).symm
-    · exact r.currentSyncCommittee_eq_of_same_period earlyZ
+    · exact r.currentSyncCommittee_eq_of_same_period
         (by rw [hP]; simp only; omega) alt altairF
   have secondC : 1 ≤ nR → ∃ j ≤ nC, LsC j = Lnext := fun one => by
     refine ⟨(getCurrentEpoch split).toNat / P - (getCurrentEpoch fin).toNat / P + 1,
       by omega, ?_⟩
     obtain ⟨z, r1, r2, alt, cut, per, hL⟩ := familyC
       ((getCurrentEpoch split).toNat / P - (getCurrentEpoch fin).toNat / P + 1) (by omega)
-    have earlyZ : z.fork < .glamsterdam :=
-      Nat.lt_of_le_of_lt (fork_le_of_chainSteps r2.chainSteps) h.early
     rw [hL, ← hLnext]
     rcases Run.prefix_total r1 r2 fromFin tailC cut rfl with ⟨r, -⟩ | ⟨r, -⟩
     · exfalso
@@ -2358,7 +2348,7 @@ theorem seat_union_card (h : Setting config checks g split fin pulled anc counte
       simp only at order
       have := Nat.div_le_div_right (c := P) order
       omega
-    · exact r.currentSyncCommittee_eq_nextSyncCommittee_of_next_period earlyZ
+    · exact r.currentSyncCommittee_eq_nextSyncCommittee_of_next_period
         h.facts.syncPeriod (by rw [hP]; simp only; omega) alt altairF
   -- the positions that hold a key of the committees of each run
   have distinctR : PubkeysDistinct pulled :=
@@ -2445,26 +2435,25 @@ theorem seat_union_card (h : Setting config checks g split fin pulled anc counte
 
 /-- The keys that a run from the split credits or debits through a sync seat.
 
-They are at most its proposers, its seat holders and its deposit recipients.
-
-A key counts if a block step of the run nets it a rise, or an epoch pass applies a deposit to it.
-
-A block step has one proposer, and an epoch has at most one block for each slot.
-
-The seat holders are those of one sync committee for each period that the run touches.
-
-An epoch pass applies at most `MAX_PENDING_DEPOSITS_PER_EPOCH` deposits.
-
-A key that a sync aggregate debits holds a seat of the committee of its period. -/
+They are at most its proposers, its seat holders and its deposit recipients. -/
 private theorem banded_keys_le (h : Setting config checks g split fin pulled anc counted V)
     {x : BeaconState preset fork} (tail : Run config checks ⟨fork, split⟩ ⟨fork, x⟩) (high : ℕ)
     {events : List (BalanceEvent preset)} (replayed : tail.balanceEvents high = .ok events)
+    -- A key counts if a block step of the run nets it a rise.
+    --
+    -- It also counts if an epoch pass applies a deposit to it.
     (keys : Finset ℕ) (banded : ∀ i ∈ keys, 0 < Internal.grossScan i high tail +
       (Internal.creditScan (fun _ => false) (fun s => decide (s = .deposits)) i high tail) +
         (events.map (Internal.syncDebit i)).sum) :
     keys.card ≤
+      -- A block step has one proposer, and an epoch has at most one block for each slot.
+      --
+      -- An epoch pass applies at most `MAX_PENDING_DEPOSITS_PER_EPOCH` deposits.
       ((getCurrentEpoch x).toNat - (getCurrentEpoch split).toNat + 1) *
           (preset.SLOTS_PER_EPOCH.toNat + preset.MAX_PENDING_DEPOSITS_PER_EPOCH.toNat) +
+        -- The seat holders are those of one sync committee for each period that the run touches.
+        --
+        -- A key that a sync aggregate debits holds a seat of the committee of its period.
         preset.SYNC_COMMITTEE_SIZE.toNat *
           ((getCurrentEpoch x).toNat / max 1 preset.EPOCHS_PER_SYNC_COMMITTEE_PERIOD.toNat -
             (getCurrentEpoch split).toNat / max 1 preset.EPOCHS_PER_SYNC_COMMITTEE_PERIOD.toNat +

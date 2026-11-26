@@ -15,12 +15,6 @@ An assigned activation or exit epoch stays exactly the same.
 
 The registry also never shrinks.
 
-Each chain step preserves assigned epochs, and composition gives the same result for a run.
-
-The epoch step is read through the shared epoch schedule.
-
-Only registry updates, pending deposits and effective-balance updates change the validators.
-
 Block operations leave a validator that they append with no activation or exit epoch.
 -/
 
@@ -33,11 +27,6 @@ open Base Uint64 Serialization.Ssz Cryptography.Bls
 variable {preset : Preset} {fork : Base.Fork} {config : Config} {checks : SignatureChecks}
   {engine : ExecutionEngine preset fork}
   {state after : BeaconState preset fork}
-
-/-- A position below `2^64` is its own index of 64 bits. -/
-private theorem toNat_toUInt64_of_lt_pow {position : Nat} (small : position < 2 ^ 64) :
-    position.toUInt64.toNat = position := by
-  rw [Nat.toUInt64_eq, UInt64.toNat_ofNat_of_lt' small]
 
 /-- One validator, later in its life.
 
@@ -658,6 +647,20 @@ theorem registryLifecycle_processConsolidationRequest {electra : .pectra ≤ for
   · exact registryLifecycle_switchToCompoundingValidator switched
   · exact registryLifecycle_queueConsolidation accepted.sourceAt accepted.sourceStays queued
 
+/-- From Gloas, successful parent payload processing preserves each existing validator's index.
+
+It also preserves any assigned activation and exit epochs of each existing validator.
+
+Only withdrawal and consolidation requests can change validator records. -/
+theorem registryLifecycle_processParentExecutionPayload {gloas : .glamsterdam ≤ fork}
+    {body : BeaconBlockBody preset fork}
+    (computed : processParentExecutionPayload config checks state gloas body = .ok after) :
+    RegistryLifecycle state after :=
+  processParentExecutionPayload_step_of RegistryLifecycle .refl (fun one two => one.trans two)
+    (fun _ same => .of_data (congrArg (·.data) same))
+    (fun ok => registryLifecycle_processWithdrawalRequest ok)
+    (fun ok => registryLifecycle_processConsolidationRequest ok) computed
+
 theorem registryLifecycle_processExecutionRequests {body : BeaconBlockBody preset fork}
     {electra : .pectra ≤ fork ∧ fork < .glamsterdam}
     (computed : processExecutionRequests config state body electra = .ok after) :
@@ -746,6 +749,27 @@ theorem registryLifecycle_processBlsToExecutionChange {signed : SignedBLSToExecu
 
 /-! ## Blocks -/
 
+/-- The operations of a block keep the lifecycle of the registry.
+
+They are its slashings, attestations, deposits, exits, credential changes and requests. -/
+theorem registryLifecycle_processOperations {body : BeaconBlockBody preset fork}
+    {parentSlot : Slot}
+    (computed : processOperations config checks state body parentSlot = .ok after) :
+    RegistryLifecycle state after := by
+  obtain ⟨_, _, _, proposersOk, slashingsOk, attestedOk, rest⟩ :=
+    processOperations_folds_of RegistryLifecycle .refl (fun one two => one.trans two)
+      (fun ok => registryLifecycle_processDeposit ok)
+      (fun ok => registryLifecycle_processVoluntaryExit ok)
+      (fun ok => registryLifecycle_processBlsToExecutionChange ok)
+      (fun ok => registryLifecycle_processExecutionRequests ok)
+      (fun ok => by rw [processPayloadAttestation_eq ok]; exact .refl _) computed
+  exact (RegistryLifecycle.foldlM (fun _ _ _ ok => registryLifecycle_processProposerSlashing ok)
+      proposersOk).trans <|
+    (RegistryLifecycle.foldlM (fun _ _ _ ok => registryLifecycle_processAttesterSlashing ok)
+      slashingsOk).trans <|
+    (RegistryLifecycle.foldlM (fun _ _ _ ok => registryLifecycle_processAttestation ok)
+      attestedOk).trans rest
+
 theorem registryLifecycle_processBlock {block : BeaconBlock preset fork}
     (computed : processBlock config checks engine state block = .ok after) :
     RegistryLifecycle state after := by
@@ -753,33 +777,17 @@ theorem registryLifecycle_processBlock {block : BeaconBlock preset fork}
   -- From Gloas the payload of the parent runs before the header and applies its requests.
   have head : RegistryLifecycle state input :=
     OperationsInput.step_of RegistryLifecycle .refl (fun one two => one.trans two)
-      (fun _ ok => processParentExecutionPayload_step_of RegistryLifecycle .refl
-        (fun one two => one.trans two) (fun _ same => .of_data (congrArg (·.data) same))
-        (fun ok => registryLifecycle_processWithdrawalRequest ok)
-        (fun ok => registryLifecycle_processConsolidationRequest ok) ok)
+      (fun _ ok => registryLifecycle_processParentExecutionPayload ok)
       registryLifecycle_processBlockHeader
       (fun _ ok => .of_data (congrArg (·.data) (processBlockExecution_validators ok)))
       registryLifecycle_processRandao (fun _ ok => registryLifecycle_processEth1Data ok) started
-  obtain ⟨_, _, _, proposersOk, slashingsOk, attestedOk, rest⟩ :=
-    processOperations_folds_of RegistryLifecycle .refl (fun one two => one.trans two)
-      (fun ok => registryLifecycle_processDeposit ok)
-      (fun ok => registryLifecycle_processVoluntaryExit ok)
-      (fun ok => registryLifecycle_processBlsToExecutionChange ok)
-      (fun ok => registryLifecycle_processExecutionRequests ok)
-      (fun ok => by rw [processPayloadAttestation_eq ok]; exact .refl _) operated
   have tail : RegistryLifecycle last after := by
     split at synced
     · obtain ⟨_, rfl⟩ := processSyncAggregate_eq synced
       exact .of_data rfl
     · cases synced
       exact .refl _
-  exact head.trans <|
-    (RegistryLifecycle.foldlM (fun _ _ _ ok => registryLifecycle_processProposerSlashing ok)
-      proposersOk).trans <|
-    (RegistryLifecycle.foldlM (fun _ _ _ ok => registryLifecycle_processAttesterSlashing ok)
-      slashingsOk).trans <|
-    (RegistryLifecycle.foldlM (fun _ _ _ ok => registryLifecycle_processAttestation ok)
-      attestedOk).trans (rest.trans tail)
+  exact head.trans ((registryLifecycle_processOperations operated).trans tail)
 
 /-! ## The steps of an epoch -/
 
@@ -858,7 +866,7 @@ theorem preActivation_waiting {f : Fork} {s : BeaconState preset f} (early : f <
     (Nat.le_trans (s.validators.bound early)
       (Nat.le_of_lt preset.VALIDATOR_REGISTRY_LIMIT.toNat_lt))
   refine ⟨validator, ?_, by simpa using waiting⟩
-  rw [toNat_toUInt64_of_lt_pow small]
+  rw [Uint64.toNat_toUInt64 small]
   exact read
 
 /-- The activation queue holds each index at most once, while the registry is below `2^64`. -/
@@ -884,7 +892,7 @@ theorem activationQueue_nodup (small : state.validators.data.size < 2 ^ 64) :
     intro equal
     dsimp only at equal lt
     have equalNat := congrArg UInt64.toNat equal
-    rw [toNat_toUInt64_of_lt_pow (by omega), toNat_toUInt64_of_lt_pow (by omega)] at equalNat
+    rw [Uint64.toNat_toUInt64 (by omega), Uint64.toNat_toUInt64 (by omega)] at equalNat
     omega
   have unique : (entries.map (·.2)).Nodup := List.pairwise_map.mpr distinct
   exact ((List.mergeSort_perm entries _).map (·.2)).nodup_iff.mpr unique
@@ -1013,7 +1021,7 @@ theorem registryLifecycle_processRegistryUpdates
   refine ⟨validator, ?_, activationEpoch_of_isEligibleForActivation eligible⟩
   have inside := (Array.getElem?_eq_some_iff.mp found).1
   have exact : index.toNat = position := by
-    rw [← equal, toNat_toUInt64_of_lt_pow (by omega)]
+    rw [← equal, Uint64.toNat_toUInt64 (by omega)]
   simp [getValidator, exact, found]
 
 /-- An update of effective balances changes only the effective balances. -/
@@ -1058,7 +1066,7 @@ theorem EpochStage.Edge.registryLifecycle {k : EpochStage}
   all_goals exact .of_data (congrArg (·.data) (edge.validators_eq ⟨nofun, nofun, nofun⟩))
 
 /-- The epoch step keeps the lifecycle, stage by stage of the epoch schedule. -/
-private theorem registryLifecycle_processEpoch
+theorem registryLifecycle_processEpoch
     (computed : processEpoch config checks state = .ok after) : RegistryLifecycle state after := by
   apply (processEpoch_trace computed).transport RegistryLifecycle .refl (fun a b => a.trans b)
   intro k _ a b ok
@@ -1132,7 +1140,7 @@ theorem registryLifecycle_upgradeNext {pre : ForkedBeaconState preset}
   · obtain ⟨_, upgraded, rfl⟩ := computed
     exact .of_data (upgradeToGloas_spec upgraded).1
   · obtain ⟨_, upgraded, rfl⟩ := computed
-    obtain ⟨-, rfl⟩ := upgradeToHeze_ok_iff.mp upgraded
+    obtain rfl := upgradeToHeze_ok_iff.mp upgraded
     exact .of_data (upgradeHezeFields_lists _).1
 
 /-- Every step of a chain keeps the lifecycle of the validators. -/
@@ -1151,6 +1159,9 @@ theorem RegistryLifecycle.chainStep {first last : ForkedBeaconState preset}
 /-- A run preserves the assigned epochs of every existing registry entry. -/
 theorem Run.registryLifecycle {first last : ForkedBeaconState preset}
     (run : Run config checks first last) : RegistryLifecycle first.state last.state := by
+  -- Each chain step preserves assigned epochs.
+  --
+  -- Composition gives the same result for a run.
   induction run with
   | nil => exact .refl _
   | snoc pre step ih => exact ih.trans (RegistryLifecycle.chainStep step.chainStep)

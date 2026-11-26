@@ -1,6 +1,7 @@
 module
 
 public import EthLib.Base.Except
+public import EthLib.Base.List
 public import EthLib.Serialization.Der
 public import EthLib.Networking.Libp2p.PeerId
 public import EthLib.Cryptography.Hash.Sha256
@@ -103,11 +104,6 @@ def TlsCertError.code : TlsCertError → UInt32
   | .selfSignature => 11
   | .hostSignature => 12
   | .peerId => 13
-
-/-- The first value of a list that occurs again later in it, if any. -/
-def firstRepeated : List (List UInt8) → Option (List UInt8)
-  | [] => none
-  | oid :: rest => if oid ∈ rest then some oid else firstRepeated rest
 
 /-- Lift a DER reader's error to the certificate boundary. -/
 def der {α : Type} (value : Except Der.Error α) : Except TlsCertError α :=
@@ -287,8 +283,9 @@ def readTail (version : Nat) (tail : List Der.Value) :
       -- §4.2: a certificate MUST NOT include more than one instance of a particular extension.
       --
       -- When the check fails, some OID repeats, so the error names a real OID.
-      ensure ((extensions.map (·.oid)).Nodup)
-        (.duplicateExtension ((firstRepeated (extensions.map (·.oid.data.toList))).getD []))
+      match Base.firstRepeated (extensions.map (·.oid.data.toList)) with
+      | some oid => throw (.duplicateExtension oid)
+      | none => pure ()
       pure extensions
     -- Any other value after the public key does not belong to a TBSCertificate.
     | _ => throw .certificate
@@ -379,7 +376,7 @@ def p256Oid : Oid :=
   -- X.690 §8.19: 0x2a for 1.2, 840 as 86 48, 10045 as ce 3d, then 3, 1 and 7.
   ⟨#[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07]⟩
 
-/-- Decode an uncompressed P-256 SubjectPublicKeyInfo (RFC 5480 §§2.1.1, 2.2). -/
+/-- Decode an uncompressed P-256 SubjectPublicKeyInfo (RFC 5480 §§2.1.1, 2.1.1.1, 2.2). -/
 def readP256 (spki : ByteArray) : Except TlsCertError EthLib.Cryptography.Secp256r1.Point := do
   -- One SubjectPublicKeyInfo, with no byte after it.
   let sequence ← der (Der.exact 0x30 spki)
@@ -398,7 +395,7 @@ def readP256 (spki : ByteArray) : Except TlsCertError EthLib.Cryptography.Secp25
     -- §2.2: the uncompressed form, 0x04, then the point on the curve, by SEC 1 v2 §2.3.4.
     --
     -- §2.2 lets an implementation support the compressed form; EthLib rejects it.
-    match EthLib.Cryptography.Secp256r1.decodeUncompressed bytes.data.toList with
+    match EthLib.Cryptography.Secp256r1.Point.decodeUncompressed bytes with
     | some point => return point
     | none => throw .publicKey
   | _ => throw .publicKey
@@ -410,7 +407,7 @@ def verifyP256 (spki message signature : ByteArray) : Bool :=
   -- ECDSA verification of `(r, s)` over the SHA-256 hash of the message, read big-endian.
   | .ok point, some (r, s) =>
     EthLib.Cryptography.Secp256r1.verify point
-      (EthLib.Base.bytesToNat (EthLib.Cryptography.Hash.Sha256.hash32 message).toList) r s
+      (EthLib.Base.ByteOrder.ofBE (EthLib.Cryptography.Hash.Sha256.hash32 message).toList) r s
   -- A malformed key or signature verifies nothing.
   | _, _ => false
 

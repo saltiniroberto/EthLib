@@ -6,23 +6,7 @@ public import EthLib.Consensus.Proofs.Transition.Totality.Bound
 /-!
 # Proofs: a genesis state is within its budget
 
-A candidate genesis state starts from an empty state, applies each deposit, then activates.
-
-Each deposit adds at most its amount to the balances, and an invalid one adds nothing.
-
-The activation sets each effective balance from its balance, so it is at most that balance.
-
-It is also at most the largest effective balance, which is the cap before Electra.
-
-So the genesis state is within any budget that covers the sum of the amounts of the deposits.
-
-This candidate genesis comes before Altair.
-
-So there are no inactivity scores and no pending deposits.
-
-There are no balances left to consume either, as those start at Electra.
-
-The slashed balances all start at zero.
+A candidate genesis state is within any budget that covers the sum of the amounts of its deposits.
 -/
 
 @[expose] public section
@@ -182,13 +166,7 @@ private theorem min_sub_mod_le (value step cap : UInt64) :
   have kept : value % step ≤ value := by
     rw [UInt64.le_iff_toNat_le, UInt64.toNat_mod]
     exact Nat.mod_le _ _
-  have lowered := UInt64.sub_le kept
-  rw [UInt64.min_def]
-  split
-  · exact ⟨by assumption, lowered⟩
-  · rename_i above
-    rw [UInt64.le_iff_toNat_le] at above lowered ⊢
-    exact ⟨Nat.le_refl _, by rw [UInt64.le_iff_toNat_le]; omega⟩
+  exact ⟨Std.min_le_right, UInt64.le_trans Std.min_le_left (UInt64.sub_le kept)⟩
 
 /-- Before Gloas, the activation at genesis keeps the balances, the slashed balances and the size.
 
@@ -382,12 +360,14 @@ private theorem genesisDeposits_summary (before : fork < .altair)
 /-- An unassigned validator at genesis is funded and not yet eligible for activation. -/
 theorem initializeBeaconStateFromEth1_unassigned_eligibility {eth1BlockHash : Hash32}
     {eth1Timestamp : UInt64} {deposits : Array Deposit} {after : BeaconState preset fork}
-    (computed : initializeBeaconStateFromEth1 config checks eth1BlockHash eth1Timestamp deposits =
-      .ok after) (i : Nat) (v : Validator) (found : after.validators.data[i]? = some v)
+    {before : fork < .altair}
+    (computed :
+      initializeBeaconStateFromEth1 config checks eth1BlockHash eth1Timestamp deposits before =
+        .ok after) (i : Nat) (v : Validator) (found : after.validators.data[i]? = some v)
     (unassigned : v.activationEpoch = FAR_FUTURE_EPOCH) :
     (∃ balance, after.balances.data[i]? = some balance ∧ v.effectiveBalance ≤ balance) ∧
       v.activationEligibilityEpoch = FAR_FUTURE_EPOCH ∧ v.slashed = false := by
-  obtain ⟨before, time, root, deposited, activated, _, depositedOk, activatedOk, stateEq⟩ :=
+  obtain ⟨time, root, deposited, activated, _, depositedOk, activatedOk, stateEq⟩ :=
     initializeBeaconStateFromEth1_ok computed
   rw [stateEq] at found ⊢
   obtain ⟨balances, _, size, effective⟩ :=
@@ -420,11 +400,13 @@ theorem initializeBeaconStateFromEth1_unassigned_eligibility {eth1BlockHash : Ha
 /-- Genesis assigns only the genesis activation epoch; all other keys remain unassigned. -/
 theorem initializeBeaconStateFromEth1_activation_epochs {eth1BlockHash : Hash32}
     {eth1Timestamp : UInt64} {deposits : Array Deposit} {after : BeaconState preset fork}
-    (computed : initializeBeaconStateFromEth1 config checks eth1BlockHash eth1Timestamp deposits =
-      .ok after) :
+    {before : fork < .altair}
+    (computed :
+      initializeBeaconStateFromEth1 config checks eth1BlockHash eth1Timestamp deposits before =
+        .ok after) :
     ∀ v ∈ after.validators.data,
       v.activationEpoch = FAR_FUTURE_EPOCH ∨ v.activationEpoch = GENESIS_EPOCH := by
-  obtain ⟨before, time, root, deposited, activated, _, depositedOk, activatedOk, equal⟩ :=
+  obtain ⟨time, root, deposited, activated, _, depositedOk, activatedOk, equal⟩ :=
     initializeBeaconStateFromEth1_ok computed
   rw [equal]
   exact (foldlM_activateAtGenesis_decomposition (Nat.lt_trans before (by decide))
@@ -435,10 +417,12 @@ theorem initializeBeaconStateFromEth1_activation_epochs {eth1BlockHash : Hash32}
 /-- Every validator starts unslashed after successful genesis initialization. -/
 theorem initializeBeaconStateFromEth1_unslashed {eth1BlockHash : Hash32}
     {eth1Timestamp : UInt64} {deposits : Array Deposit} {after : BeaconState preset fork}
-    (computed : initializeBeaconStateFromEth1 config checks eth1BlockHash eth1Timestamp deposits =
-      .ok after) :
+    {before : fork < .altair}
+    (computed :
+      initializeBeaconStateFromEth1 config checks eth1BlockHash eth1Timestamp deposits before =
+        .ok after) :
     ∀ v ∈ after.validators.data, v.slashed = false := by
-  obtain ⟨before, time, root, deposited, activated, _, depositedOk, activatedOk, equal⟩ :=
+  obtain ⟨time, root, deposited, activated, _, depositedOk, activatedOk, equal⟩ :=
     initializeBeaconStateFromEth1_ok computed
   rw [equal]
   intro v member
@@ -459,16 +443,21 @@ theorem initializeBeaconStateFromEth1_withinBudget {eth1BlockHash : Hash32}
     {eth1Timestamp : UInt64} {deposits : Array Deposit} {after : BeaconState preset fork}
     {budget : Nat} (scoreBound : Nat)
     (funded : (deposits.toList.map (·.data.amount.toNat)).sum ≤ budget)
-    (computed : initializeBeaconStateFromEth1 config checks eth1BlockHash eth1Timestamp deposits =
-      .ok after) :
+    {before : fork < .altair}
+    (computed :
+      initializeBeaconStateFromEth1 config checks eth1BlockHash eth1Timestamp deposits before =
+        .ok after) :
     WithinBudget budget scoreBound after := by
-  have matched := (initializeBeaconStateFromEth1_invariant computed).2.balancesMatch
-  obtain ⟨before, genesisTime, bodyRoot, deposited, activated, root, depositedOk, activatedOk,
+  have matched := (initializeBeaconStateFromEth1_invariant computed).balancesMatch
+  -- A candidate genesis starts from an empty state, applies each deposit, then activates.
+  obtain ⟨genesisTime, bodyRoot, deposited, activated, root, depositedOk, activatedOk,
     rfl⟩ := initializeBeaconStateFromEth1_ok computed
   clear computed
   have notGloas : fork < .glamsterdam := Nat.lt_trans before (by decide)
   have notElectra := not_pectra_of_lt_altair before
   -- The deposits keep one balance for each validator and the slashed balances.
+  --
+  -- Each deposit adds at most its amount to the balances, and an invalid one adds nothing.
   obtain ⟨depositedMatch, depositedSlashings, depositedSum, _⟩ :=
     genesisDeposits_summary before genesisTime eth1BlockHash deposits bodyRoot _ depositedOk
   have amounts : (deposits.toList.zipIdx.map fun entry : Deposit × Nat =>
@@ -477,6 +466,8 @@ theorem initializeBeaconStateFromEth1_withinBudget {eth1BlockHash : Hash32}
     rw [List.map_map]
     rfl
   -- The activation keeps the balances, and sets each effective balance from its balance.
+  --
+  -- So each effective balance is at most its balance, and at most the largest effective balance.
   obtain ⟨balances, slashings, size, effective⟩ := foldlM_activateAtGenesis notGloas activatedOk
   have bounded : ∀ i (inside : i < activated.validators.data.size) balance,
       activated.balances.data[i]? = some balance →
@@ -489,9 +480,13 @@ theorem initializeBeaconStateFromEth1_withinBudget {eth1BlockHash : Hash32}
     simp only [Option.map_some, Option.some.injEq] at this
     rw [this]
     exact min_sub_mod_le _ _ _
+  -- This candidate genesis comes before Altair, so there are no inactivity scores.
+  --
+  -- It comes before Electra, so there are no pending deposits and no balances left to consume.
   refine ⟨activated.validators.bound notGloas, matched, ?_, ?_, ?_,
     fun altair => absurd (Nat.lt_of_lt_of_le before altair) (Nat.lt_irrefl _),
     fun electra => absurd electra notElectra⟩
+  -- The largest effective balance is the cap before Electra.
   · intro validator member
     obtain ⟨i, inside, rfl⟩ := Array.mem_iff_getElem.mp member
     change i < activated.validators.data.size at inside
@@ -517,6 +512,7 @@ theorem initializeBeaconStateFromEth1_withinBudget {eth1BlockHash : Hash32}
       rw [balances]
     rw [amounts] at depositedSum
     omega
+  -- The slashed balances all start at zero.
   · change slashedBalanceSum activated ≤ budget
     unfold slashedBalanceSum
     rw [slashings, depositedSlashings]

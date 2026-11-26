@@ -9,25 +9,9 @@ import EthLib.Consensus.Proofs.Transition.StateTransition
 /-!
 # Proofs: the weight of the flags within an epoch
 
-From Altair, a block pays its proposer for the attestations it includes.
+From Altair, the weight of the flags bounds what a block pays its proposer for attestations.
 
-That reward is at most the rise of the weight of the flags, over 448.
-
-Within an epoch the base reward per increment stays.
-
-So these rises add up to at most the weight at its end.
-
-That weight sums over the validators with a flag set, in the previous and the current epoch.
-
-The base reward per increment shrinks as the total active balance grows.
-
-So the weight needs a bound by the active balances, not by the effective balances of the registry.
-
-It holds when each validator with a flag set in an epoch is active at that epoch.
-
-The active balance of the previous epoch still needs its own bound by the run.
-
-An empty slot that does not end an epoch keeps the flags, the registry and the active balance.
+This module bounds that weight by the active balances of the two recent epochs.
 -/
 
 @[expose] public section
@@ -45,16 +29,29 @@ def activeBalanceAt (state : BeaconState preset fork) (epoch : Epoch) : Nat :=
 
 /-- The weight of the flags is within the active balances of the two recent epochs.
 
-Each epoch counts 54 times the base reward of one increment.
-
-It counts it once per whole increment of the active balance at that epoch.
-
-Both epochs read the effective balances of the state, not those at that epoch.
-
-The base reward is that of one increment at the total active balance of the state.
-
-It holds trivially before Altair, and when the total active balance cannot be computed. -/
+It always holds before Altair, and when the total active balance cannot be computed. -/
 def FlagsWithinActive (state : BeaconState preset fork) : Prop :=
+  -- From Altair, a block pays its proposer for the attestations it includes.
+  --
+  -- That reward is at most the rise of this weight, over 448.
+  --
+  -- Within an epoch the base reward per increment stays.
+  --
+  -- So these rises add up to at most the weight at the end of the epoch.
+  --
+  -- That base reward shrinks as the total active balance grows.
+  --
+  -- So the weight needs a bound by the active balances.
+  --
+  -- A bound by the effective balances of the registry is not enough.
+  --
+  -- The active balance of the previous epoch still needs its own bound by the run.
+  --
+  -- The base reward is that of one increment at the total active balance of the state.
+  --
+  -- Each epoch counts 54 times it, once per whole increment of its active balance.
+  --
+  -- Both epochs read the effective balances of the state, not those at that epoch.
   flagRewardWeight preset (blockPerIncrement preset state) state ≤
     (activeBalanceAt state (getPreviousEpoch state) / preset.EFFECTIVE_BALANCE_INCREMENT.toNat +
       activeBalanceAt state (getCurrentEpoch state) / preset.EFFECTIVE_BALANCE_INCREMENT.toNat) *
@@ -150,21 +147,14 @@ private theorem sum_range_getElem? (g : Validator → Nat) :
       List.getElem?_cons_zero, List.getElem?_cons_succ, Option.map_some, Option.getD_some]
     rw [sum_range_getElem? g t]
 
-/-- The sum of the effective balances of the validators that pass a test, as a sum of all. -/
-private theorem sum_filter_effective (p : Validator → Bool) :
-    ∀ l : List Validator, ((l.filter p).map (·.effectiveBalance.toNat)).sum =
-      (l.map fun v => if p v then v.effectiveBalance.toNat else 0).sum
-  | [] => rfl
-  | x :: t => by
-    rw [List.filter_cons]
-    cases h : p x <;> simp [h, sum_filter_effective p t]
-
 /-- The marked sum for the marks of an epoch is the active balance at that epoch. -/
 private theorem sumMarked_active (state : BeaconState preset fork) (epoch : Epoch) :
     sumMarked state.validators.data (state.validators.data.map (isActiveValidator · epoch)) =
       activeBalanceAt state epoch := by
-  rw [sumMarked_eq_sum, activeBalanceAt, sum_filter_effective,
-    ← Array.length_toList]
+  have split := sum_map_ite_eq_sum_filter (isActiveValidator · epoch = true)
+    (·.effectiveBalance.toNat) state.validators.data.toList
+  simp only [Bool.decide_eq_true] at split
+  rw [sumMarked_eq_sum, activeBalanceAt, ← split, ← Array.length_toList]
   rw [← sum_range_getElem? (fun v => if isActiveValidator v epoch = true then
     v.effectiveBalance.toNat else 0) state.validators.data.toList]
   congr 1

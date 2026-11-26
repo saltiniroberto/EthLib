@@ -6,21 +6,15 @@ public import EthLib.Execution.Proofs.Evm.Step
 /-!
 # Proofs: `Evm.Instructions.StackN`
 
-The immediate byte of DUPN and SWAPN encodes exactly the depths from 17 to 235, one byte each.
+This file proves what DUPN, SWAPN and EXCHANGE do, and how their immediate byte decodes.
 
-The immediate byte of EXCHANGE encodes exactly the pairs `n < m` with `1 ≤ n` and `n + m ≤ 30`.
+Each decoder is a bijection from the bytes it accepts onto its depths, inverse to its encoder.
 
-So each decoder is a bijection from the bytes it accepts onto its depths, inverse to its encoder.
+Each of the three instructions fails in this order:
 
-SWAPN and EXCHANGE keep the items of the stack and only reorder them.
-
-DUPN pushes a copy of the item at its depth.
-
-Each of the three instructions fails first when it cannot pay its gas.
-
-It then fails with an invalid parameter when its immediate byte encodes no depth or pair.
-
-Last, it fails when the stack has no item at a depth, or when DUPN pushes onto a full stack.
+- first when it cannot pay its gas;
+- then with an invalid parameter when its immediate byte encodes no depth or pair;
+- last when the stack has no item at a depth, or when DUPN pushes onto a full stack.
 -/
 
 @[expose] public section

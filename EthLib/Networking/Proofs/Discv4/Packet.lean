@@ -3,27 +3,12 @@ module
 public import EthLib.Networking.Discv4.Packet
 public import EthLib.Networking.Proofs.Rlpx.Handshake
 public import EthLib.Serialization.Proofs.Rlp.RoundTrip
+import EthLib.Base.Proofs.CodeInjective
 
 /-!
 # Proofs: the packets of discv4
 
 Each packet reads back from its bytes, with the signer's public key as its sender.
-
-A packet with its full field list reads back with any list items after it, as EIP-8 asks.
-
-For Ping and Pong the full list ends with the sequence number of EIP-868.
-
-Without that number, the items after the first extra item are ignored.
-
-A packet reads only from its own type and its fields, followed by any items.
-
-A Ping or a Pong reads without a sequence number only when no item follows its fields.
-
-A packet whose hash does not match the bytes after it is rejected.
-
-Every packet that the reader accepts has at most 1280 bytes.
-
-Two errors with one code come from one constructor.
 -/
 
 @[expose] public section
@@ -410,8 +395,6 @@ theorem recordSignedBy_iff (sender : Point) (record : Item) :
 /-- Two errors with the same code come from the same constructor. -/
 theorem Discv4Error.code_injective (e₁ e₂ : Discv4Error) (h : e₁.code = e₂.code) :
     e₁.ctorIdx = e₂.ctorIdx := by
-  -- Two distinct constructors have two distinct literal codes, which `decide` separates.
-  cases e₁ <;> cases e₂ <;>
-    first | rfl | (simp only [Discv4Error.code] at h; exact absurd h (by decide))
+  code_injective Discv4Error.code
 
 end EthLib.Networking.Discv4

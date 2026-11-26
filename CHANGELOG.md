@@ -9,6 +9,163 @@ Not yet released.
 
 ### Proof additions
 
+- In Lean, `Base.map_fst_zip_prefix` (`Base/Proofs/List.lean`) states that the first items of a zip are a prefix of the first list, whatever the two lengths.
+  `blockBlobs_sublist` (`Consensus/Proofs/BeaconApi/Blocks.lean`), `ReservedReplay.selected_allocation_round_sum_le` (`Consensus/Proofs/DirectSafety/Apriori/Ownership.lean`), `ledger_processSyncAggregate` (`Consensus/Proofs/Transition/BlockLedger.lean`) and `syncAggregate_floor` (`Consensus/Proofs/Transition/EffectiveFall.lean`) read its `.sublist` in place of their own proofs.
+
+- In Lean, `ancestor_ghost_payloadTree_of_honest_support` (`Consensus/Proofs/Models/ForkChoice/PayloadTree.lean`) is Lemma 2 of the fast confirmation paper ([arXiv 2405.00549v4](https://arxiv.org/abs/2405.00549v4), Appendix A.1) on the tree of payload-status nodes ([#2057](https://github.com/ethereum/EthLib/issues/2057)).
+  Each block has a pending node, used before its payload status is known, and under it an empty and a full node.
+  Take a bound for each block of the chain from just above `a` up to and including `b`.
+  The bound caps the weight of its pending node plus that of any other child of the parent node it builds on.
+  It also caps the weight of its pending node plus that of the other payload status of that parent.
+  That second cap applies only when that status is in the view.
+  Suppose the supporters of each such pending node in a set of validators hold more than half of its bound.
+  The pending node of `b` must also be in the view, since GHOST only visits nodes of the view.
+  Then LMD-GHOST from the pending node of `a` ends at the pending node of `b` or below it, at any payload status.
+
+- In Lean, `E2store.readIndex_eq_ok_iff` in `EthLib.Serialization.Proofs.E2store` says that the data of an e2store index record reads exactly as its first number, its offsets and its count.
+  Each takes 8 little-endian bytes, and an offset is in two's complement, as the SlotIndex document lays out.
+  Era files read their SlotIndex records this way.
+  Era1 files read their BlockIndex record the same way, since the era1 document gives no width or sign.
+  So the reader takes all 8 bytes of each number, and returns the one index that the data writes.
+  No statement changes.
+
+- In Lean, the column builder of PeerDAS ([EIP-7594](https://eips.ethereum.org/EIPS/eip-7594)) succeeds on full rows, and the sidecars it builds from blobs pass the batch check ([#4615](https://github.com/ethereum/EthLib/issues/4615)).
+  `getDataColumnSidecars_exists_ok` (`Consensus/Proofs/DataAvailability/Column.lean`) needs each row to have a cell and a proof per column, and before Gloas as many rows as commitments.
+  `getDataColumnSidecars_exists_ok_of_computed` gives the same for the rows of blobs, under a preset of at most 128 columns, and before Gloas one blob per commitment.
+  `size_computeCellsAndKzgProofs` says that a computed row has the 128 cells and the 128 proofs of an extended blob.
+  `verifyDataColumnSidecarKzgProofs_of_getDataColumnSidecars` assumes a well-formed trusted setup, and needs cells, proofs and commitments from the same blobs, in order.
+  Those commitments are the carried ones before Gloas, and those of the bid from Gloas.
+
+- In Lean, `Cryptography/Sec1.lean` writes the point encoding of SEC 1 v2 once, for every short Weierstrass curve over an odd prime field ([#4695](https://github.com/ethereum/EthLib/pull/4695)).
+  `Sec1.encode` and `Sec1.decode` are the conversions of §2.3.3 and §2.3.4, with the typed error `Sec1.Sec1Error`, and `Sec1.validatePublicKey` is the public key validation of §3.2.2.1.
+  `Sec1.decode_eq_ok_iff` (`Cryptography/Proofs/Sec1.lean`) says that octets decode to a point exactly when they are one of its encodings, so decoding is canonical.
+  `Sec1.decode_encode` is the round trip, and `Sec1.decompress_eq_ok_iff` says that decompression finds the point of the requested parity exactly when one exists.
+  They assume a prime `p` and a square root that obeys `Sec1.IsSqrt`, which `Sec1.isSqrt_sqrt3Mod4` proves for `α^((p + 1) / 4)` when `p = 3 mod 4`.
+  `Sec1.eq_of_decode_eq_ok` says that two octet strings of one length that decode to one point are equal.
+  `Sec1.validatePublicKey_eq_ok_iff` states the checks of validation, and `Sec1.validatePublicKey_eq_ok_iff_nsmul` says that, through a map onto a field, validation accepts exactly the points of the curve other than `O` with `n Q = 0`.
+
+- In Lean, Keccak-256 over a permutation oracle is related to Keccak-256 over a function, and its permutation calls are counted ([#2767](https://github.com/ethereum/EthLib/issues/2767)).
+  `mmap_absorbBlocks`, `mmap_stateBeforeLastPermutation`, `mmap_spongeAbsorb`, `mmap_keccak256LanesWith` and `mmap_keccak256With` (`Cryptography/Proofs/Hash/Keccak/Basic.lean`) say that a monad morphism maps the sponge over `f` to the sponge over its image of `f`.
+  The lemmas `absorbBlocks_pure` to `keccak256With_pure` keep their statements, and now follow from these at the embedding of the identity monad.
+  In `Cryptography/Proofs/Hash/Keccak/QueryBound.lean`, `simulateQ_keccak256LanesWith` and `simulateQ_keccak256With` apply this to answering the oracle's queries with a query implementation.
+  `simulateQ_keccak256LanesWith_of_pure` and `simulateQ_keccak256With_of_pure` say that when a function `g` answers each call, the hash is `pure` of its value over `g`, as in the real world of the random-permutation model.
+  `isQueryBoundP_absorbBlocks`, `isQueryBoundP_stateBeforeLastPermutation`, `isQueryBoundP_spongeAbsorb`, `isQueryBoundP_keccak256LanesWith` and `isQueryBoundP_keccak256With` say that the sponge makes at most `c` selected queries per block of the padded message when each call makes at most `c`.
+
+- In Lean, `SubmitBlockRequest.servable` (`Consensus/RelayApi.lean`) says whether the block scoring rule lets a relay serve a submission ([#2131](https://github.com/ethereum/EthLib/issues/2131)).
+  From Deneb, its bid value must pass the check against the proposer's fee recipient.
+  `SubmitBlockRequest.servable_iff` (`Consensus/Proofs/RelayApi.lean`) states that check in Wei, and `SubmitBlockRequest.servable_of_lt_deneb` says that before Deneb the rule sets no condition.
+
+- In Lean, `RelayApi.verifyBidValue` (`Consensus/RelayApi.lean`) is the check of the Deneb builder specification that the value of a bid is the payment of its builder to the fee recipient ([#2125](https://github.com/ethereum/EthLib/issues/2125)).
+  `verifyBidValue_iff` (`Consensus/Proofs/RelayApi.lean`) says that it passes exactly when the balance change of the fee recipient is the value plus the withdrawals to it, in Wei.
+  In Python, `relay_verify_bid_value` runs it on an SSZ payload.
+
+- In Lean, `accessStorageKey_fst_of_mem_accesses` (`Execution/Proofs/Transactions/AccessListWarm.lean`) says that a slot of the access list of a transaction is warm in every frame that its message reaches ([#4569](https://github.com/ethereum/EthLib/pull/4569)).
+  That holds at any depth and after any call that failed, so SLOAD and SSTORE price it as warm there.
+  `accessAddress_fst_of_mem_accesses` says the same of an address of the access list.
+  `RunReaches.accessesLe` and `RunBurns.accessesLe` (`Execution/Proofs/Evm/Call/AccessesRun.lean`) say that every frame a run reaches, and the frame it ends in, hold every access of its start.
+
+- In Lean, `processMessage_accessesLe` (`Execution/Proofs/Evm/Call/AccessesGrow.lean`) says that every call and creation ends with every access of the substate it is sent with ([#4568](https://github.com/ethereum/EthLib/pull/4568)).
+  That holds whether its frame fails or not.
+  `Substate.AccessesLe` (`Execution/Proofs/Evm/Instructions/Static.lean`) is the relation: one substate holds every accessed address and storage key of another.
+  `accessesLe_processMessage` and `accessesLe_processCreateMessage` state it for one call and one creation.
+  `stepRules_accessesLe` says that each step keeps every accessed address and storage key, so the step rules carry the accesses.
+
+- In Lean, `Node.validRecord_isSome` (`Engine/Proofs/Node/Replay.lean`) says that every valid block of a node reached from a starting block has a record, so its body runs again ([#4557](https://github.com/ethereum/EthLib/pull/4557)).
+  `Node.view_isSome` says that such a node has a chain view, and `Node.Reachable.validRecord_eq` that the record of a valid block stays the same in every later node.
+  `Node.Reachable.chainAt_eq` (`Engine/Proofs/Node/Ancestry.lean`) says that the chain at a valid block stays the same in later nodes.
+  They assume that the last node they read knows no block under the parent hash of its starting block, which would close a cycle of block hashes.
+
+- In Lean, `Node.forkchoiceUpdatedStep_of_newPayloadStep_invalid` (`Engine/Proofs/Node/LatestValid.lean`) says that a later update to a payload answered `INVALID` answers `INVALID` with the same latest valid hash ([#4555](https://github.com/ethereum/EthLib/pull/4555)).
+  That update leaves the node as it was.
+  The node is reached from a starting block, and the payload passed the checks before execution.
+  `Node.Grounded` (`Engine/Proofs/Node/Grounded.lean`) is the invariant behind it, and `Node.grounded_of_start` with `Node.Reachable.grounded` shows that every such node keeps it.
+
+- In Lean, `Run.getBeaconProposerIndex_ok` in `EthLib.Consensus.Proofs.Transition.AssignedProposers` says that, from Fulu, each state that a run reaches from genesis has a proposer for its slot ([#4493](https://github.com/ethereum/EthLib/pull/4493)).
+  That proposer is a validator of the registry.
+  It needs a preset with at least one slot in an epoch.
+  `AssignedProposers.selected`, in the same module, says that a proposer read from a state that holds `AssignedProposers` is an assigned validator of the registry.
+  Before Fulu that proposer is drawn from the active validators.
+
+- In Lean, `DirectSafety.twoRunsForgeAdvantage_le_coCdhAdvantage` (`Consensus/Proofs/DirectSafety/SignedForgery.lean`) bounds a forged header call of two runs against `n` honest keys by `n * q` times a co-CDH solver ([#3433](https://github.com/ethereum/EthLib/issues/3433)).
+  `Security.multiByteForgeAdvantage_le_coCdhAdvantage` (`Cryptography/Proofs/Bls/Security/MultiKeyBytes.lean`) carries the BLS bound against `n` keys to EthLib's bytes.
+  `DirectSafety.exists_wins_of_not_bls_verifySoundOn` shows that a failure of the assumption on the header calls of signed direct safety is a winning call.
+- In Lean, `Xmss.Unforgeability.stronglyUnforgeable` (`Cryptography/Proofs/Xmss/Unforgeability/AdversaryBudget.lean`) bounds an XMSS forgery by `(qH + 318) / 2^127` ([#3373](https://github.com/ethereum/EthLib/issues/3373)).
+  The forger makes at most `qH` calls of `H` and at most `2^32` signing requests, and the requests cost nothing in the bound.
+  `XmssSecurity.Bridge.realGame_le_model` (`Cryptography/Proofs/Xmss/Security/XmssSecurity/Proof/Bridge/Security.lean`) now holds the hops from the real game to the model's game, and `realGame_security` keeps its statement.
+- In Lean, `BeaconApi.dutiesResponse_proposer_error_code_of_run` (`Consensus/Proofs/BeaconApi/DutiesReachable.lean`) classifies the failures of a proposer answer ([#3585](https://github.com/ethereum/EthLib/issues/3585)).
+  From Fulu, at a state that a run from the Phase 0 genesis state built from deposits reaches, such an answer that fails has code 400.
+  It takes the bounds of `dutiesResponse_proposer_error_code` on the slots of the epoch and on the slot of the state.
+  `Run.assignedProposers` (`Consensus/Proofs/Transition/AssignedProposers.lean`) says that along such a run, from Fulu, each entry of the lookahead names a validator with an assigned activation epoch.
+  `BeaconApi.dutiesResponse_proposer_error_code_of_run` reads this invariant.
+  `initializeProposerLookahead_drawn` (`Consensus/Proofs/Proposers.lean`) says that entry `k` of a lookahead drawn from a state is a proposer that the state draws for the epoch that is `k / SLOTS_PER_EPOCH` epochs after the current one.
+  `Internal.AssignedProposers` (`Consensus/Proofs/Transition/ValidatorStep.lean`) becomes `AssignedProposers` (`Consensus/Proofs/Transition/AssignedProposers.lean`), with the same body.
+  Four lemmas about it become public there: `getBeaconProposerIndices_assigned`, `initializeProposerLookahead_assigned`, `AssignedProposers.transfer` and `AssignedProposers.refresh`.
+  `AssignedProposers.transfer` relates states of two forks.
+  `upgradeNext_proposerLookahead` (`Consensus/Proofs/Transition/ProposerLookahead.lean`) and `registryLifecycle_processEpoch` (`Consensus/Proofs/Transition/RegistryLifecycle.lean`) become public.
+  No public statement changes.
+
+- In Lean, `syncCommitteesResponse_error_code_of_keys` (`Consensus/Proofs/BeaconApi/Committees.lean`) gives a condition under which every error of the sync committees answer has code 400 ([#3585](https://github.com/ethereum/EthLib/issues/3585)).
+  From Altair, a validator of the registry holds each key of the current and the next sync committee.
+  Before Altair the state holds no sync committee, and the answer gets code 400.
+  From Altair, an epoch outside the current and the next period of the state gets code 400.
+  For the current or the next period, the lookup of each key names a validator, so the answer has a value.
+  `syncCommitteeOf_ok`, `syncCommitteeOf_error_code`, `epochSyncCommittees_ok_of_keys` and `resolveValidatorId_pubkey_isSome` carry these steps.
+  `syncCommitteesResponse_error_code_of_run` (`Consensus/Proofs/BeaconApi/SyncCommitteesReachable.lean`) applies it to a state of a run from a genesis of deposits.
+  On a state not known to satisfy the hypothesis, such as a decoded checkpoint state, a key that no validator holds still gives code 500.
+
+- In Lean, `getBeaconProposerIndex_congr_of_seed` (`Consensus/Proofs/Accessors.lean`) says that two states of one fork get the same result from `getBeaconProposerIndex`, an error included ([#4245](https://github.com/ethereum/EthLib/issues/4245)).
+  It takes an equal slot and, from Fusaka, equal proposer lookahead vectors.
+  Before Fusaka, it also takes an equal seed of the current epoch with the proposer domain and equal checked active indices of that epoch.
+  Before Fusaka, it also takes an equal effective balance at every position of the registry of the state on the right of its equation.
+  `getBeaconProposerIndex_congr` follows from it, with an unchanged statement.
+  `RunStart.afterBlocks_succ` (`Totality/ChainHolds.lean`) says that one more block adds the step to the supply, effective, load, ceiling and slashed bounds of a run start.
+
+- In Lean, `readP256_eq_ok_iff` in `EthLib.Networking.Proofs.Libp2p.Tls` says that the libp2p TLS reader of a P-256 key accepts exactly a SubjectPublicKeyInfo of 26 fixed octets (RFC 5480 §§2.1.1, 2.1.1.1, 2.2), then octets that the uncompressed decoder accepts, and returns their point ([#4261](https://github.com/ethereum/EthLib/pull/4261)).
+  So it refuses another key type or curve, another parameter form, a long length form, an unused bit and a trailing octet.
+  `size_of_readP256_eq_ok` derives that such a SubjectPublicKeyInfo has 91 octets.
+  The proof reads public lemmas of `EthLib.Serialization.Proofs.Der` on a short value and on the values that a SEQUENCE holds; `Proofs.Der.size_eq_length` is public too.
+  No statement changes.
+
+- In Lean, `Secp256r1.decodeUncompressed_eq_some_iff` in the new module `EthLib.Cryptography.Proofs.Secp256r1.Encoding` says that the uncompressed decoder of SEC 1 v2 §2.3.4 accepts exactly the bytes `04 ‖ x ‖ y` of the affine points `(x, y)` on the curve, and returns that point ([#4260](https://github.com/ethereum/EthLib/pull/4260)).
+  So it refuses the octet `00` of `O`, every prefix other than `04`, every length other than 65 bytes, a coordinate of `p` or more, and a pair off the curve.
+  No statement changes.
+
+- At every fork, the simulated logs that a message starts with change nothing else that it computes ([#3584](https://github.com/ethereum/EthLib/issues/3584)).
+  The new module `EthLib.Execution.Proofs.Evm.Call.SimulatedLogsErase` defines `Evm.prependSimulatedLogs`, `Evm.eraseSimulatedLogs` and `StepResult.prependSimulatedLogs`.
+  `step_prependSimulatedLogs` says that a step from any frame with logs in front of its simulated logs gives the same result with them in front, so no step reads them.
+  `processMessage_prependSimulatedLogs` and `processCreateMessage_prependSimulatedLogs` say that logs put in front of the simulated logs at the start stay in front at the end, and nothing else changes.
+  `processMessage_eraseSimulatedLogs`, `processCreateMessage_eraseSimulatedLogs` and `Transactions.processMessageCall_eraseSimulatedLogs` say that two runs that differ only in their starting simulated logs end alike but for them.
+  No statement changes.
+
+- `Xmss.chainStarts` builds the 58 chain starts with `Vector.flatMap` over the 29 derivations, and `Xmss.Internal.digit` reads a digit with one shift and `% 4` ([#4255](https://github.com/ethereum/EthLib/pull/4255)).
+  The new lemma `Xmss.getElem_cast_flatMap_halves` in `EthLib.Cryptography.Proofs.Xmss.Ots` gives chain `i` as half `i mod 2` of derivation `floor(i / 2)`.
+  The statements of `Xmss.chainStarts_seedPrf` and `XmssSecurity.Bridge.halves_eq` follow the new body of `chainStarts`.
+  Both functions keep their values, and `Xmss.digit_val` keeps its statement.
+
+- `registryLifecycle_processParentExecutionPayload` (`Transition/RegistryLifecycle.lean`) states that, from Gloas, successful processing of the parent payload preserves each existing validator's index and any assigned activation and exit epochs ([#4243](https://github.com/ethereum/EthLib/issues/4243)).
+  `registryLifecycle_processBlock` in the same file, `block_balances` in `Transition/BlockCredits.lean` and the signed-conflict slashing theorem in `DirectSafety/Includable.lean` read it.
+  It replaces two copies of the same proof.
+
+- In Lean, `getPendingAttestingIndices_lt` in `EthLib.Consensus.Proofs.Transition.EpochJustification` says that each attester of a pending attestation is in the registry, at every fork.
+  It was a private Phase 0 lemma of the upgrade to Altair.
+  The totality of the unslashed signers and the upgrade to Altair read it ([#4253](https://github.com/ethereum/EthLib/pull/4253)).
+
+- `registryLifecycle_processOperations` (`Transition/RegistryLifecycle.lean`) says that the operations of a block keep the lifecycle of the registry.
+  `registryLifecycle_processBlock` and the effective-balance fall read it.
+
+- `Run.registryWithinLimit_of_room` (`ForkChoice/BlockRuns.lean`) bounds, at every fork, the registry at the end of a run that starts at the anchor and stays at the anchor's fork.
+  From Gloas, a run that ends within the horizon keeps its registry within the limit, given the anchor's registry room.
+  Before Gloas, the type bounds it.
+  `Execution.quorumDriftWithin` reads it at the counting state.
+  `registryWithinLimit_of_anchorRoom` (`ForkChoice/BlockRuns.lean`) is the arithmetic that it shares with `Store.ForwardReachable.registriesWithinLimit_of_room` and the confirmed-root proof.
+  A registry at an epoch within the horizon fits the anchor's room if it grew by at most one epoch of pending deposits per epoch.
+
+- In Lean, the payload of the parent has a balance ledger from Gloas, and its old validators read at both ends are later.
+  `BlockLedger.ledger_processParentExecutionPayload` changes no balance outside a set of converted validators.
+  That set has no more members than a payload can carry consolidation requests; no balance rises, and only a conversion lowers one.
+  `BlockLedger.lives_processParentExecutionPayload` says that an old validator read at both ends is later at the end, and that a new validator is not activated.
+  `BlockCredits.block_balances` reads them.
+
 - The fresh-slot facts of a change of an account, of new code and of a record of a read are now shared lemmas ([#4235](https://github.com/ethereum/EthLib/issues/4235), second part).
   `TransactionState.freshSlots_modifyState`, `freshSlots_setCode` and `freshSlots_recordAccountRead` in `EthLib.Execution.Proofs.State.FreshSlots` are new public lemmas, taken from private copies in `EthLib.Execution.Proofs.Transactions.StateGasUsed`.
   The new lemma `StateGasMeter.stateGasUsed_absorb_sub` in `EthLib.Execution.Proofs.Evm.Gas.StateGas` gives the net state gas of any merge of a child, and `stateGasUsed_absorb` now follows from it.
@@ -73,21 +230,71 @@ Not yet released.
 
 - At a state where the facts of a chain hold, an attester slashing of one validator by two signatures on a double or surround vote succeeds at its turn in a block within the limits ([#3431](https://github.com/ethereum/EthLib/issues/3431)).
   Otherwise the validator is already slashed there.
-  `DirectSafety.signedConflict_attesterSlashing_accepted_at` (`DirectSafety/Includable.lean`) states it for a key active at a state of a run.
+  A slashing that succeeds leaves the validator slashed, with its key, in the state right after it.
+  `DirectSafety.processAttesterSlashing_single_slashed_or_accepted_at` (`DirectSafety/Includable.lean`) states it for a key whose validator is activated and not yet withdrawable at the epoch of a state of a run.
   The pair of votes is a `DirectSafety.VotePairAt`, and the result is conditional on the inclusion of the slashing and on the success of the steps before it.
-  `slashValidator_ok_of_block` (`Totality/ChainBlock.lean`) states that slashing succeeds at that turn, at the state that `SlashingTurn` (`Transition/Invariants.lean`) describes.
-  `SlashRoom` with `slashValidator_ok_of_room` (`Totality/SlashValidator.lean`) gives a room that suffices for slashing to succeed.
+  The block is at a strictly later slot in the epoch of that state or the next, at the same fork, and the slots up to it advance successfully.
+  In the next epoch, three requirements apply.
+  The block's epoch is at most the first epoch of the chain plus its number of epochs.
+  `SignersAtEnds` holds for the slots up to the block.
+  The signer epoch is the epoch before that state's, or epoch 0 itself when that state is in epoch 0.
+  At the last slot of the epoch of that state, after its roots are cached, the signers of the signer epoch hold at most the current total active balance of the cached state.
+  That balance is the total active balance of the epoch of that state.
+  Before Altair, the signers are the unslashed attesters of the pending attestations of the signer epoch that match the source.
+  From Altair, for each participation flag, the unslashed validators active in the signer epoch that set it hold at most that balance; the bound is per flag, not on their union.
+  The comparison is required only when those reads succeed.
+  No fact of a chain gives that comparison.
+  The chosen validator, if unslashed in that state, has a withdrawable epoch recorded in that state after the block's epoch.
+  `slashValidator_total_of_block` (`Totality/ChainBlock.lean`) states that slashing succeeds at that turn, at the state that `SlashingTurn` (`Transition/Invariants.lean`) describes.
+  `SlashRoom` with `slashValidator_total_of_room` (`Totality/SlashValidator.lean`) gives a room that suffices for slashing to succeed.
   `slashingTurn_kept` there states that the steps from the operations to that turn keep the frame, activity and the proposer.
   `slashingTurn_exits`, `slashingTurn_supply_le` and `slashingTurn_slashed_le` bound the exits, the supply and the slashed balances at that turn.
   `initiateValidatorExit_total_of_electra` states that an exit succeeds from Electra within bounds on the exit queue, the churn and the exit epochs.
+  `run_of_advanceSlotsAcross` (`Transition/Trace.lean`) states that slots that advance a state across forks are a run.
   `slashings_initiateValidatorExit` states that an exit keeps the slashed balances.
   `forkVersions_eq_of_fork` states that two states at one fork, on chains from one genesis, hold the same versions.
   `DirectSafety.mem_keysAt_epoch_of_within` is `DirectSafety.mem_keysAt_epoch` with the registry limit in place of a fork before Gloas; `DirectSafety.mem_keysAt_epoch` keeps its statement.
-  Some earlier private declarations are now public, with unchanged statements: `ExitsBelow`, `initiateValidatorExit_exists_ok`, `activeStep_operationsInput`, `RunBounded.size_le`, and `getBeaconProposerIndex_of_kept`, which moves from `Transition/BlockLedger.lean` to `Transition/BalanceDrift.lean`.
+  Some earlier private declarations are now public, with unchanged statements: `ExitsBelow`, `initiateValidatorExit_total_of_lt_electra`, `activeStep_operationsInput`, `RunBounded.size_le`, and `getBeaconProposerIndex_of_kept`, which moves from `Transition/BlockLedger.lean` to `Transition/BalanceDrift.lean`.
   `upgradeNext_forkVersions` and `forkVersion_of_lt_altair` move from `BeaconApi/Config.lean` and are public in `Transition/ForkVersions.lean`, outside the `BeaconApi` namespace.
   `getBeaconProposerIndex_slashDebit` (`Transition/BalanceDrift.lean`) is new: the exit, the slashed mark, the slashings write and the debit of a slashing keep the proposer that an earlier state reads.
   `DirectSafety.genesisValidatorsRoot_chainSteps` (`DirectSafety/Signatures.lean`) is new: steps of a chain keep the genesis validators root.
   `effectiveBalanceSum_eq_of_effectiveKept` (`Totality/SupplyBlock.lean`) is new: a step that keeps the size of the registry and each effective balance keeps their sum.
+
+- `Store.getAncestor_pending_root` and `Store.isAncestor_of_getAncestor_root` (`ForkChoice/Store.lean`) are new.
+  The first says that a walk from any node to a slot reaches the same root from that node's pending node.
+  The second says that a walk from a pending start to a known block's slot that reaches that block's root gives descent to its pending node.
+
+- `Store.isAncestor_getHeadFrom_of_sibling_bound` (`ForkChoice/PayloadGhost.lean`) shows that, from Gloas, the head walk from a node of the path descends from a viable target node.
+  Below each node from that start to the target, the child toward the target must outweigh every viable rival that is not a payload decision of the previous slot.
+  When any distinct viable rival exists, that child must also have positive weight.
+  `Store.siblingBound_of_majority` gives that bound from a target whose votes exceed half the sum of the stake and the boost.
+  `Store.getHeadFrom_of_visited` shows that, from Gloas, a head walk passing a node ends where the walk from that node ends.
+
+- `Store.isAncestor_getHead_root` (`ForkChoice/Ghost.lean`) shows that the head's ancestry at a pending node reads only the head's root, at every fork.
+  `Store.getCheckpointBlock_walk_root` (`ForkChoice/Store.lean`) shows that a checkpoint read is the root of a walk back to the first slot of the epoch, at every fork.
+  `HonestRegistriesWithinLimit` and `Execution.honestRegistries_of_room` (`ForkChoice/FastConfirmation/HistoricalStatements.lean`) are now public, unchanged: from Gloas, honest registries stay within the limit while the stores' epochs stay bounded.
+
+- `Store.HeadWeightAtMost` (`ForkChoice/HeadTotality.lean`) bounds the stake of every set of validators of a state that are active or known to equivocate: the weights that the weak-head test reads.
+  `CheckpointHeadWeightCeiling` (`ForkChoice/FastConfirmation/HonestHeads.lean`) asks it of every honest justified state up to a time.
+  It is the Gloas head endpoint's stake bound, restricted to the validators that the weak-head test reads.
+  `Store.headWeightAtMost_of_effectiveBalanceSum_le` derives it from a bound on the registry's effective-balance sum.
+  `Execution.honestHeadsExist_or_evidence_of_gated` gives honest heads at every fork, from the pre-Gloas premises before Gloas and the Gloas ones, gated, from Gloas.
+  It takes the active-stake ceiling and the seed bound at every fork.
+
+- `Store.getCheckpointBlock_of_descendant` (`ForkChoice/Store.lean`) shows that an ancestor of a tip reads the tip's checkpoint block, at an epoch whose first slot is at or before the ancestor.
+  It is the converse of `Store.getCheckpointBlock_of_isAncestor`.
+  `Store.isPreviousSlotPayloadDecision_eq_false` (`ForkChoice/Head.lean`) shows that a pending node, or a node of a block not from the previous slot, is no payload decision of the previous slot.
+
+- `Store.isAncestor_getSupportedNode` (`ForkChoice/Head.lean`) shows that a supported node descends from a pending node exactly as the vote's block does, at every fork.
+
+- `Store.weight_add_weight_add_stake_le_stake_withBoost_of_isChild` (`ForkChoice/SiblingCap.lean`) bounds two sibling nodes and a set supporting neither by a window plus one boost, for any tree and view of the store's votes.
+  `Store.weight_add_weight_add_stake_le_stake_withBoost` is now its case for sibling blocks.
+
+- `honestRegistries_of_gated` (`ForkChoice/FastConfirmation/HistoricalStatements.lean`) gives the honest registry bound at every fork from its Gloas form; before Gloas the type of the registry bounds it.
+
+- `Store.FullParentsVerified` (`ForkChoice/PayloadGhost.lean`) says that, from Gloas, each held block that builds on a held full parent finds the parent's payload verified.
+  `Store.Reachable.fullParentsVerified` (`ForkChoice/StoreEntries.lean`) proves it for a reachable store that holds no block at the anchor's parent root.
+  `Store.onBlock_validateParentPayload` (`ForkChoice/Handlers.lean`) shows that a new block the handler accepts passed the check of its parent's payload.
 
 - In Lean, the laws of a four-word Montgomery field are proved once in `Word64.Montgomery`, from the laws of its sum, difference and product that an instance of `Word64.Montgomery.Laws` gives ([#3827](https://github.com/ethereum/EthLib/issues/3827)).
   They are the bridge `toMont` to the shared field on eight limbs with its laws, `toFin_val_eq`, the read-back laws `toFin_zero` to `toFin_ofFin`, and the new `ofFin_toFin`.
@@ -175,8 +382,8 @@ Not yet released.
   `joiningStake` is the stake joining the active set, which `quorumReserve` and `pinTerms` both read, with `quorumReserve`'s value and statement unchanged.
   The pin's drift bound in `PinDriftBound` reads them at other states and totals.
 
-- `ConsolidationQueueRise.Appends` says that the queue of pending consolidations only grows at its end inside a block, and `ConsolidationQueueRise.appendStep_processBlock` proves it for a block from Altair and before Gloas, with the frame and the registry lifecycle.
-  `riseStep_processBlock` now follows from it, and its statement is unchanged.
+- `ConsolidationQueueRise.Appends` says that the queue of pending consolidations only grows at its end inside a block, and `ConsolidationQueueRise.appendStep_processBlock` proves it for a block from Altair, with the frame and the registry lifecycle.
+  `riseStep_processBlock` now follows from it.
   The pin's `block_step` reads it.
 
 - `Execution.justifiedSigned_at` generalizes `Execution.justifiedHonestlySigned` to one receiver and any set of signers.
@@ -229,7 +436,7 @@ Not yet released.
 - `DirectSafety.Apriori.Internal.activeStake_eq_of_same_epoch` says that the effective balances active in an epoch sum the same at two states of one epoch of a run.
   `activeStake_same_epoch` and the pin's proposer-credit bound read it.
 
-- `Run.pendingConsolidation_targets` says that each pending consolidation of a state of a run from genesis, before Gloas, has its target in the registry.
+- `Run.pendingConsolidation_targets` says that each pending consolidation of a state of a run from genesis has its target in the registry.
   A request finds its target by pubkey in the registry, which only grows.
   The pin reads it to exclude a created key that only a consolidation funds.
 
@@ -280,7 +487,9 @@ Not yet released.
 - `Execution.honestHeadsExist_or_evidence_of_gloas` shows that from Gloas an up-to-date honest store has a head ([#2060](https://github.com/ethereum/EthLib/issues/2060)).
   Otherwise two honest stores collide, or direct-safety evidence holds.
   It is the Gloas companion of `Execution.honestHeadsExist_or_evidence`, which keeps its statement.
-  `CheckpointRegistryStakeCeiling` assumes that the effective balances of each honest justified state add up to at most the cap.
+  `CheckpointHeadWeightCeiling` bounds each honest store at each event up to time `last` where the justified-state lookup succeeds.
+  Take any set of validators each active at that state's current epoch or known to that store to equivocate.
+  Their effective balances in that state add up to at most the cap.
   `AnchorRegistryRoom` asks the anchor's registry to leave room for the pending deposits of each epoch up to the horizon.
 
 - The Gloas head endpoint adds these facts.
@@ -306,14 +515,13 @@ Not yet released.
   From Gloas it takes the receiver's check of the payload status that the vote names.
 
 - `Execution.blocks_of_partiallySynchronous_of_anchorSlot` delivers a block at every fork, when from Gloas the anchor block is not after the anchor state ([#2060](https://github.com/ethereum/EthLib/issues/2060)).
-  `Execution.blocks_of_partiallySynchronous` is now its corollary before Gloas, with its statement unchanged.
   It needs partial synchrony, the sender's read of the receiver's finalized checkpoint, and a receiver that admits the delivered blocks.
   Otherwise bounded honest stores collide.
   From Gloas the payload of a full parent reaches the receiver through `Execution.payloadVerified_of_partiallySynchronous`.
 
 - `Store.getHead_exists_of_gloas` shows that from Gloas the head of a store that the handlers build can be computed ([#2060](https://github.com/ethereum/EthLib/issues/2060)).
   It is the Gloas twin of `Store.getHead_exists`.
-  The store must hold its justified state, whose effective balances add up to at most `2 * 10^17` Gwei (`effectiveBalanceSum`).
+  The store must hold its justified state, in which each set of validators active or known to the store to equivocate weighs at most `2 * 10^17` Gwei (`Store.HeadWeightAtMost`).
   `HeldRegistriesWithinLimit` asks each held block state to have its registry within the limit.
   `ActiveEquivocatorsRegistered` asks each equivocator active in a held block's state, at that block's epoch, to have a place in the justified state.
   `Config.HeadWeightsFit` bundles the slot length and the reorg threshold that the head reads need, and `Config.headWeightsFit_mainnet` and `Config.headWeightsFit_minimal` prove it.
@@ -355,7 +563,8 @@ Not yet released.
   `unforgeable` is unchanged.
 
 - `quorumDrift_le_quorumReserve` bounds the drift of a fast-confirmation call's quorum by `quorumReserve` ([#2058](https://github.com/ethereum/EthLib/issues/2058)).
-  It compares the call's pulled-up state with a later state in the target's epoch or the next, before Gloas from Fulu.
+  It compares the call's pulled-up state with a later state in the target's epoch or the next, from Fulu.
+  It takes the counting state's registry within the limit, which the type of the registry gives before Gloas.
   `Execution.quorumDriftWithin` builds those runs from the stores and proves `QuorumDriftWithin` with BLS checks.
   The anchor state is reached by a run with BLS checks from a genesis built from deposits, and an epoch has at least one slot.
   `Execution.rootViable_of_checked_call` takes the same genesis and run for any signature checks; this theorem fixes them to BLS.
@@ -363,7 +572,7 @@ Not yet released.
   The preset keeps the bands of hysteresis, its seed lookahead covers at least one epoch, and the withdrawal delay is at least one epoch.
   The preset meets `CapOrder` and the new `ActivationWithinMaxEffective`, which together make `MAX_EFFECTIVE_BALANCE` equal `MIN_ACTIVATION_BALANCE`.
   `ActivationWithinMaxEffective.mainnet` and `ActivationWithinMaxEffective.minimal` show that it holds on both presets.
-  No separate headline discharges `QuorumDriftWithin`: a caller with BLS checks from Fulu to before Gloas composes `Execution.quorumDriftWithin` with `Execution.rootViable_of_checked_call` or `Execution.honestHeadsCover_of_checked_call`.
+  No separate headline discharges `QuorumDriftWithin`: a caller with BLS checks from Fulu composes `Execution.quorumDriftWithin` with `Execution.rootViable_of_checked_call` or `Execution.honestHeadsCover_of_checked_call`, passing the anchor's registry room from Gloas.
   `Execution.heldStatesBeforeUpgrade_of_bounded` derives their premise `HeldStatesBeforeUpgrade` from the horizon and `HonestStoreEpochsBounded`.
   `effectiveRise_le` bounds the rise of the active effective balances over an epoch end, and `effectiveFall_le` the fall of a voter's.
   `Run.balanceCorrections_of_same_epoch` bounds the balances along a branch inside one epoch.
@@ -482,13 +691,14 @@ Not yet released.
   `Store.Reachable.nonempty_run_of_blockState` gives a run from the anchor state to each held state, with the store's setting of the checks.
   `getBaseReward_congr` reads the same base reward for two validators with the same effective balance, in one state or in two.
   `processRewardsAndPenalties_balance_le_of_inactivityUpdates` bounds each balance after the rewards pass, given a bound on each base reward.
-  `processOperations_floor` bounds the balance of an unslashed validator through the operations of a block before Gloas.
+  `processOperations_floor` bounds the balance of an unslashed validator through the operations of a block from Fulu.
   The balance stays at least the smaller of its balance and its effective balance before them.
   `actualBalanceAt_increaseBalance` and `actualBalanceAt_decreaseBalance` change the balance at one index and keep every other, and `actualBalanceAt_push` reads an appended balance.
   `passPendingConsolidations_balanceNotLowered_of_waiting` keeps the balance of a source that cannot yet leave, and `queueConsolidation_queued` records the exit epoch and the queue entry of a consolidation.
   `processBlock_currentSyncCommittee` keeps the current sync committee across a block.
   `Transition/PartialWithdrawalQueue.lean` holds the step facts of the queue of pending partial withdrawals that the departure queue and the drift bound share.
-  `departureQueues` and its step lemmas move there from `DirectSafety/DepartureQueue.lean` and become public, with unchanged statements.
+  `departureQueues` and its step lemmas move there from `DirectSafety/DepartureQueue.lean` and become public, with unchanged statements except the changes below.
+  Three only drop their pre-Gloas binder; `withdrawals_departureQueues`, `blockExecution_departureQueues` and `getExpectedWithdrawals_partials` also change their conclusions.
   `PartialsSame` says that two states hold the same queue, and `PartialsSame.of_queues` reads it from equal departure queues.
   `flagSumOf` states the flag sums of `SupplyBlock` for any base reward, and `recentFlagSum` adds both recent epochs; `flagRewardWeight` keeps its value.
   `flagSumOf_le` bounds a flag sum by 54 base rewards per position, and `flagSumOf_foldlM_addAttesterFlags` raises it by at least the numerator its attesters gain.
@@ -503,9 +713,9 @@ Not yet released.
   They are the flag frames `flags_operationsInput`, `flags_proposerSlashing`, `flags_attesterSlashing`, `flags_increase`, `flags_decrease`, `flagsBelow_add` and `flagsBelow_deposit`.
   They are also `flagValue`, `flagValue_le`, `isActiveAt_of_getAttestingIndices` and `withdrawnFrom_split`.
   They are also `StepKeeps.refl`, `StepKeeps.trans`, `StepKeeps.of_validators` and fifteen `stepKeeps_*` step lemmas, of setValidator, decreaseBalance, initiateValidatorExit, slashValidator and the block operations.
-  They are also `effectiveKept_setValidator`, `effectiveKept_decrease`, `effectiveKept_exit`, `effectiveKept_requests` and `balanceDrift_upgrades_upper`.
+  They are also `effectiveKept_setValidator`, `effectiveKept_decrease`, `effectiveKept_exit`, `effectiveKept_requests` and `balanceDrift_upgrades_upper` (its pre-Gloas binder is dropped below).
   They are also `Unassigned`, `UnassignedFrom`, `unassignedFrom_size`, `UnassignedKept` and `UnassignedKept.processDeposit`.
-  `DirectSafety.total_active_congr` moves from `DirectSafety/DepartureQueue.lean` to `Transition/BalanceDrift.lean`, with its name and statement unchanged.
+  `DirectSafety.total_active_congr` moves from `DirectSafety/DepartureQueue.lean` to `Transition/BalanceDrift.lean`, with its name unchanged; its pre-Gloas binders are dropped below.
   `DirectSafety.queueCarry_le_of_run` bounds the exit and consolidation capacity that the queues carry at the end of a run from a state of a run from genesis.
   `DirectSafety.Run.departureCharges_epoch_ge_start` bounds the exit epoch of each departure charge of a run from Electra from below.
   The bound is the epoch of the start, plus one epoch and the seed lookahead.
@@ -538,7 +748,7 @@ Not yet released.
   `FastConfirmation/ConfirmedCalls.lean` holds the walk of a call and the call invariant; the helpers that the step reads are public in its `ConfirmedCalls` namespace.
   `FastConfirmation/ConfirmedCallStep.lean` holds the step and the theorem.
   The step reads these new or newly public lemmas:
-  - `Store.viable_of_ancestor` passes viability from a root to its ancestors before Gloas.
+  - `Store.viable_of_ancestor` passes viability from a root to its ancestors.
   - `Store.held_of_isAncestor` now gives the held block at the root of any ancestor node, not only of a pending one.
   - `Store.Reachable.finalized_known` gives the block of a reachable store's finalized checkpoint; steps of `RootViability.lean` and `RootHeld.lean` read it too.
   - `Execution.walk_covers` covers a walk of roots from its start and a step, and `honestHeadsCover_mono` shrinks the interval of a coverage.
@@ -765,7 +975,7 @@ Not yet released.
 
 - `LookaheadActive` says that, from Fulu, each entry of the proposer lookahead of a state is active in its epoch.
   Position `k` is `k / SLOTS_PER_EPOCH` epochs after the current epoch.
-  `Run.lookaheadActive` states it along every run from genesis that ends before Gloas, when `MAX_SEED_LOOKAHEAD` is above `MIN_SEED_LOOKAHEAD`.
+  `Run.lookaheadActive` states it along every run from genesis, when `MAX_SEED_LOOKAHEAD` is above `MIN_SEED_LOOKAHEAD`.
   `LookaheadActive.proposer_active` states that a proposer read from a state that holds it is active in the epoch of the state.
   The pin's whistleblower and sync bounds read it to show that a validator that exited before the finalized epoch proposes no block.
 
@@ -900,6 +1110,771 @@ Not yet released.
   `ValidatorStep`, `PinDriftBound.CreditBudgets` and `PinDriftBound.PreviousEpochRise` use it.
 
 ### Changes that break callers
+
+- In Lean, the capacity term of the sponge indifferentiability bound is `(N^2 + N) / |C|`, down from `(N (2N + 1) + N (N + 1)) / |C|` ([#4716](https://github.com/ethereum/EthLib/issues/4716)).
+  - `Sponge.spongeIndiffBound cardS cardC N` (`Cryptography/Proofs/Sponge/Indifferentiability.lean`) is `N.choose 2 / cardS + (N * N + N) / cardC`, and `Sponge.Indiff.prEvent_visRun_le` and `prEvent_foldIdeal_diff_le` state `(N * N + N) / |C|`; `keccak256_indifferentiable` and the leanXMSS transfer to the random-permutation model get the smaller bound.
+  - `prEvent_bad_le_of_weightBudget` and `size_le_of_mem_support_run_weightBudget` (`Cryptography/Proofs/BadOnBudget.lean`) are removed: use `tsum_le_of_isQueryBound`, which charges a potential on the budget and the state and a final charge for a good end.
+
+- In Lean, leanXMSS verification is charged its `172` calls of `H`, down from `384`, so the slack of its strong unforgeability for the adversary's own calls is `318`, down from `530`, and `319` in the random-permutation model, down from `531`.
+  Each layer hashes a digest, walks the `68` chain steps a codeword leaves, hashes a leaf and climbs `16` nodes.
+  - `Xmss.isQueryBoundP_otsLeaf`, `isQueryBoundP_layerRoot` and `isQueryBoundP_verifyWith` (`Cryptography/Proofs/Xmss/QueryBound.lean`) bound `70`, `86` and `172` calls, down from `176`, `192` and `384`.
+  - `Xmss.Unforgeability.stronglyUnforgeable` states slack `318`; `stronglyUnforgeable_randomPermutationModel` and `stronglyUnforgeable_randomPermutationModel_stateless` state slack `319`.
+  - `XmssSecurity.CappedChain.capped_forgeAdvantage_le_of_adversaryBound` bounds the model by `(2q + 634) / 2^128`, lane 1 is `q + 172 + forgeryProbeCount` and `XmssSecurity.hasSecondLaneBound_of_adversaryBound` states `HasSecondLaneBound (q + 172)`.
+  - `Xmss.Unforgeability.verifyQueries` is `172`, so `gameQueries` is `212` smaller, and `lifetimeQueries_eq` ends in `+ 173`.
+
+- In Lean, leanXMSS and leanSPHINCS share one count of hash calls, `HashSig.countHashQueries` (`Cryptography/Proofs/HashSig/Counted.lean`), stated with `SufCma.IsHashCall` and `SufCma.hashCost` ([#4744](https://github.com/ethereum/EthLib/pull/4744)).
+  - `XmssSecurity.countHashQueries` and `SphincsSecurity.Security.SeedCoupling.countHashQueries` and their lemmas are removed; `_lift_prob` and `_sampling_bind` are `HashSig.countHashQueries_liftM` and `_liftM_bind`, and `HashSig.simulateQ_countHashQueries` takes the handler first.
+  - `XmssSecurity.countedRomImpl` and `SphincsSecurity.Security.countedOracle` are removed: write `romImpl.withAddCost SufCma.hashCost`.
+  - `XmssSecurity.IsHashQuery`, `XmssSecurity.Seeded.queryCost`, `XmssSecurity.CappedChain.verifierHashQueryCost` and `SphincsSecurity.Security.Prefix.SourceHash` are removed: use `SufCma.IsHashCall HashSpec` and `SufCma.hashCost`.
+
+- In Lean, the first items of a zip are a prefix of the first list, not only a sublist.
+  - `Base.map_fst_zip_sublist` (`Base/Proofs/List.lean`), which stated `((xs.zip ys).map Prod.fst).Sublist xs`, is renamed `Base.map_fst_zip_prefix` and states `(xs.zip ys).map Prod.fst <+: xs`.
+  - `blockBlobs_sublist` (`Consensus/Proofs/BeaconApi/Blocks.lean`), `ReservedReplay.selected_allocation_round_sum_le` (`Consensus/Proofs/DirectSafety/Apriori/Ownership.lean`), `ledger_processSyncAggregate` (`Consensus/Proofs/Transition/BlockLedger.lean`) and `syncAggregate_floor` (`Consensus/Proofs/Transition/EffectiveFall.lean`) read its `.sublist`.
+  Migration: replace `map_fst_zip_sublist xs ys` with `(map_fst_zip_prefix xs ys).sublist`.
+
+- In Lean, leanXMSS and leanSPHINCS are stated through one strong-unforgeability game, `Cryptography/Proofs/SufCma.lean` ([#4707](https://github.com/ethereum/EthLib/pull/4707), [#4718](https://github.com/ethereum/EthLib/pull/4718)).
+  A scheme (`SufCma.Scheme`) has a signer that keeps its key and may fail, and a rule of use on its requests.
+  The game fixes the freshness check, and a model (`SufCma.Model`) answers the coins and the hash.
+  `SufCma.StronglyUnforgeable scheme model maxSignings slack bits` charges the adversary's own hash calls; `SufCma.StronglyUnforgeableAllCalls scheme model bits` charges every hash call of the game.
+  - leanXMSS: `Xmss.Unforgeability.unforgeable` states `StronglyUnforgeableAllCalls` at 127 bits; `forgeAdvantage_le_ownQueries` is now `stronglyUnforgeable`, and `forgeAdvantage_le_adversaryBudget` and `forgeAdvantage_le_lifetime` are `advantage_le_adversaryBudget` and `advantage_le_lifetime`.
+  - leanSPHINCS: `Sphincs.Unforgeability.Bridge.unforgeable` states `StronglyUnforgeableAllCalls` at 127 bits, and `forgeAdvantage_le_capped` is now `advantage_le_capped`; the unused game of `Proofs/Sphincs/Unforgeability/Game.lean` is removed.
+  - The bespoke adversaries, experiments, advantages and predicates (`gameCore`, `experiment`, `forgeAdvantage`, `HasHashQueryBound`, `HasClassicalSecurityBits`) of both public games are removed.
+
+- In Lean, the strong unforgeability of leanXMSS for the adversary's own hash calls has the slack `530`, down from `2^19 + 1` ([#4712](https://github.com/ethereum/EthLib/pull/4712)).
+  `Xmss.Unforgeability.stronglyUnforgeable` (`Cryptography/Proofs/Xmss/Unforgeability/AdversaryBudget.lean`) states `SufCma.StronglyUnforgeable scheme (SufCma.randomOracleModel HashSpec) (2 ^ LOG_LIFETIME) 530 127`.
+  - `XmssSecurity.CappedChain.capped_forgeAdvantage_le_of_adversaryBound` (`Cryptography/Proofs/Xmss/Security/XmssSecurity/Proof/CappedExactFirstLaneBound.lean`) bounds the model by `(2q + 1058) / 2^128`, down from `(2q + 2^20) / 2^128`.
+  - `XmssSecurity.CappedChain.cappedExactFirstLane_probability_le_of_adversaryBound` (same file) bounds lane 1 by `(q + 384 + forgeryProbeCount) / 2^128`.
+    It replaces `XmssSecurity.CappedChain.hasExactFirstLaneBound_of_adversaryBound`, which stated the weaker `q + 2^19`.
+
+- In Lean, lane 2 of the leanXMSS security proof charges the final verification once, not twice ([#4710](https://github.com/ethereum/EthLib/pull/4710)).
+  Its bound for the adversary's own hash calls drops from `q + 768` to `q + 384` over `2^128`.
+  The verification's encoding queries and its structural queries are disjoint, as the adversary's are, so together they are at most the verifier's `384` calls.
+  - `XmssSecurity.hasSecondLaneBound_of_adversaryBound` (`Cryptography/Proofs/Xmss/Security/XmssSecurity/Proof/CappedJointExactLoss.lean`) states `HasSecondLaneBound (q + 384)`.
+  - `XmssSecurity.cachedSelection_afterKeygen_le_adversaryDigest` (`Cryptography/Proofs/Xmss/Security/XmssSecurity/CachedSelectionBound.lean`) keeps the verification's encoding queries as an expectation over the adversary's run, in place of `384`.
+  - `XmssSecurity.structuralQueries_le_adversary` (`Cryptography/Proofs/Xmss/Security/XmssSecurity/Proof/CappedJointExactLoss.lean`) does the same for the verification's structural queries.
+  - `XmssSecurity.tsum_expectedVerifyQueries_add_le_of_disjoint` (`Cryptography/Proofs/Xmss/Security/XmssSecurity/CachedSelectionBound.lean`) is new: the verification's expected queries of two disjoint classes add to at most `384`.
+
+- In Lean, secp256r1 encodes and decodes its points with the SEC 1 module of every prime-field curve, in both forms ([#4704](https://github.com/ethereum/EthLib/pull/4704)).
+  - `Secp256r1.sec1` (`Cryptography/Secp256r1/Encoding.lean`) holds what SEC 1 reads from `Fp`, with the square root for `p = 3 mod 4`, and `Secp256r1.isSqrt_sqrt` proves its law.
+  - `Point.encodeCompressed`, `Point.encodeUncompressed` and `Point.decode` are new: the decoder reads both forms and `00`, then validates the key by SEC 1 v2 §3.2.2.1, which rejects `O`.
+    `Point.decode_eq_ok_iff` (`Cryptography/Proofs/Secp256r1/Encoding.lean`) says that it accepts exactly the encodings of the points other than `O`.
+  - `Secp256r1.decodeUncompressed` becomes `Secp256r1.Point.decodeUncompressed` on a `ByteArray`, and accepts the same 65-byte keys as before.
+    `Secp256r1.decodeUncompressed_eq_some_iff` becomes `Point.decodeUncompressed_eq_some_iff`, stated with `(affine x y).encodeUncompressed`, and `Libp2p.Tls.readP256_eq_ok_iff` takes the key as a `ByteArray`.
+  - `Sec1.validatePublicKey_one_eq_ok` (`Cryptography/Proofs/Sec1.lean`) is new: with cofactor 1, validation keeps every point of the curve other than `O`.
+  - `Secp256r1.encodeUncompressed` on two coordinates is removed for `(Point.affine x y).encodeUncompressed`, and `Fp.toBytes` is a `ByteArray`.
+  - `Exports.readCoordinate` reads a `ByteArray` through `Sec1.fieldOfBytes?`, with the same values and errors on 32 bytes; it rejects any other length.
+  - The P256VERIFY precompile is unchanged: EIP-7951 reads `qx` and `qy` without a prefix, by its own checks.
+  - The modules `EthLib.Cryptography.ShortWeierstrass.Encoding` and `EthLib.Cryptography.Proofs.ShortWeierstrass.Encoding` are removed, with the 32-byte coordinate codec and its proofs: `ShortWeierstrass.coordinateToBytes`, `coordinateOfBytes?`, `encodeUncompressed`, `length_coordinateToBytes`, `ofBE_coordinateToBytes`, `coordinateOfBytes?_coordinateToBytes` and `coordinateToBytes_of_coordinateOfBytes?`.
+    Use `Sec1.fieldToBytes` and `Sec1.fieldOfBytes?` with the parameters of the curve, and the lemmas `Sec1.size_fieldToBytes`, `Sec1.ofBE_fieldToBytes` and `Sec1.fieldOfBytes?_eq_some_iff`; they hold for any length `mlen`, not only 32 bytes.
+- In Lean, 61 technical lemmas of the Montgomery arithmetic on 32-bit limbs move to the namespace `Montgomery.Internal`, and three lemmas on digits to `Montgomery.Limbs.Internal` ([#4685](https://github.com/ethereum/EthLib/issues/4685)).
+  Only the Montgomery modules and their proofs use them, and those modules open the namespace.
+  - From `Cryptography/Montgomery/Words.lean`: `mac_spec`, `sbb_spec`, `num_succ`, `fits_succ`, `num_congr`, `fits_congr`, `fits_of_lt`, `num_cons`, `fits_cons`, `num_cons_zero`, `fits_cons_zero`, `radix_succ`, `num_lt`, `num_snoc`, `loop_induct`, `loop_add`, `macS_spec`, `shS_spec`, `redS_spec`, `subbS_spec`, `lt_of_fits`, `load_spec`, `num_mod` and `radix_mod`.
+  - From `Cryptography/Montgomery/Product.lean`: `pos_of_pinv`, `step_spec`, `reduce_out`, `reduce_spec`, `mulWords_out`, `mulWords_spec`, `load_zero` and `load_pack`.
+  - From `Cryptography/Montgomery.lean`: `numPairs_eq`, `size_powTableAux`, `topDigit_lt`, `lowDigit_lt` and `size_pushLimbs`.
+  - From `Cryptography/Proofs/Montgomery/Core.lean`: `num_zero`, `fits_zero`, `fits_snoc`, `eq_of_num_eq`, `word_succ` and `ltWords_iff`.
+    `Limbs.digit_toNat`, `Limbs.num_digit` and `Limbs.fits_digit` move to `Montgomery.Limbs.Internal`.
+  - From `Cryptography/Proofs/Montgomery.lean`: `radix_mul_inv`, `radix_inv_mul`, `radix_cancel`, `limbs_cast`, `mulLimbs_cast`, `toZMod_sub'`, `powTableAux_spec`, `powTable_spec`, `toZMod_window`, `toZMod_powWord`, `toZMod_powDigits`, `toList_toBE_four`, `pushLimbs_toList`, `wordBE_toNat` and `num_limbBE`.
+  The lemmas that callers use stay public, such as those of the element and its operations, `mulLimbs_spec`, `addLimbs_spec`, `subLimbs_spec`, `toBytesBE_size`, `toNat_eq_val`, `zero_spec`, `mulHigh_mulLow` and the map to `ZMod p`.
+  To reach a moved lemma, write `open EthLib.Cryptography.Montgomery.Internal`, or `Montgomery.Limbs.Internal` for the lemmas on digits.
+
+- In Lean, secp256k1 encodes and decodes its points with the SEC 1 module of every prime-field curve ([#4699](https://github.com/ethereum/EthLib/pull/4699)).
+  - `Secp256k1.sec1` (`Cryptography/Secp256k1/Encoding.lean`) holds what SEC 1 reads from `Fp`, and `Secp256k1.isSqrt_sqrt` proves the law of its square root.
+  - `Point.encodeCompressed` and `Point.encodeUncompressed` are abbreviations of `Sec1.encode`, with the same bytes.
+  - `Point.decompress` is `Sec1.decompress`, and `Point.decode` is `Sec1.decode` followed by `Sec1.validatePublicKey`, with each error mapped by `Secp256k1Error.ofSec1`.
+  - A compressed key with an unknown prefix and an `x` of `p` or more now reports `coordinateTooLarge`.
+    SEC 1 reads `x` (step 2.2) before the prefix (step 2.3), and the other inputs keep their errors.
+  - `Secp256k1Error` gains `noRootOfParity` (code 16) and `notInSubgroup` (code 17), which no input reaches on secp256k1.
+  - `Fp.toBytes` is a `ByteArray`, the SEC 1 field element; `Fp.length_toBytes` is removed for `Sec1.size_fieldToBytes`.
+  - `Fp.ofBytes`, `Fp.ofBytes_toBytes`, `Fp.toBytes_of_ofBytes`, `encodeUncompressed_coords` and `Fp.eq_of_parity` are removed: use `Sec1.fieldOfBytes?` and the lemmas of `Cryptography/Proofs/Sec1.lean`.
+  - `Point.decode_notOnCurve` states the rejection on the uncompressed encoding of the pair.
+- In Lean, `ShortWeierstrass.Point.isOnCurve` (`Cryptography/ShortWeierstrass.lean`) compares `y * y` with `ShortWeierstrass.Point.rhs x`, the right side `x^3 + a x + b` of the equation, which SEC 1 decompression shares ([#4695](https://github.com/ethereum/EthLib/pull/4695)).
+  A proof that unfolds the curve test also unfolds `rhs`.
+- In Lean, one ring isomorphism `Montgomery.toZModEquiv` maps the Montgomery elements of every modulus to `ZMod p` (`Cryptography/Proofs/Montgomery/ZMod.lean`) ([#4685](https://github.com/ethereum/EthLib/issues/4685)).
+  The elements are a commutative ring and a finite type by transport, with `Montgomery.card_eq`.
+  `Montgomery.field` gives a field for a prime modulus, with the division in context.
+  So `Bls.Fp` and `Bls.Fr` are commutative rings without `open scoped`, and only their fields stay scoped.
+  `Bls.Fp.toZMod` and `Bls.Fr.toZMod` are now that isomorphism, and their scoped field instances are `Montgomery.field`.
+  `Bls.Fp.ofZMod`, `Bls.Fr.ofZMod` and their lemmas `toZMod_ofZMod` and `ofZMod_toZMod` are removed: use `Montgomery.ofZMod`, `Montgomery.toZMod_ofZMod` and `Montgomery.ofZMod_toZMod`.
+  The finite type instances of `Bls.Fp` and `Bls.Fr` are removed for the one of the Montgomery elements.
+- The configuration readers of the consensus exports refuse a schedule that breaks the rules of its fork, with code 0.
+  This holds for the blob schedule and the gas limit schedule.
+  The Fulu and Gloas specifications say that no two entries of one schedule share an epoch.
+  No entry may start before the fork that adds the schedule.
+  The Fulu specification also says that the limit of each blob schedule entry is at most `MAX_BLOB_COMMITMENTS_PER_BLOCK`.
+  The readers took such a configuration, and of two blob schedule entries at one epoch the first in the list set the limit.
+  So a replacement that moves `FULU_FORK_EPOCH` of mainnet past epoch 412672, the first entry of its schedule, now fails unless it also replaces `BLOB_SCHEDULE`.
+  Likewise, while `GLOAS_FORK_EPOCH` is in the far future, a `GAS_LIMIT_SCHEDULE` entry at an earlier epoch now fails for every export that reads a configuration.
+  In Lean, `Config.blobScheduleValid` and `Config.gasLimitScheduleValid` in `EthLib.Consensus.ForkSchedule` are the checks.
+  `blobScheduleValid_iff` and `gasLimitScheduleValid_iff` in `EthLib.Consensus.Proofs.ForkSchedule` state the rules that each accepts.
+  `getBlobParameters_perm` states that a blob schedule with distinct epochs gives the same limits in any order.
+  `getBlobParameters_le_of_blobScheduleValid` bounds the limit of a valid schedule by `MAX_BLOB_COMMITMENTS_PER_BLOCK`.
+  `getBlobParameters_sharedEpoch` shows two entries at one epoch whose order sets the limit.
+  `latestStarted_perm` gives the order-free result for any schedule with distinct first epochs, and `getScheduledGasLimit_perm` now follows from it.
+
+- The gossip RPC decoder takes the payload cap of the network first.
+  It rejects an encoded RPC longer than the largest gossip message of that cap, with the new code 106.
+  A cap whose largest message overflows 64 bits rejects every RPC, with the new code 107.
+  The [phase 0 networking text](https://github.com/ethereum/consensus-specs/blob/aa16bb4c156184e9548a997d53efaf2a228a6304/specs/phase0/p2p-interface.md#gossipsub-size-limits) says that clients must reject such a message, protobuf framing included.
+  The largest message is `32 + n + n / 6 + 1024` bytes for the payload cap `n`, and at least 1 MiB, so 12234442 bytes on mainnet.
+  The decoder took an RPC of any length, so a payload at its compressed bound could come with any number of topics and control messages.
+  In Python, `gossip.rpc.decode` takes `max_payload_size` first.
+  In Lean, `decodeRpc` takes the cap first, and so do `decodeRpc_no_partial`, `decodeRpc_signed` and `decodeRpc_signedRecords`.
+  `decodeRpc_encode` asks that the encoding fit the largest message of the cap, in place of `2^64` bytes, and `decodeRpc_signedRecords` no longer asks for a size.
+  `decodeRpc_tooLong` and `decodeRpc_arith` in `EthLib.Networking.Proofs.Gossip.Rpc` state the two rejections.
+
+- In Lean, `phase0PeriodEpochs` (`Consensus/WeakSubjectivity.lean`), and so the Phase 0 to Deneb weak subjectivity period, takes the epochs for the churn of validators alone when balances are large, no longer the longer of those and the epochs for top-ups ([consensus-specs#5866](https://github.com/ethereum/consensus-specs/issues/5866)).
+  The period is shorter only where the epochs for top-ups were the longer, for instance beyond about 4.39 million validators of 32 ether.
+  `phase0PeriodEpochs_eq_ok` gives the new closed form, and `churn_le_of_phase0PeriodEpochs_eq_ok` and `accountable_safety_of_weakSubjectivityPeriod_of_lt_electra` lose their hypothesis on the top-ups.
+- In Lean, a builder may have several bids forwarded for one slot and parent, up to a limit that its balance sets ([#3512](https://github.com/ethereum/EthLib/issues/3512)).
+  - `Consensus.getBuilderBidLimit` (`Consensus/Gossip/Bid.lean`) is new: the balance that the builder does not owe, in whole ether.
+  - `Seen.executionPayloadBidCount` counts the valid bids of a key, and a valid bid adds one (`executionPayloadBidCount_recordExecutionPayloadBid`).
+  - `validateExecutionPayloadBid` drops the check of a first bid, and ignores a bid once the count of its key reaches the limit.
+  - `validateExecutionPayloadBid_of_seen` and `validateExecutionPayloadBid_recordExecutionPayloadBid` are removed, and `validateExecutionPayloadBid_of_not_best` no longer takes a fresh key.
+  - The chain theorems take the computed limit as a hypothesis.
+    `lt_limit_of_validateExecutionPayloadBid_eq_accept` and `executionPayloadBidCount_le_limit_of_validateExecutionPayloadBid_eq_accept` bound the count by the limit.
+  - The parity registry lists the eight bid cases of v1.7.0-beta.4 that rest on one bid per builder, and the gossip tests expect them to fail.
+  Migration: pass the bid limit to the chain theorems, and use the count in place of the seen key.
+- In Lean, the Miller loop of the BLS12-381 pairing squares with the complex method and multiplies by each line with a sparse product ([#2478](https://github.com/ethereum/EthLib/issues/2478)).
+  - `Bls.Fp12.square` (`Cryptography/Bls/Fp12.lean`) unfolds to the complex squaring, not to `a * a`; `Fp12.square_eq` (`Cryptography/Proofs/Bls/Fp12.lean`) states that it is the square.
+  - `Bls.Fp12.mulLine` (`Cryptography/Bls/Pairing.lean`), `Bls.Fp6.mulBy01` and `Bls.Fp6.mulBy1` (`Cryptography/Bls/Fp6.lean`) are new, with `mulLine_eq`, `Fp6.mulBy01_eq` and `Fp6.mulBy1_eq`, which state them as full products, and their map lemmas.
+    `map_lineValue` (`Cryptography/Proofs/Bls/PairingMap.lean`) is removed, since no proof maps a line value any more.
+  - `millerDouble` and `millerAdd` unfold to these; every pairing gives the same value, and every theorem keeps its statement.
+- `MAX_PAYLOAD_SIZE` is a value of the consensus configuration, as the p2p interface lists it among its configuration values ([#4606](https://github.com/ethereum/EthLib/issues/4606)).
+  - In Lean, `Consensus.Config.MAX_PAYLOAD_SIZE` is new, 10485760 in the mainnet and minimal configurations, and the configuration reader and the Beacon API spec map read it there.
+  - `Networking.ReqResp.MAX_PAYLOAD_SIZE` is removed.
+    `ReqResp.decodePayload`, `ReqResp.decodeResponseChunk`, `ReqResp.maxMessageSize`, `ReqResp.payloadBounds` and `Gossip.decodePayload` take the cap as their first argument.
+    `requestBounds`, `responseBounds` and `topicBound` read it from the configuration they take.
+  - The theorems on these definitions take the cap as an argument, with a hypothesis that it fits: below `2^63` for requests and responses, and at most `2^32 - 1`, the largest Snappy block, for gossip.
+    `toNat_MAX_PAYLOAD_SIZE` is removed.
+  - In Python, `reqresp.decode_payload`, `reqresp.decode_response_chunk` and `gossip.decode_payload` take `max_payload_size` first, and `reqresp.MAX_PAYLOAD_SIZE` is removed.
+  Migration: pass the cap of the network, such as `consensus.config("mainnet")["MAX_PAYLOAD_SIZE"]` in Python or `config.MAX_PAYLOAD_SIZE` in Lean.
+- In Lean, `Transactions.modifyState_ne_noAccount` and `Transactions.modifyState_ne_insufficientBalance` (`Execution/Proofs/Transactions/NoAccount.lean` and `Funded.lean`) are removed ([#4676](https://github.com/ethereum/EthLib/pull/4676)).
+  `TransactionState.modifyState_eq_error` gives each of them in one line.
+  New lemmas say which state error each step of a transaction can give: `TransactionState.error_getCode`, `error_creditEther`, `error_buyGas`, `error_settleGas`, `deleteAccounts_ne_error` and `prepareFirstFrame_ne_state`.
+  Migration: write `fun h => hf _ (TransactionState.modifyState_eq_error.mp h)` in place of either lemma.
+- In Lean, the Keccak sponge takes its permutation as a computation in a monad, `f : State → m State` for any monad `m` ([#2842](https://github.com/ethereum/EthLib/issues/2842)).
+  - `Internal.absorbBlocks`, `Internal.stateBeforeLastPermutation`, `Internal.spongeAbsorb` and `Internal.keccak256Read` (`Cryptography/Hash/Keccak.lean`) take such a permutation and return a computation in `m`.
+  - `keccak256With` and `keccak256LanesWith` are Keccak-256 of bytes and of lanes over such a permutation.
+    `keccak256` and `keccak256Lanes` are their identity-monad instances at Keccak-f[1600].
+    `keccak512` and `Hasher256` run the same sponge in the identity monad at Keccak-f[1600].
+    All four compute the same bytes as before.
+  - The proof-side `keccak256With` over a pure function is removed (`Cryptography/Proofs/Hash/Keccak/Indifferentiability.lean`).
+    `Keccak256Indifferentiable`, `keccak256Indifferentiable_of_spongeExact` and `keccak256_realProb_le` state the same facts about `fun π msg => Id.run (keccak256With (fun S => pure (π S)) msg)`.
+    `keccak256With_keccakF` moves to `Cryptography/Proofs/Hash/Keccak/Basic.lean`, and says that over Keccak-f[1600] in any lawful monad the hash is `pure (keccak256 msg)`.
+  - The sponge lemmas over a pure `f` now take a permutation in a monad.
+    `absorbBlocks_pad`, `absorbBlocks_congr_read`, `absorbBlocks_congr` and `stateBeforeLastPermutation_congr` hold in every monad.
+    `spongeAbsorb_eq` and `spongeAbsorb_of_size_lt` hold in every lawful monad.
+    `absorbBlocks_add`, `stateBeforeLastPermutation_eq_pad` and `stateBeforeLastPermutation_xorLane` hold in every lawful monad, and state their result as a bind or a map.
+    The first block count of `absorbBlocks_add` is named `k`, as `m` names the monad.
+  - `keccak256Read_eq` (`Cryptography/Proofs/Hash/Keccak/Lanes.lean`) becomes `keccak256Read_eq_keccak256With`: in every monad, the bytes of the lane reader's digest are `keccak256With f msg`.
+  - `absorbBlocks_ofLanes`, `absorbAll_eq`, `sponge_eq_of_squeeze`, `oneCallHash_eq` and `keccak256_eq_squeeze256` name the identity-monad instance.
+  - New in `Cryptography/Proofs/Hash/Keccak/Basic.lean`: `keccak256With_eq_squeeze256`, `absorbBlocks_pure`, `stateBeforeLastPermutation_pure`, `spongeAbsorb_pure`, `keccak256LanesWith_pure`, `keccak256With_pure` and `keccak256LanesWith_keccakF`.
+    New in `Cryptography/Proofs/Hash/Keccak/Lanes.lean`: `keccak256LanesWith_lanesBytes`.
+    New in `Cryptography/Proofs/Xmss/TweakableHash.lean`: `Xmss.hashId_eq_keccak256LanesWith`.
+  Migration: pass `fun S => pure (f S)` where a pure `f` was passed, and read the result with `Id.run`.
+
+- In Lean, the SSZ type check finds a repeated field name or union selector with the one-pass scan `Base.firstRepeated` ([#4518](https://github.com/ethereum/EthLib/issues/4518)).
+  - `Ssz.firstDuplicate` (`Serialization/Ssz/Type/Valid.lean`) is removed, with `firstDuplicate_of_nodup` (`Serialization/Proofs/Ssz/Type/Legality.lean`) and `nodup_of_firstDuplicate` (`Serialization/Proofs/Ssz/Codec/JsonRoundTrip.lean`).
+    `Desc.wellFormed` unfolds to the scan, and refuses the same declarations with the same errors.
+  - The theorems below state `names.Nodup`, or `selectors.Nodup` for the union, where they stated `firstDuplicate names = none` or `firstDuplicate selectors = none`.
+    They are `wellFormed_container_iff`, `wellFormed_progressiveContainer_iff` and `wellFormed_compatibleUnion_iff` (`Serialization/Proofs/Ssz/Type/Legality.lean`), `wellFormed_container_names` and `wellFormed_progressiveContainer_names` (`Serialization/Proofs/Ssz/Codec/Admits.lean`).
+    The hypothesis `named` of `LawfulSszType.container`, `LawfulSszType.progressiveContainer` and `LawfulSszType.forkContainer` changes the same way.
+  - `Base.isSome_firstRepeated` (`Base/Proofs/List.lean`) is new: the scan finds an element exactly when the list has a repeat, as a test.
+  Migration: pass a proof of `names.Nodup` where a proof of `firstDuplicate names = none` was passed, for instance `by decide` on a list of literals.
+- In Lean, `Cryptography.Kzg.KZGProof` is now a structure over its 48 bytes, as `KZGCommitment` is ([#4605](https://github.com/ethereum/EthLib/issues/4605)).
+  `EthLib.Cryptography.Kzg.Types` defines it, so Lean rejects a commitment, a public key or other 48 bytes where a proof is expected.
+  `bytesToKzgProof`, `computeKzgProof`, `computeBlobKzgProof`, `computeCellsAndKzgProofs` and `recoverCellsAndKzgProofs` return the structure.
+  `computeVerifyKzgProofBatchChallenge`, `verifyKzgProofBatch`, `computeVerifyCellKzgProofBatchChallenge` and `verifyCellKzgProofBatchImpl` take arrays of the structure.
+  The KZG operations that read untrusted bytes, such as `verifyBlobKzgProof` and `verifyCellKzgProofBatch`, still take `Bytes48`, and `parseProof` (`Cryptography/Exports/Kzg.lean`) returns those bytes.
+  A theorem about a proof changes its statement only where the type forces it, with `.bytes` or `KZGProof.mk`.
+  The SSZ, RLP, JSON and Python forms are those of the bytes, so no encoding and no C or Python signature changes.
+  Migration: build a proof with `KZGProof.mk`, and read its bytes with `.bytes`.
+- In Lean, `Engine.toOption_eq_some` (`Engine/Proofs/ExecutionEngine.lean`) moves to `Base.toOption_eq_some` (`Base/Proofs/Except.lean`), with the same statement ([#4671](https://github.com/ethereum/EthLib/pull/4671)).
+  `Base.toOption_eq_some_iff` states both directions, and `Base.Uint64.toNat_toUInt64` (`Base/Proofs/Uint64.lean`) says that a number below `2^64` keeps its value as a 64-bit integer.
+  Migration: open `EthLib.Base`, or write `Base.toOption_eq_some`.
+- In Lean, the theorems that need the effective-balance caps of a preset in order take one hypothesis `caps : CapOrder preset` ([#2334](https://github.com/ethereum/EthLib/issues/2334)).
+  - `CapOrder`, `CapOrder.mainnet` and `CapOrder.minimal` move from `Consensus/Proofs/Transition/BalanceDrift.lean` to `Consensus/Proofs/Transition/Totality/Bound.lean`, beside the positive divisors of a preset, with the same names.
+  - Twenty-six public theorems that took the two orderings `activation` and `compounding` as separate hypotheses take `caps` in their place, among them `Run.effectiveBalance_capped`, `Run.validatorCap_mono`, `Run.slashed_withdrawableEpoch_mono_epoch`, `Run.scheduled_activation_reserve`, `minimum_cap` and `epochPrefix_slashedSpan`.
+    They state the same facts.
+  - `RunConditions` (`Consensus/Proofs/Transition/Totality/RunStep.lean`) holds one field `caps` in place of its fields `activation` and `compounding`.
+  Migration: pass `⟨activation, compounding⟩`, or `CapOrder.mainnet` or `CapOrder.minimal`, where the two orderings were passed, and read `conditions.caps.activation` and `conditions.caps.compounding` in place of `conditions.activation` and `conditions.compounding`.
+- In Lean, the onboarding of builders at the Gloas fork routes each pending deposit by its withdrawal credentials first ([#4151](https://github.com/ethereum/EthLib/issues/4151)).
+  - `Consensus.onboardDeposit` (`Consensus/Transition/Upgrade.lean`) keeps a deposit without builder credentials in the queue, even for the key of a builder.
+  - A builder deposit for the key of a builder tops it up, whatever its signature.
+  - For a new key, a builder deposit with a valid signature makes a builder, even for the key of a validator.
+    With an invalid signature it stays queued only for a validator or a pending validator of its key.
+  - `onboardDeposit_cases` keeps its statement, and `onboardDeposit_of_not_builder_credential` states the first step.
+  Migration: none for callers of the upgrade; a proof that unfolds the onboarding meets the new order of its steps.
+- In Lean, the gossip check of an envelope rejects a payload that disagrees with its block, its bid or the state after it, or holds an empty transaction ([#3513](https://github.com/ethereum/EthLib/issues/3513)).
+  - `Consensus.validateExecutionPayloadEnvelope` checks the parent beacon block root, the RANDAO mix and the gas limit, then the parent hash, the timestamp, the empty transactions and the withdrawals.
+  - `validateExecutionPayloadEnvelope_eq`, `validateExecutionPayloadEnvelope_ignored` and `validateExecutionPayloadEnvelope_eq_accept` take the time of the slot and the two roots of the withdrawals as hypotheses.
+    The accept theorem states the seven new conditions.
+  - The parity registry lists the four envelope cases of v1.7.0-beta.4 that fill a payload with other withdrawals, and the gossip tests expect them to fail.
+  Migration: pass the time of the slot and the two withdrawal roots to those three theorems.
+- In Lean, the a priori drift proofs take the six stages of an epoch before the pending deposits as one hypothesis ([#3601](https://github.com/ethereum/EthLib/issues/3601)).
+  - `EpochPrefix` (`Consensus/Proofs/Transition/EpochDecomposition.lean`) holds the state after each of the six stages and the equation of each stage.
+    `EpochPrefix.trace`, `EpochPrefix.depositTrace` and `EpochPrefix.epochBeforePayments` give its trace, its trace with the pending deposits, and the state before the payments.
+    `EpochPrefix.of_trace` names the states of a trace of the six stages.
+  - `ReplayedPrefix` (`Consensus/Proofs/DirectSafety/IntervalFunding.lean`) adds the events of the replay of the rewards and the limit of the slashings, and `EpochPrefix.replayed` builds it.
+  - `funding_epoch_site` returns a `ReplayedPrefix` with the two pending stages and the events, and `funding_epoch_site_limit`, which said the same with the limit, is removed.
+  - `funding_epoch_prefix`, `reservedReplay_epochPrefixDeposits_facts`, `epochPrefix_slashedSpan`, `reservedReplay_epochNext` and `reservedReplay_epochNext_lowered` take the structure in place of the six to eight stage hypotheses, and their conclusions read its fields.
+  - `epochDepositTrace` (`Consensus/Proofs/DirectSafety/Apriori/Reserved/Epoch.lean`) is removed for `EpochPrefix.depositTrace`.
+  Migration: build the structure from the stage equations, or take it from `funding_epoch_site`.
+
+- In Lean, the leanXMSS and leanSPHINCS proofs count their queries with one shared construction ([#3628](https://github.com/ethereum/EthLib/issues/3628)).
+  - `HashSig.counted` and its lemmas `counted_pure`, `counted_query_bind`, `counted_query`, `simulate_withCost`, `counted_forget`, `counted_bind` and `counted_map` are new, in `Cryptography/Proofs/HashSig/Counted.lean`.
+  - The two copies are removed: `XmssSecurity.QueryCounting` with its module `Xmss/Security/XmssSecurity/Proof/QueryCounting.lean`, and `SphincsSecurity.QueryCap` from `Sphincs/Security/SphincsSecurity/Base/Prelude.lean`.
+    They were the same definition, and each had all but one of these lemmas.
+  - Statements that named a removed copy now name the shared one, with the same meaning.
+  - `Sphincs.Unforgeability.Bridge.fst_map_counted` is removed, since it restated `HashSig.counted_forget`.
+  Migration: use the names of `EthLib.Cryptography.HashSig`, from `EthLib.Cryptography.Proofs.HashSig.Counted`.
+
+- In Lean and Python, the blobs endpoint of the Beacon API gives one blob for each requested versioned hash, at the first place of its commitment, also when the block repeats that commitment ([#4644](https://github.com/ethereum/EthLib/issues/4644)).
+  This follows ethereum/beacon-APIs#676; before, each place of a repeated commitment gave its blob.
+  `BeaconApi.blockBlobs` (`Consensus/BeaconApi/Blocks.lean`) now matches on its last argument, so that argument has no name and `(hashes := h)` no longer elaborates.
+  With hashes, it reads the new `requestedBlobs`, over the blobs of the block with their hashes, `blobHashes`.
+  `requestedBlobs_hashes` and `requestedBlobs_nodup` (`Consensus/Proofs/BeaconApi/Blocks.lean`) state the hashes of the answer, and that no two of its blobs share one.
+  `requestedBlobs_sublist` and `requestedBlobs_first` state that it keeps the order of the block, and that each blob is the first of its hash.
+  `Base.eraseDupsBy_sublist`, `Base.map_eraseDupsBy`, `Base.eq_append_cons_of_filter` and `Base.eq_append_cons_of_mem_eraseDupsBy` (`Base/Proofs/List.lean`) are the general facts behind them.
+  Migration: pass the hashes to `blockBlobs` by position.
+
+- In Lean, the decoders of mplex, multistream-select and yamux read the body of a frame with `Encoding.ByteReader.bytes` ([#4657](https://github.com/ethereum/EthLib/pull/4657)).
+  `Libp2p.Mplex.decode`, `Libp2p.Multistream.decode` and `Libp2p.Yamux.decode` return the same frame, rest and error for every input.
+  Their theorems keep their statements, and a proof that unfolds one of them now meets the shared reader.
+- In Lean, the RLPx handshake writes and reads the 2-byte size of a packet with `Base.ByteOrder.toBE` and `ofBE` ([#4653](https://github.com/ethereum/EthLib/pull/4653)).
+  `Rlpx.sizeBytes` and `Rlpx.openPacket` (`Networking/Rlpx/Handshake.lean`) unfold to the codec of `Base`, and compute the same bytes and the same check for every input.
+  `openPacket_sealPacket` keeps its statement, and a proof that unfolds `sizeBytes` or `openPacket` now meets the codec of `Base`.
+- In Lean and Python, the upgrade to Heze no longer checks that the two deposit indices of the state are equal, so it never fails ([#3516](https://github.com/ethereum/EthLib/issues/3516)).
+  Both indices stopped changing at Fulu, so the check protected no deposit, and a network that starts at Fulu or later never sets the start index, so it would halt at Heze.
+  The error `TransitionError.depositIndicesDiffer` and its code 33 are removed; code 33 is not reused, and the codes after it keep their values.
+  `upgradeToHeze_ok_iff` (`Consensus/Proofs/Transition/Upgrade.lean`) now says the upgrade gives the carried fields, and `upgradeToHeze_error_iff` is removed.
+  The run hypotheses of the totality proofs (`UpgradeReady`, `UpgradeDraws`, `UpgradeDrawsEnd`) no longer ask for equal indices at Gloas.
+  Migration: drop any handling of code 33 from the upgrade to Heze.
+
+- In Lean, `Networking.Discv5.asciiBytes` (`Networking/Discv5/Identity.lean`) is removed ([#4650](https://github.com/ethereum/EthLib/pull/4650)).
+  It was `String.toUTF8` under another name, and an ASCII label has the same bytes in both.
+  The key agreement and the identity proof of discv5 now unfold to `String.toUTF8`, and compute the same bytes.
+  Migration: write `s.toUTF8` in place of `asciiBytes s`.
+- In Lean, seven lemmas about lists move from the trie proofs (`Execution/Proofs/Trie/Order.lean`) to `Base/Proofs/List.lean`, with the same statements ([#4648](https://github.com/ethereum/EthLib/pull/4648)).
+  - `Trie.le_foldl_min_iff`, `Trie.foldl_min_perm`, `Trie.foldl_last`, `Trie.eq_of_perm_of_length_le_one`, `Trie.length_le_one_of_nodup`, `Trie.nodup_of_map` and `Trie.nodup_map_of_injective` are now in `Base`.
+  - `Blocks.nodup_map_of_injective` (`Execution/Proofs/Blocks/AccessListBuilder.lean`) is removed, since it stated the same fact as `Base.nodup_map_of_injective`.
+  Migration: open `EthLib.Base` and import `EthLib.Base.Proofs.List`.
+- In Lean, whether every failure of a result meets a property is one predicate, `Base.ErrorsMeet` (`Base/Proofs/ErrorsMeet.lean`), for any error type ([#4630](https://github.com/ethereum/EthLib/pull/4630)).
+  - `Blocks.ErrorsMeet` (`Execution/Proofs/Blocks/Failures.lean`) and its lemmas `ok`, `pure`, `error`, `throw`, `bind`, `map` and `mapError` move to `Base.ErrorsMeet`, with the same bodies.
+    `ErrorsMeet.aborted`, `ErrorsMeet.onBlock` and `errorsMeet_firstFailure` stay in `Blocks`, and every theorem keeps its statement.
+  - `Evm.Logic.NoAbort` (`Execution/Proofs/Evm/Logic/NoAbort.lean`) now unfolds to `Base.ErrorsMeet`, and holds of the same results.
+  - `Evm.NoMiss` (`Execution/Proofs/Evm/Call/MissingCode.lean`) is new as a public definition, through `Base.ErrorsMeet`, and replaces a private copy of the transaction proofs.
+  Migration: open `EthLib.Base` to name `ErrorsMeet`, and import `EthLib.Base.Proofs.ErrorsMeet`.
+
+- In Lean, the VRF proofs share their cache lemmas with the SSZ proofs, and name a collision of any hash ([#4575](https://github.com/ethereum/EthLib/issues/4575)).
+  - `Merkle.RandomOracle.climbPairs_of_replay` (`Cryptography/Proofs/Merkle/RandomOracle/Basic.lean`) is new: a climb that a partial table replays to the end meets a property on every pair it hashes.
+    `Vrf.cached_of_climb` and the branch bound of SSZ now follow from it.
+  - `Merkle.RandomOracle.collision_of_cached` (`Cryptography/Proofs/Merkle/RandomOracle/Collision.lean`) is new: two different cached inputs with one answer of a table are a collision of the cache.
+    `Ssz.RandomOracle.collision_of_cached` keeps its statement and follows from it.
+  - `Vrf.IsHashCollisionWith` (`Cryptography/Proofs/Vrf/Verify.lean`) is new, and `Vrf.IsHashCollision` is now that predicate with Keccak-256.
+    `nodeInput_collision_of_valid`, `findHashCollisionWith_valid` and `secret_unique_of_climb_eq` state their collision with it, in place of a written-out conjunction with the same meaning.
+  - `Vrf.HashSpec`, `Vrf.oracleHash` and `Vrf.natCard_digest` move to the new module `Cryptography/Proofs/Vrf/Oracle.lean`.
+    The uniqueness proof imports it, in place of the whole unpredictability proof.
+  - `Merkle.isTotalQueryBound_climb` (`Cryptography/Proofs/Merkle/QueryBound.lean`) is new: a climb makes at most one query per sibling in all.
+    It replaces `Sphincs.Unforgeability.climb_isTotalQueryBound`, which is removed, and follows from the climb bound of a predicate.
+    `Merkle.RandomOracle.climb_queryBound` keeps its statement and follows from it.
+  - `Merkle.isQueryBoundP_climb_zero` (`Cryptography/Proofs/Merkle/QueryBound.lean`) replaces `climb_isQueryBoundP_zero` (`Cryptography/Proofs/QueryAvoidance.lean`), which is removed: a climb makes no query that `p` accepts when no node hash makes one.
+  Migration: import `EthLib.Cryptography.Proofs.Vrf.Oracle` for the hash oracle, unfold `IsHashCollisionWith` where a proof reads the conjunction, and use the Merkle climb bound with the hash as a named argument.
+
+- In Lean and Python, the column sidecars of a block with no blob are now none, in place of one sidecar with an empty column per column ([#4149](https://github.com/ethereum/EthLib/issues/4149)).
+  The check of a sidecar rejects one with no blob, so the empty sidecars were never valid.
+  This holds at Fulu and from Gloas, from a block or from one of its sidecars.
+  `getDataColumnSidecars_spec` (`Consensus/Proofs/DataAvailability/Column.lean`) now counts no sidecar when there is no row.
+  Migration: expect an empty list for a block with no blob.
+
+- In Lean, a builder signs its bid at the fork version that the configuration gives to the epoch of the bid's slot ([#3514](https://github.com/ethereum/EthLib/issues/3514)).
+  - `Consensus.executionPayloadBidSigningRoot` (`Consensus/HonestBuilder.lean`) is new, and `getExecutionPayloadBidSignature` signs it from a state of any fork.
+  - `Consensus.builderSigningRoot` (`Consensus/Transition/Payload.lean`) loses its optional epoch and always takes the current epoch of the state.
+  - `getDomain_currentEpoch` is removed, and `builderSigningRoot_bid` now takes the root of a bid signed on the chain of a scheduled state.
+  - `verifyExecutionPayloadBidSignature_of_sign` and `RemoteSigningApi.getExecutionPayloadBidSignature_eq_of_requestSigningRoot` take a state of any fork and the version of the schedule, in place of the current epoch.
+  Migration: give the signing state the same genesis validators root as the checking state.
+  The checking state gives its current epoch, and fork info gives the bid's epoch, the version that the configuration gives the bid's epoch.
+- In Lean, the exports read the code of an account through the state's own read, `State.getCode` ([#4604](https://github.com/ethereum/EthLib/issues/4604)).
+  A state whose account names a code that the state lacks was exported with an empty code, and now gives the error of a missing code.
+  `stateEntry` and `stateEntryItem` (`Execution/Exports/Transactions.lean`) and `accountsItem` (`Execution/Exports/Transition.lean`) return an `Except StateError`.
+  A state read from the bindings stores each code under its hash, and blocks and transactions keep every code (`stateTransition_hasCodes`, `processTransaction_hasCodes`).
+  So the error is not expected through the Python bindings, whose results do not change.
+  Migration: bind the result of these three functions, or match on it.
+- In Lean, three lemmas about byte arrays and vectors move to `Base/Proofs/Bytes.lean`, where every codec proof can use them ([#4638](https://github.com/ethereum/EthLib/pull/4638)).
+  - `Rlp.byteArray_eq_of_toList` (`Serialization/Proofs/Rlp/Bytes.lean`) is now `Base.byteArray_eq_of_toList`, and its two byte arrays are implicit.
+  - `Proofs.Gossip.Topic.vector_four` (`Networking/Proofs/Gossip/Topic.lean`) is now `Base.vector_four`, for a vector of any type.
+  - `Proofs.ReqResp.Encoding.mk_toList` (`Networking/Proofs/ReqResp/Encoding.lean`) is now `Base.byteArray_mk_toArray_toList`.
+  Migration: import `EthLib.Base.Proofs.Bytes` and use the new names; pass the proof of equal lists alone to `byteArray_eq_of_toList`.
+- `engine_forkchoiceUpdated` accepts a request whose parameters omit the payload attributes, and reads it as one with `null` attributes, since the OpenRPC description makes them optional ([#4620](https://github.com/ethereum/EthLib/issues/4620)).
+  `forkchoiceUpdatedParams_eq_ok_iff` (`Engine/Proofs/ForkchoiceUpdated.lean`) states the new case.
+  A request with a wrong count of parameters now names the counts `1 or 2`, or from version 4 `1 to 3`, in its `-32602` message.
+
+- In Lean, the query bounds of a Merkle node, a build and the siblings of a path are stated once, in `Cryptography/Proofs/Merkle/QueryBound.lean`, for leaves of any cost `c` ([#4575](https://github.com/ethereum/EthLib/issues/4575)).
+  - `Merkle.isQueryBoundP_node`, `Merkle.isQueryBoundP_build` and `Merkle.isQueryBoundP_siblings` are new.
+  - `Xmss.isQueryBoundP_merkleNode`, `Xmss.isQueryBoundP_merkleBuild` and `Xmss.isQueryBoundP_merkleSiblings` are removed, since the new theorems state them word for word.
+  - `Vrf.isQueryBoundP_node` and `Vrf.isQueryBoundP_siblings` are removed: they follow from the new theorems at `c = 1`.
+    The new bounds read `2^l * (c + 1)` in place of `2^(l + 1)`.
+  Migration: use the theorems of the Merkle namespace, with `c := 1` and a rewrite by `pow_succ` for the old form of the VRF bounds.
+
+- In Lean, the second proposer duties answer gives the dependent root at slot `start(epoch) - 1` up to the Fulu fork epoch ([#4603](https://github.com/ethereum/EthLib/issues/4603)).
+  - `Consensus.BeaconApi.dutiesResponse` (`Consensus/BeaconApi/Duties.lean`) takes the root at `start(epoch - 1) - 1` only after `FULU_FORK_EPOCH`.
+    The upgrade to Fulu draws the proposers of the fork epoch after the epoch before it, so the blocks of that epoch can still change them.
+  - `dutiesResponse_proposerV2_of_le_fulu` and `dutiesResponse_proposerV2_of_fulu_lt` (`Consensus/Proofs/BeaconApi/Duties.lean`) are new: the root of each side of the fork epoch.
+  - A caller that passes a state from Fulu with a configuration that does not schedule Fulu, such as the minimal one, now gets the root at `start(epoch) - 1` for the current epoch, and code 400 for the next one.
+    It should set `FULU_FORK_EPOCH`.
+- In Lean, a Gloas builder keeps the first preferences of a proposer for a slot, and may refuse preferences from a key that is not the proposer of the slot ([#3860](https://github.com/ethereum/EthLib/issues/3860)).
+  This follows `ethereum/builder-specs` at `0911550`.
+  - `BuilderApi.preferencesFailures` and `BuilderApi.PreferencesStore.submit` (`Consensus/BuilderApi/RequestAuth.lean`) take the key of the proposer that the builder knows for each slot, before the key of the path.
+    `BuilderApi.lookaheadProposerKey` reads it from the lookahead of a Gloas state, and `fun _ => none` skips the check.
+  - `BuilderApi.AuthFailure.notProposer` is a new failure, with status 400.
+  - `PreferencesStore.submit` leaves the store as it was when it already keeps preferences for the key and slot.
+    `PreferencesStore.submit_of_accepted` (`Consensus/Proofs/BuilderApi/RequestAuth.lean`) takes that as a hypothesis.
+    `PreferencesStore.submit_of_kept` says that such a submission leaves the store as it was.
+  - `notProposer_mem_iff` says when the new failure fires, `notProposer_mem_of_lookahead` applies it to the lookahead, and `PreferencesStore.submit_of_notProposer` says that the store is then unchanged.
+  - `RelayApi.lookaheadSchedule` and `RelayApi.validatorPubkey?` move to `Consensus/Accessors.lean`, as `lookaheadSchedule` and `validatorPubkey?`, with the same bodies.
+  - In Python, `builder_preferences_failures` takes the SSZ bytes of the builder's state as an optional `state`, and lists `not_proposer` among its failures.
+  Migration: pass `fun _ => none` to keep the earlier checks, and drop the `RelayApi.` prefix of the two moved definitions.
+- In Lean, the gossip check of a voluntary exit ignores an exit whose validator has a pending partial withdrawal, from Electra ([#4171](https://github.com/ethereum/EthLib/issues/4171)).
+  - `Consensus.pendingBalanceToWithdraw` (`Consensus/Transition/Operations.lean`) is new: the balance a validator has queued to withdraw, 0 before Electra.
+  - `Consensus.checkNoPendingWithdrawal` now unfolds to a check of that balance, and gives the same result at every fork.
+  - `Consensus.validateVoluntaryExit` checks that balance after the activity checks and before the signature.
+    `validateVoluntaryExit_eq`, `validateVoluntaryExit_ignored` and `validateVoluntaryExit_eq_accept` take the computed balance as a hypothesis, and state the new check.
+  Migration: pass the pending balance of the validator to those three theorems.
+- In Lean, the gossip group ID of partial columns starts with the version byte 1 from Gloas, and 0 before ([#4602](https://github.com/ethereum/EthLib/pull/4602)).
+  - `PartialDataColumnGroupID.version` (`Consensus/DataAvailability/Column.lean`) is new, and `toGroupId` and `ofGroupId` unfold to it.
+  - `ofGroupId_version` takes a first byte other than the version of the fork.
+    `version_of_lt_glamsterdam` and `version_of_glamsterdam_le` give that version on each side of Gloas.
+  Migration: write and read the group ID with the version of the fork.
+- In Lean, `Ssz.wellFormed_vector_element` (`Serialization/Proofs/Ssz/Type/Legality.lean`) is removed ([#4621](https://github.com/ethereum/EthLib/pull/4621)).
+  It stated the same fact as `Ssz.wellFormed_vector` (`Serialization/Proofs/Ssz/Codec/Admits.lean`), with the same hypothesis and conclusion.
+  Migration: use `Ssz.wellFormed_vector`, from `EthLib.Serialization.Proofs.Ssz.Codec.Admits`.
+- In Lean, the VRF specification defines its tree and its check once, with the hash as an argument in any monad ([#4575](https://github.com/ethereum/EthLib/issues/4575)).
+  The Keccak-256 forms are their instances in the identity monad, so the proofs no longer restate them.
+  - `Vrf.nodeWith` (`Cryptography/Vrf/Hash.lean`), `Vrf.leafWith`, `Vrf.rootWith` and `Vrf.openingWith` (`Cryptography/Vrf/KeyGen.lean`), and `Vrf.verifyWith` (`Cryptography/Vrf/Verify.lean`) move from the proofs into the specification.
+    `treeHash`, `root`, `opening` and `verify` are now these forms with Keccak-256, so they unfold to them.
+  - `Vrf.leaves` is removed: leaf `j` is `leafWith` with Keccak-256.
+  - The theorems `Vrf.rootWith_hash`, `Vrf.openingWith_hash` and `Vrf.verifyWith_hash` are removed, since each restated a definition.
+  Migration: use the forms with the hash as an argument, at `Id` with `fun x => pure (hash x)`, where the removed names were used.
+- In Lean, the genesis rule takes the fact that its fork comes before Altair ([#3612](https://github.com/ethereum/EthLib/issues/3612)).
+  - `initializeBeaconStateFromEth1` (`Consensus/Transition/Genesis.lean`) takes a last argument `before : fork < .altair`, and no longer throws `forkNotYetSpecified` at Altair and later forks.
+    Its value at Phase 0 is the same.
+  - `Genesis` (`Consensus/Proofs/Transition/Trace.lean`) holds that proof beside the block hash, the time and the deposits, and `Genesis.before` reads it.
+  - `initializeBeaconStateFromEth1_ok` and `initializeBeaconStateFromEth1_frame` no longer return the proof, and `initializeBeaconStateFromEth1_invariant` states only the invariant.
+    Each theorem about the genesis rule takes the proof as an implicit argument.
+  - In Python, `initialize_genesis` at Altair or a later fork now raises an error of code 0, `no genesis at <fork>`, in place of the transition error of code 1.
+    The epoch-step export answers a step that a fork removes the same way.
+  Migration: pass the proof to the genesis rule, and read it from a `Genesis` hypothesis with `Genesis.before`.
+- In Lean, SSZ holds its bytes as a `ByteArray` in place of an `Array UInt8` ([#4560](https://github.com/ethereum/EthLib/pull/4560)).
+  A node of a Merkle tree, an encoding and a byte value of SSZ now have the type that SHA-256 and the bindings use.
+  So no step copies them from one type to the other.
+  - `Ssz.Bytes` (`Serialization/Ssz/Error.lean`) is `ByteArray`, and `Ssz.Value.bytes` holds a `ByteArray`.
+    A parent node is the hash of its two children joined, with no conversion.
+  - The typed container codec (`Serialization/Ssz/Typed/Container.lean`) reads and writes with the untyped `structSlots`, `bodyStarts` and `assemble`.
+    Its copies over `ByteArray` are removed: `ByteSlot`, `ByteSlot.toSlot`, `readByteSlots`, `byteStructSlots`, `byteBodyStarts`, `byteBodies`, `byteHeadWidthFrom`, `byteBodyWidthFrom`, `byteHeadOfFrom`, `byteBodiesOfFrom` and `assembleBytes`.
+    `pushUintBytes` is removed too, and a typed integer is written by `uintBytes`.
+  - `offsetBodies` and `fillSlots` (`Serialization/Ssz/Codec/Deserialize.lean`) are new, and `structBodies` fills the slots from `offsetBodies`.
+    `takeSlots` moves to the proof module `Serialization/Proofs/Ssz/Codec/StructBodies.lean`, and `structBodies_eq_takeSlots` states the previous body of `structBodies`.
+  - The theorems `readByteSlots_eq`, `byteStructSlots_eq`, `byteBodyStarts_eq`, `assembleBytes_eq`, `structBodies_eq` and `SszType.data_pushUintBytes` are removed with the copies they tied to the untyped codec.
+    `byteStructSlots_length` is now `structSlots_length`, and `byteBodies_length` is now `offsetBodies_length`.
+  - A theorem about SSZ bytes changes its statement only where the type forces it, and says the same of the same bytes.
+    A byte literal `#[b]` is written `⟨#[b]⟩`, and a 32-byte vector met as bytes is wrapped as `⟨v.toArray⟩`.
+    A conversion `ByteArray.mk` or `.data` that is no longer needed is dropped.
+  - The Python bindings and their results do not change.
+  Migration: build SSZ bytes with `ByteArray.mk` or `.empty`, read their array with `.data`, and use the untyped codec in place of the removed copies.
+- In Lean, the versioned hashes of a list of transactions are defined from those of one transaction ([#4565](https://github.com/ethereum/EthLib/issues/4565)).
+  - `Execution.Transactions.Transaction.blobHashes` moves from `Execution/Transactions/Process.lean` to `Execution/Transactions/Types.lean`, beside the transaction type, with the same name and body.
+  - `Engine.ExecutionPayload.blobVersionedHashes` (`Engine/Block.lean`) now unfolds to `List.flatMap` of `Transaction.blobHashes`, instead of its own match on the kind of each transaction.
+    It gives the same list for every input, and every theorem keeps its statement.
+  No caller needs to change.
+- In Lean, the error of a wrong versioned hash in the point evaluation precompile carries `Cryptography.Kzg.VersionedHash` ([#4564](https://github.com/ethereum/EthLib/issues/4564)).
+  - `Evm.Precompiles.PointEvaluation.PointEvaluationError.versionedHashMismatch` takes two versioned hashes in place of two `Bytes32`.
+    Its message, its code and the Python error stay the same.
+  - `Evm.Precompiles.PointEvaluation.pointEvaluation` wraps bytes 0 to 31 of the call data once, after the length and gas checks, and compares two versioned hashes.
+    `pointEvaluation_eq_ok_iff` keeps its statement, and a proof that unfolds the call now compares two versioned hashes.
+  Migration: build the error with `VersionedHash.mk`, and read its bytes with `.bytes`.
+- In Lean, `engine_getBlobs` types its versioned hashes as `Cryptography.Kzg.VersionedHash` ([#4563](https://github.com/ethereum/EthLib/issues/4563)).
+  - `Engine.BlobPool.lookup` takes a versioned hash.
+    `Engine.getBlobsParams` returns versioned hashes, read with `Execution.Rpc.versionedHash`, and `Engine.getBlobsParamsJson` writes them with `Execution.Rpc.versionedHashJson`.
+    `Engine.getBlobsV1` to `Engine.getBlobsV4` take a list of versioned hashes.
+  - The 21 theorems of `Engine/Proofs/GetBlobs.lean` that take the hashes of a request take them as versioned hashes, with the same claims.
+    In `getBlobsParams_eq_ok_iff`, each hash `h` is written as the hex string of `h.bytes`.
+  - `Execution.Rpc.versionedHash_eq_ok_iff` and `Execution.Rpc.array_versionedHash_eq_ok_iff` (`Execution/Proofs/Rpc/Json.lean`) are new: a versioned hash, or a list of them, decodes exactly from its hex strings.
+  - The C export keeps taking each pool entry's hash as 32 bytes, and its answers and error messages stay the same.
+    `Engine.Exports.pooledOf` (`Engine/Exports/GetBlobs.lean`) returns that hash as a versioned hash.
+  Migration: wrap 32 bytes with `VersionedHash.mk`, and read them back with `.bytes`.
+- In Lean, one reader and one writer of a versioned hash serve the JSON forms of the RPC and the Engine APIs ([#4562](https://github.com/ethereum/EthLib/issues/4562)).
+  - `Execution.Rpc.versionedHash` and `Execution.Rpc.versionedHashJson` (`Execution/Rpc/Json.lean`) are new.
+    `versionedHash_versionedHashJson` and `array_versionedHash_listJson` (`Execution/Proofs/Rpc/Json.lean`) say that the reader reads back what the writer writes.
+  - `Rpc.transactionOfJson`, `Rpc.transactionFields`, `Rpc.genericTransaction`, `Engine.newPayloadParams` and `Engine.newPayloadParamsJson` unfold to them.
+    Each accepts and writes the same JSON as before, with the same error messages.
+- In Lean, `StaticStep` (`Execution/Proofs/Evm/Instructions/Static.lean`) has a new last field `accesses` ([#4568](https://github.com/ethereum/EthLib/pull/4568)).
+  It says that the step keeps every accessed address and storage key of the substate, as `Substate.AccessesLe`.
+  An anonymous constructor of a step that keeps the substate adds `.refl _` at the end.
+
+- In Lean, the chain view of the RPC export runs each block from Paris on the last 255 recent blocks ([#4553](https://github.com/ethereum/EthLib/pull/4553)).
+  So building it costs time linear in its blocks.
+  - `Rpc.Exports.nextRecord` (`Execution/Exports/Rpc.lean`) takes the recent blocks as an array, and `Rpc.Exports.recordsOf` is new: the loop of the view over its blocks.
+    `recordsOf_eq` (`Execution/Proofs/Exports/Rpc.lean`) says that it gives the records of the old loop, which ran each block on all the records before it.
+  - `runBody_drop_recent` and `stateTransition_drop_recent` (`Execution/Proofs/Blocks/History.lean`) are new.
+    The body reads only the last 255 recent blocks of its chain, and from Paris so does the transition.
+- In Lean, more duplicate checks use the one-pass scan `Base.firstRepeated` ([#4545](https://github.com/ethereum/EthLib/pull/4545)).
+  It replaces the test of `List.Nodup` and the comparison of a list with its repeats removed.
+  - They cover the key shares of a QUIC TLS ClientHello and the indices of an SSZ multiproof request.
+    They also cover the stores of the Engine exports, and the slots, overrides and addresses of the RPC requests.
+    Each gives the same answer on every input.
+  - `Base.isNone_firstRepeated` (`Base/Proofs/List.lean`) is new: the scan finds nothing exactly when the list has no repeat, as a test.
+    Unfolding `Ssz.rejectRelated` now gives the scan; `rejectRelated_eq` keeps its statement.
+- In Lean, the configuration check of a TLS endpoint uses the one-pass scan `Base.firstRepeated` ([#4558](https://github.com/ethereum/EthLib/pull/4558)).
+  - `Quic.Tls.Handshake.validateConfig` (`Networking/Quic/Tls/Handshake.lean`) unfolds to the scan instead of `List.Nodup`, on the groups, the initial shares and the groups of the ephemeral keys.
+    It gives the same answer on every configuration.
+- In Lean, a send of Transactions in an eth session checks its hashes with a search tree ([#4559](https://github.com/ethereum/EthLib/pull/4559)).
+  - `Execution.Network.sendEth` (`Execution/Network/Session.lean`) unfolds to the scan `Base.firstRepeated` and lookups in a `Std.TreeSet` of the hashes sent and received, instead of `List.Nodup` and list membership.
+    It gives the same verdict on every input, and the session keeps its lists.
+- In Lean, two duplicate checks of the consensus APIs use the one-pass scan `Base.firstRepeated` ([#4518](https://github.com/ethereum/EthLib/issues/4518)).
+  - `Consensus.BeaconApi.ptcDuties` (`Consensus/BeaconApi/Duties.lean`) unfolds to the scan on the requested indices, instead of `List.Nodup`.
+  - `Consensus.KeymanagerApi.BuilderConfigSetting.refusal` (`Consensus/KeymanagerApi/BuilderConfig.lean`) scans each entry as the bytes of its URL, then its data, instead of `List.Nodup`.
+  Each gives the same answer on every input, and every theorem keeps its statement.
+- In Lean, the container lookup of the SSZ and JSON exports builds only the codec and the spelling of the container it names ([#4566](https://github.com/ethereum/EthLib/issues/4566)).
+  - `Consensus.Exports.containerOf` (`Consensus/Exports/Ssz.lean`) matches on the name, the preset and the fork together, and each arm binds the preset and the fork it reads.
+    The compiler no longer lifts every codec to the top of the function, so a call no longer builds them all.
+    It gives the same container for every name, preset and fork, and its type is unchanged.
+- In Lean, the batch check of cells finds and removes repeated commitments in one pass with a search tree ([#4571](https://github.com/ethereum/EthLib/pull/4571)).
+  - `Base.firstRepeatIndex`, `Base.firstRepeatIndexFrom` and `Base.distinctPlaces` (`Base/List.lean`) are new: the place of the first element that equals an earlier one, and the distinct elements of a list with the place of each element among them.
+    `firstRepeatIndex_eq_find?`, `firstRepeatIndex_eq_none_iff` and `distinctPlaces_eq_foldl` (`Base/Proofs/List.lean`) relate them to the searches they replace.
+  - `Kzg.KZGCommitment` (`Cryptography/Kzg/Types.lean`) has an `Ord` instance that compares its bytes, with its laws in `Cryptography/Proofs/Kzg/Cells.lean`.
+  - `Kzg.verifyCellKzgProofBatchImpl` unfolds to `Base.firstRepeatIndex`, and `Kzg.verifyCellKzgProofBatch` validates its commitments with a map, then unfolds to `Base.distinctPlaces`.
+    Both give the same result and the same error on every input, and every theorem keeps its statement.
+- In Lean, the chain theorem charges the rewards that blocks pay for attestations once in each epoch, not in each block ([#2601](https://github.com/ethereum/EthLib/issues/2601)).
+  So `chainConditions_mainnet` and the mainnet corollaries of `ChainRun.lean` cover 64 epochs, up from 16.
+  - `BlockStep` (`Totality/ChainHolds.lean`) has a new field `rewards`, the rise of the supply in each epoch from those rewards.
+  - `RunStart.afterChain` is new: the start raised by some blocks and by the rewards of the epochs so far and the current one.
+    `ChainConditions.run`, `ChainHolds.bounded` and the conclusion of `ChainHolds.run` read it in place of `RunStart.afterBlocks`, and `ChainConditions.at` takes the number of epochs.
+    `RunStart.afterChain_zero`, `RunBounded.raiseSupply` and `RunBounded.afterChain_mono` are new.
+  - `ChainHolds.rewarded` is a new field: times 448, the supply is within the bound of the past epochs plus the weight of the flags.
+  - `BlockStep.Covers.supply` charges `syncRewardBound` in place of `blockRewardBound`, and the new field `Covers.rewards` asks `flagWeightBound ≤ 448 * rewards`.
+  - `blockRewardBound` (`Totality/SupplyBlock.lean`) is removed.
+    `flagWeightBound`, `syncRewardBound` and `Preset.largestPerIncrement` are new, and `blockRewardCap_le` bounds the cap by `flagWeightBound / 448 + syncRewardBound`.
+    `blockPerIncrement_le`, `flagRewardWeight_le_flagWeightBound` and `syncRewardCap_le` are new.
+  - `BlockStep.mainnet` charges 25,000 ETH a block and 71,000 ETH an epoch.
+- In Lean, the JSON-RPC reader of hex bytes, `JsonRpc.bytesOf` (`Serialization/JsonRpc.lean`), reads the digits with `Base.hexBytes?`, with the same bytes and the same error messages ([#4488](https://github.com/ethereum/EthLib/issues/4488)).
+  - Unfolding it now gives a check of the parity, a check that no character is an uppercase letter when uppercase is refused, and `Base.hexBytes?`, not a loop over indices; its public lemmas keep their statements.
+  - `Base.hexBytesFrom?_eq_some_iff` (`Base/Proofs/Hex.lean`) is new: decoding succeeds exactly on pairs of hex digits, and appends the byte of each pair.
+- In Lean, the DER reader reads each value at an offset of the input ([#4533](https://github.com/ethereum/EthLib/pull/4533)).
+  So the components of a SEQUENCE cost time linear in its size.
+  - `Der.readAt` (`Serialization/Der.lean`) is new: it reads the value that starts at an offset and gives the offset after it.
+    `Der.read` is now `readAt` at offset 0, and cuts the bytes after the value with one copy.
+    `read_eq` (`Serialization/Proofs/Der.lean`) states the old body on the input's list of octets; rewrite with it where a proof unfolded `read`.
+  - `Der.children.goAt` is new: it reads the siblings from an offset.
+    `Der.children.go` is now `goAt` at offset 0.
+    `children_go_zero` and `children_go_succ` give its old equations.
+    Every DER theorem keeps its statement.
+- In Lean, the discv5 node state reads its lists of pairs with core `List.lookup` ([#4489](https://github.com/ethereum/EthLib/issues/4489)).
+  - `Discv5.lookupKey` is removed; write `pairs.lookup key`, which gives the same value on every list, since the keys compare by their decidable equality.
+  - `lookupKey_setKey_self`, `lookupKey_setKey_of_ne`, `lookupKey_eraseKey_self` and `lookupKey_challenges_receiveHandshake` (`Networking/Proofs/Discv5/Node.lean`) are `lookup_setKey_self`, `lookup_setKey_of_ne`, `lookup_eraseKey_self` and `lookup_challenges_receiveHandshake`, stated with `List.lookup`.
+- In Lean, the duplicate scan and the trie setter keep their sets in search trees, not hash tables ([#4530](https://github.com/ethereum/EthLib/pull/4530)).
+  So no definition of the specification reaches an opaque hash or the platform's word size.
+  - `Base.firstRepeated` (`Base/List.lean`) takes `[Ord α]` instead of `[BEq α] [Hashable α]`, and gives the same value on every list.
+    `firstRepeated_nil` takes `[Ord α]` instead of `[BEq α] [Hashable α]`.
+    `firstRepeated_cons`, `firstRepeated_eq_none_iff` and `two_le_count_of_firstRepeated` (`Base/Proofs/List.lean`) take `[Ord α] [Std.TransOrd α] [Std.LawfulEqOrd α]` instead of `[Hashable α]`, and keep their conclusions.
+  - `Trie.setPairStep` and `Trie.logEntries` (`Execution/Trie/Root.lean`) take a `Std.TreeMap` of the keys instead of a `Std.HashMap`.
+    `Trie.setPairs` gives the same entries.
+- In Lean, the shared byte reader builds the error of a truncated field only when a field is truncated ([#4526](https://github.com/ethereum/EthLib/pull/4526)).
+  So the QUIC, TLS and protobuf readers cost their fields, not the input.
+  - `Encoding.ByteReader.bytes`, `vector` and `uint` (`Networking/Encoding/ByteReader.lean`) take the error as a function of the count of bytes left.
+    Pass the constructor without its last argument, such as `.truncated n` instead of `.truncated n input.length`.
+    Their lemmas take that function.
+    `bytes_error_iff` (`Networking/Proofs/Encoding/ByteReader.lean`) says that a read fails exactly when the input is shorter than the field.
+    The error is then that of the bytes left.
+  - The readers of `Quic.Tls.Wire`, `Quic.Wire` and `Protobuf.readFixed` give the same values and errors as before.
+- In Lean, the trie has one setter, `Trie.setPairs` (`Execution/Trie/Root.lean`) ([#4525](https://github.com/ethereum/EthLib/pull/4525)).
+  It sets a list of pairs in order, in one pass, with a table of the keys.
+  `Trie.setPairStep` and `Trie.logEntries`, its step and its reading of the table, are now public.
+  - `Trie.trieSet` is removed, with `trieGet_trieSet_self`, `trieGet_trieSet_of_ne`, `nodup_keys_trieSet` and `secured_trieSet`; build the trie as `⟨secured, setPairs pairs⟩`.
+    `trieGet_setPairs` (`Execution/Proofs/Trie/Root.lean`) says that each key has the value of its last pair, or the empty value.
+    `size_ne_zero_of_mem_setPairs` says that the trie holds no empty value.
+  - `nodup_keys_foldl_trieSet`, `verifyProof_sound_foldl_trieSet` and `root_binding_foldl_trieSet` are `nodup_keys_setPairs`, `verifyProof_sound_setPairs` and `root_binding_setPairs`, stated on `⟨secured, setPairs pairs⟩` instead of the fold of `trieSet`.
+    `secured_foldl_trieSet` is removed, since that trie holds its flag by definition.
+  - `Trie.Exports.setPairs` and `Trie.Exports.setPairs_eq` are removed; the root export calls `Trie.setPairs`.
+    `root_of_rootExport` and `rootExport_of_root` (`Execution/Proofs/Exports/Trie.lean`) are stated on `⟨secured != 0, setPairs pairs⟩`.
+- In Lean, the shared chain of `k P + l Q` reads the bits of its scalars through two functions, `Jacobian.Coords.mulAddBits` (`Cryptography/Jacobian.lean`), and P-256 computes its sum on it ([#4487](https://github.com/ethereum/EthLib/issues/4487)).
+  - `Jacobian.Coords.mulAddAux` is `mulAddBits` on `Nat.testBit`, with the same value on every input; unfolding it gives `mulAddBits`.
+    `Jacobian.Coords.mulAddAux_succ` (`Cryptography/Proofs/Jacobian.lean`) states its old recursion; rewrite with it where a proof unfolded the old body.
+  - `Secp256r1.Point.mulAdd.chain` and `Secp256r1.Point.mulAddAux_eq` are removed.
+    `Word64.Raw.bit_eq_testBit` (`Cryptography/Proofs/Word64.lean`) says that the bits of four words are the bits of their value.
+- In Lean, the SEC 1 encoding of coordinates is one codec in `Cryptography/ShortWeierstrass/Encoding.lean`: `ShortWeierstrass.coordinateToBytes`, `ShortWeierstrass.coordinateOfBytes?` and `ShortWeierstrass.encodeUncompressed` ([#4524](https://github.com/ethereum/EthLib/pull/4524)).
+  - `Secp256k1.Fp.toBytes`, `Secp256r1.Fp.toBytes` and `Secp256r1.encodeUncompressed` are now abbreviations of them, so they unfold to the shared codec, with the same bytes.
+  - `Secp256k1.Fp.ofBytes`, `Secp256r1.decodeUncompressed`, `Secp256r1.Exports.readCoordinate` and the affine case of `Secp256k1.Point.encodeUncompressed` call the shared codec, with the same values and errors.
+    Unfolding them gives the shared functions; `Secp256k1.encodeUncompressed_coords` (`Cryptography/Proofs/Secp256k1/Encoding.lean`) restates the shared form with the curve's coordinate bytes.
+  - `ShortWeierstrass.length_coordinateToBytes` gives the length of 32 bytes; use it where a proof unfolded `Secp256r1.Fp.toBytes` to get the length.
+    `ShortWeierstrass.ofBE_coordinateToBytes`, `coordinateOfBytes?_coordinateToBytes` and `coordinateToBytes_of_coordinateOfBytes?` (`Cryptography/Proofs/ShortWeierstrass/Encoding.lean`) are the round trips, and every public statement is unchanged.
+- In Lean, the duplicate checks of TLS extensions share one linear scan, `Base.firstRepeated` (`Base/List.lean`), the first element of a list that occurs again later ([#4517](https://github.com/ethereum/EthLib/pull/4517)).
+  - `Libp2p.Tls.firstRepeated` is removed; use `Base.firstRepeated`, which gives the same value on every list.
+    `Base.firstRepeated_nil` and `Base.firstRepeated_cons` state its old recursion, `Base.firstRepeated_eq_none_iff` relates it to `List.Nodup`, and `Base.two_le_count_of_firstRepeated` says what it finds occurs twice (`Base/Proofs/List.lean`).
+  - `Quic.Tls.uniqueExtensions` and `Quic.Tls.repeatedKind` unfold to the scan, not to `eraseDups` and a recursion.
+    `Quic.Tls.uniqueExtensions_eq_true_iff`, `Quic.Tls.repeatedKind_nil` and `Quic.Tls.repeatedKind_cons` (`Networking/Proofs/Quic/Tls/Messages.lean`) state their old meaning; rewrite with them where a proof unfolded the old bodies.
+  - The certificate reader of `Libp2p.Tls` matches on the scan instead of checking `List.Nodup` on the OIDs; `Proofs.Libp2p.Tls.nodup_iff_nodup_bytes` (`Networking/Proofs/Libp2p/Tls.lean`) relates the two.
+- In Lean, square and multiply is one function, `Base.powBits` (`Base/Pow.lean`), over any product with a one ([#4519](https://github.com/ethereum/EthLib/pull/4519)).
+  - `Secp256k1.Fin.powBits` and `AltBn128.Fp12.powBits` are removed; `Base.powBits` computes the same values.
+  - `Secp256k1.Fin.powBits_eq_pow` and `AltBn128.Fp12.powBits_eq_pow` are `Base.powBits_eq_pow`, for a `Monoid`; on `Fin m`, open `Fin.CommRing`, or use `Base.map_powBits` with a ring map, as `Fp.toZMod_pow` now does.
+    `Secp256k1.Fin.powBits_mod` is `Base.powBits_mod`, without its `NeZero` hypothesis (`Base/Proofs/Pow.lean`).
+    `Base.map_powBits` says that a map which keeps products and one sends square and multiply to the power, for an exponent below `2^fuel`.
+  - `Secp256k1.Fp.pow` and `Secp256k1.Fn.pow` unfold to `Base.powBits 256`, so `Secp256k1.Fp.pow_eq_powBits` is removed, with the unused `toZMod_powBits` of `Secp256r1.Fp`, `Secp256r1.Fn` and `AltBn128.Fp`.
+    `Fp.toZMod_pow` and `Fn.toZMod_pow` of secp256k1 keep their statements.
+  - The instance `One Fp12` moves from the proofs to `Cryptography/AltBn128/Pairing.lean`.
+- In Lean, ECDSA verification and the signing loop of SEC 1 v2 are written once, over `Ecdsa.Curve` (`Cryptography/Ecdsa/Curve.lean`), and secp256k1 and P-256 are its instances ([#4506](https://github.com/ethereum/EthLib/pull/4506)).
+  - `Secp256k1.Ecdsa.verify` and `Secp256r1.verify` call `Ecdsa.Curve.verify` on the curve's `domain`, with the same values.
+    Unfold `Ecdsa.Curve.verify` too where a proof unfolded the old body of `verify`.
+  - `Secp256k1.Ecdsa.signWith` and `Secp256r1.Ecdsa.signWith` call `Ecdsa.Curve.signWith`, with the same values; they are no longer recursive, so their equation lemmas change.
+    Unfold `Ecdsa.Curve.signWith` too where a proof unfolded the old loop; `signWith_spec` of both curves keeps its statement.
+  - `Ecdsa.Curve.Laws` (`Cryptography/Proofs/Ecdsa/Curve.lean`) holds what the proofs need of a curve, and the theorems of ECDSA are proved once for it.
+    `Secp256k1.Ecdsa.laws` and `Secp256r1.laws` prove it, and every public theorem of both curves keeps its statement.
+  - `open Ecdsa` inside a namespace under `EthLib.Cryptography.Secp256k1` now gets the warning "Ambiguous namespace `Ecdsa`", since `EthLib.Cryptography.Ecdsa` exists too; write `open Secp256k1.Ecdsa`.
+- In Lean, `Rpc.Tracer.record` (`Execution/Rpc/Trace.lean`) updates the slots it has seen only when the configuration prints the storage ([#4510](https://github.com/ethereum/EthLib/pull/4510)).
+  - Unfolding it now gives a test of `disableStorage` before the seen slots are updated; the entries and the refunds of every trace are unchanged.
+    `record_slots_of_disableStorage` and `record_logs_of_disableStorage` (`Execution/Proofs/Rpc/Trace.lean`) state what holds with the storage disabled, and `record_slots_of_stepError` keeps its statement.
+- In Lean, the RLPx frame reader reads each frame at an offset of the input, so a stream costs time linear in its size ([#4502](https://github.com/ethereum/EthLib/pull/4502)).
+  - `Rlpx.readFrameAt` (`Networking/Rlpx/Frame.lean`) is new: it reads the frame that starts at an offset and gives the offset after it.
+    `Rlpx.readFrame` is now `readFrameAt` at offset 0, and cuts the bytes after the frame with one copy; unfolding it gives `readFrameAt`.
+    `readFrame_eq` (`Networking/Proofs/Rlpx/Frame.lean`) states the old body on the input's list of bytes; rewrite with it where a proof unfolded `readFrame`.
+    `readFrameAt_eq` relates the reader at an offset to `readFrame` on the bytes from there; `readFrame_eq_ok` and `readFrame_writeFrame` keep their statements.
+  - `Rlpx.Exports.readFrames` (`Networking/Exports/Rlpx.lean`) takes the offset to start from as a fourth argument.
+    `readFrames_zero` and `readFrames_succ`, in the new module `Networking/Proofs/Exports/Rlpx.lean`, give its old equations at offset 0, and `readFrames_extract` relates an offset to the bytes from it.
+- In Lean, `ByteOrder.ofBE` (`Base/ByteOrder.lean`) reads seven bytes at a time, and gives the same number on every list ([#4492](https://github.com/ethereum/EthLib/pull/4492)).
+  - Unfolding it now gives `ofBE.go`, not the fold of Horner's rule.
+    `ByteOrder.ofBE_eq_foldl` states the old fold; rewrite with it where a proof unfolded `ofBE`.
+  - `ofBE.horner`, `ofBE.go`, `ofBE.horner_eq` and `ofBE.go_eq_horner` are new.
+    `foldl_ofBE` and `ofBE_lt` keep their statements.
+- In Lean, `Run.lookaheadActive` in `EthLib.Consensus.Proofs.Transition.LookaheadActive` drops its premise that the run ends before Gloas.
+  The upgrades to Gloas and to Heze copy the registry, the slot and the lookahead, so each entry stays active in its epoch.
+  Migration: delete the `early` argument.
+- In Lean, SHA-256 and RIPEMD-160 pad through one shared Merkle-Damgård padding in `EthLib/Cryptography/Hash/Padding.lean`, which takes each hash's length bytes ([#4447](https://github.com/ethereum/EthLib/pull/4447)).
+  - `Sha256.paddingZeros` and `Ripemd160.paddingZeros` are `Padding.paddingZeros`, and `Sha256.LENGTH_SIZE_BYTES` is removed.
+    `Sha256.pad` and `Ripemd160.pad` are now `Padding.pad lengthBytes` of their own length bytes, and compute the same bytes.
+  - `pad_size`, `paddingZeros_lt`, `pad_size_mod` and `paddingZeros_minimal` of both hashes, and `pad_prefix`, `pad_delimiter`, `pad_zero` and `pad_length_suffix` of RIPEMD-160, are the lemmas of the same names in `Padding`.
+    `pad_size`, `pad_size_mod` and `pad_length_suffix` take the fact that the length bytes are 8, such as `Sha256.lengthBytes_size`; unfold `Sha256.pad` or `Ripemd160.pad` before applying them.
+    `Padding.size_pad` is new: the size of a padding for length bytes of any size.
+  - `lengthBytes_size`, `lengthBytes_digit` and `pad_eq_spec` of each hash keep their statements.
+- In Lean, the prefix and suffix readers of DNS discovery and the gossip topics are one generic pair in `EthLib/Base/List.lean` ([#4446](https://github.com/ethereum/EthLib/pull/4446)).
+  - `DnsDisc.dropPrefix` and `Gossip.dropPrefix?` are `Base.dropPrefix?`, and `Gossip.dropSuffix?` is `Base.dropSuffix?`, for any element type with decidable equality.
+  - `DnsDisc.dropPrefix_append` and the topic lemma `dropPrefix?_append` are `Base.dropPrefix?_append`, and `dropSuffix?_append` is `Base.dropSuffix?_append`.
+  - `DnsDisc.eq_append_of_dropPrefix` and the topic lemma `eq_append_of_dropPrefix?` are `Base.eq_append_of_dropPrefix?`, which takes its three lists implicitly: write `eq_append_of_dropPrefix? h`.
+    `eq_append_of_dropSuffix?` is `Base.eq_append_of_dropSuffix?`.
+  - `Base.dropPrefix?_eq` is new: it gives the prefix reader as a test of the prefix then a drop, the form that `simp [dropPrefix?]` used to unfold in the topics.
+  - `DnsDisc.dropPrefix_root_branch`, `dropPrefix_root_url`, `dropPrefix_branch_url`, `dropPrefix_root_enr`, `dropPrefix_branch_enr`, `dropPrefix_url_enr` and `Root.dropPrefix_toText` keep their names and now state `Base.dropPrefix?`.
+- In Lean, the copies of the big-endian functions in RLP, DER, the Montgomery fields and the SPHINCS+ security model are removed, so they write and read through `EthLib.Base.ByteOrder` ([#4412](https://github.com/ethereum/EthLib/pull/4412)).
+  - `ByteOrder.byteLength x` is new: the number of bytes of `x` with no leading zero byte, and none for zero.
+    The minimal big-endian form of `x` is `ByteOrder.toBE (byteLength x) x`, and the new lemmas `ByteOrder.lt_byteLength`, `ByteOrder.pow_byteLength_sub_one_le`, `ByteOrder.byteLength_eq_of_bounds`, `ByteOrder.byteLength_ofBE` and `ByteOrder.ofBE_toBE_byteLength` state its bounds and round trip.
+  - `Rlp.bigEndian` is now that form as a byte array, and `Rlp.bigEndianAux` is removed with its lemmas `Rlp.bigEndianAux_zero`, `Rlp.bigEndianAux_succ`, `Rlp.bigEndianAux_fuel` and `Rlp.ofBE_bigEndianAux`; `Rlp.bigEndian_data_toList` and `Rlp.size_bigEndian` are new.
+    `Rlp.eq_zero_of_ofBE_eq_zero` is removed, and the statements about `Rlp.bigEndian` are unchanged.
+  - `Der.ecdsaInteger` writes the minimal form of `n % 256 ^ 32`, the same bytes as before for every `n`.
+  - `Montgomery.limbBytes` and `Montgomery.bytesBE` are removed, with `ofBE_limbBytes`, `limbBytes_length`, `bytesBE_length` and `ofBE_bytesBE`.
+    `Montgomery.pushLimbs_toList` now takes `Fits k f 0` and states the bytes as `(ByteOrder.toBE (4 * k) (num k f 0)).toList`; `toBytesBE_eq` keeps its statement.
+  - In the SPHINCS+ security model, `SphincsSecurity.beInt` is removed for `ByteOrder.ofBE`, and `SphincsSecurity.bytesBE n x` for `(ByteOrder.toBE n x.toNat).toList`.
+    `beInt_append`, `beInt_eq_ofBE`, `bytesBE_length`, `bytesBE_length_4`, `bytesBE_length_12`, `bytesBE_length_counter` and `toBE_eq_bytesBE` are removed.
+    `testBit_beInt` is `testBit_ofBE`, `bytesBE_injective` is `toList_toBE_injective`, `counter_bytesBE_inj` is `counter_toList_toBE_inj`, and `toList_toByte_bytesBE` is `toList_toByte_toBE`, each stated on `toBE` or `ofBE`.
+  Migration: replace the names above.
+
+- In Lean, the big-endian integers move to `EthLib.Base.ByteOrder`, beside the little-endian ones, and `EthLib.Base.BigEndian` and its proof module are removed ([#4382](https://github.com/ethereum/EthLib/pull/4382)).
+  The functions take new names:
+  - `Base.bytesToNat bytes` is `Base.ByteOrder.ofBE bytes`, with the same `List UInt8` argument; it reads the same number, now with the fold `256 * acc + b.toNat`.
+  - `Base.natToBytes len n` is `(Base.ByteOrder.toBE len n).toList`: `toBE` returns a `Vector UInt8 len`.
+  - `Base.natToBytes4 n` is removed: write `⟨(Base.ByteOrder.toBE 4 n).toArray⟩`.
+  - `Rlp.ofBigEndian` is removed, since it was `Base.bytesToNat`: write `Base.ByteOrder.ofBE`.
+  The lemmas take these names, in `EthLib.Base.ByteOrder` and `EthLib.Base.Proofs.ByteOrder`:
+  - `foldl_bytesToNat` is `ByteOrder.foldl_ofBE`, now stated for the fold `256 * acc + b` as `256 ^ bytes.length * acc + ofBE bytes`.
+  - `bytesToNat_lt` is `ByteOrder.ofBE_lt`, `bytesToNat_append` is `ByteOrder.ofBE_append`, and `bytesToNat_cons` is `ByteOrder.ofBE_cons`.
+  - `bytesToNat_inj` is `ByteOrder.ofBE_inj`, and `compare_eq_compare_bytesToNat` is `ByteOrder.compare_eq_compare_ofBE`.
+  - `bytesToNat_natToBytes` is `ByteOrder.ofBE_toBE`, and `bytesToNat_natToBytes_of_lt` is `ByteOrder.ofBE_toBE_of_lt`.
+  - `natToBytes_bytesToNat` is `ByteOrder.toList_toBE_ofBE`.
+  - `natToBytes_length` is `ByteOrder.length_toList_toBE`, `natToBytes_succ` is `ByteOrder.toList_toBE_succ`, and `natToBytes_add` is `ByteOrder.toList_toBE_add`.
+  - `natToBytes_zero` is `ByteOrder.toList_toBE_zero`, and `natToBytes_zero_right` is `ByteOrder.toList_toBE_zero_right`.
+  - `natToBytes_mod` is `ByteOrder.toBE_mod`, and `getElem_natToBytes` is `ByteOrder.getElem_toBE`; both now state the vector.
+  - `natToBytes_inj` is `ByteOrder.toBE_inj`, which takes equal vectors.
+  - `length_flatMap_natToBytes`, `map_range_bytesToNat_flatMap_natToBytes` and `flatMap_natToBytes_map_range_bytesToNat` are `ByteOrder.length_flatMap_toBE`, `ByteOrder.map_range_ofBE_flatMap_toBE` and `ByteOrder.flatMap_toBE_map_range_ofBE`.
+  - `natToBytes.go` is `ByteOrder.toBE.go`, and `natToBytes.go_append` is `ByteOrder.toBE.go_append`, whose right side is now `toBE.go n x [] ++ written`.
+  - `natToBytes4_size` is removed.
+  - `Rlp.ofBigEndian_nil` and `Rlp.ofBigEndian_append_singleton` are `ByteOrder.ofBE_nil` and `ByteOrder.ofBE_append_singleton`.
+  - `Rlp.ofBigEndian_bigEndianAux` and `Rlp.ofBigEndian_eq_zero` are `Rlp.ofBE_bigEndianAux` and `Rlp.eq_zero_of_ofBE_eq_zero`.
+  The lemmas named after the old functions take the new names, `bytesToNat` becoming `ofBE` and `natToBytes` becoming `toBE`.
+  They are `U256.natToBytes_toNat_fromBeBytes`, `Montgomery.bytesToNat_bytesBE`, `Montgomery.bytesToNat_limbBytes`, `Sphincs.msbField_eq_bytesToNat`, `beInt_eq_bytesToNat`, `natToBytes_eq_bytesBE`, `Bloom.bytesToNat_toBytes`, `bytesToFp_natToBytes`, `bytesToFieldElement_natToBytes`, `bytesToFq2_natToBytes`, `natToBytes_bytesToFieldElement`, `natToBytes_bytesToFq2`, `flatMap_natToBytes_inj`, `Discv5.eq_of_bytesToNat_eq`, `bytesToNat_encodePacketNumber`, `bytesToNat_encodePacketNumberList`, `bytesToNat_encodePacketNumberList_of_packetNumberWidth_none` and `eq_natToBytes_of_codePoint`.
+  Each statement that wrote `natToBytes len n` now writes `(toBE len n).toList`, `(toBE len n).toArray` where it built an array, or `toBE len n` where it built a vector, and states the same bytes.
+  Among the new lemmas, `ByteOrder.toBE_eq_reverse_toLE`, `ByteOrder.toList_toBE` and `ByteOrder.ofBE_toList_eq_ofLE_reverse` relate the two orders, `ByteOrder.toBE_ofBE` and `ByteOrder.toList_toBE_ofBE_of_length` give the round trip at a fixed width, and `ByteOrder.ofLE_eq_ofDigits` and `ByteOrder.ofBE_eq_ofDigits`, in `EthLib.Base.Proofs.ByteOrder.Digits`, state both readings through Mathlib's `Nat.ofDigits 256`.
+  Migration: replace the names above; a caller that needs a list writes `.toList` after `toBE`.
+
+- In Lean, the little-endian integers move to the new module `EthLib.Base.ByteOrder`, and their names say the byte order ([#4368](https://github.com/ethereum/EthLib/pull/4368)).
+  `EthLib.Base.LittleEndian` and `EthLib.Base.Proofs.LittleEndian` become `EthLib.Base.ByteOrder` and `EthLib.Base.Proofs.ByteOrder`.
+  `rotl32`, `uint32OfBytes` and `uint32Byte` move to `EthLib.Base.Word32`, with unchanged names and bodies.
+  The functions keep their types and bodies under new names, and their arguments are now `n` and `x`:
+  - `Base.uintToBytes` is `Base.ByteOrder.toLE`.
+  - `Base.bytesToUint` is `Base.ByteOrder.ofLE`.
+  `Base.bytesToUint64 v h` is removed: write `UInt64.ofNat (ByteOrder.ofLE v)`.
+  The lemmas `bytesToUint64_uintToBytes` and `uintToBytes_bytesToUint64` are removed with it; `ByteOrder.ofLE_toLE`, `ByteOrder.toLE_ofLE` and `ByteOrder.toNat_ofNat_ofLE` give both round trips.
+  The re-exports `Xmss.uintToBytes`, `Xmss.bytesToUint` and `Vrf.uintToBytes` are removed.
+  The lemmas keep their statements under new names in `EthLib.Base.Proofs.ByteOrder`:
+  - `uintToBytes_eq_div` is `ByteOrder.toLE_eq_div`, and `uintToBytes_toList_succ` is `ByteOrder.toList_toLE_succ`.
+  - `uintToBytes_toArray_succ` is `ByteOrder.toArray_toLE_succ`, and `bytesToUint_ofFn_succ` is `ByteOrder.ofLE_ofFn_succ`.
+  - `bytesToUint_uintToBytes` is `ByteOrder.ofLE_toLE`, and `uintToBytes_bytesToUint` is `ByteOrder.toLE_ofLE`.
+  - `uintToBytes_inj` is `ByteOrder.toLE_inj`, and `bytesToUint_lt` is `ByteOrder.ofLE_lt`.
+  - `bytesToUint_eq_foldr` is `ByteOrder.ofLE_eq_foldr`, and `bytesToUint_toVector` is `ByteOrder.ofLE_toVector`.
+  - `foldr_uintToBytes` is `ByteOrder.foldr_toLE`, and `foldr_uintToBytes_of_lt` is `ByteOrder.foldr_toLE_of_lt`.
+  `toNat_bytesToUint64` becomes `ByteOrder.toNat_ofNat_ofLE`, now stated as `(UInt64.ofNat (ofLE v)).toNat = ofLE v` for a vector `v` of `k ≤ 8` bytes.
+  The lemmas named after the old functions take the new names, with unchanged statements:
+  - `Hash.Keccak.Lanes2.bytes_eq_uintToBytes` is `Hash.Keccak.Lanes2.bytes_eq_toLE`.
+  - `Hash.Keccak.Lanes2.bytesToUint_bytes` is `Hash.Keccak.Lanes2.ofLE_bytes`.
+  - `HashSig.ofBV_eq_uintToBytes` is `HashSig.ofBV_eq_toLE`, and `HashSig.toList_uintToBytes` is `HashSig.toList_toLE`.
+  - `HashSig.bytesToUint_ofBV` is `HashSig.ofLE_ofBV`, and `HashSig.ofBV_ofNat_bytesToUint` is `HashSig.ofBV_ofNat_ofLE`.
+  - `Sphincs.digits_getElem_val_bytesToUint` is `Sphincs.digits_getElem_val_ofLE`.
+  - `Sphincs.Unforgeability.Bridge.bytesToUint_ofDigest` is `Sphincs.Unforgeability.Bridge.ofLE_ofDigest`.
+  - `Wots.bytesToUint_eq_sum_digits4` is `Wots.ofLE_eq_sum_digits4`.
+  - `Networking.Proofs.Snappy.Frame.uintToBytes_three` is `Networking.Proofs.Snappy.Frame.toLE_three`.
+  Scrypt's Integerify reads the last 64 bytes of its value through `ByteOrder.ofLE`, in place of a fold of its own, and `Hash.Scrypt.integerify_eq` keeps its statement.
+  Migration: replace each old name with the new one.
+
+- In Lean, `Base.byteAt` is renamed `Base.byteAtOrZero`, so that its zero past the end of the buffer is visible at each call ([#4347](https://github.com/ethereum/EthLib/pull/4347)).
+  Every lemma about it follows: `byteAt_X` is now `byteAtOrZero_X`, and `eq_of_byteAt` and `Holds.of_byteAt` are now `eq_of_byteAtOrZero` and `Holds.of_byteAtOrZero`.
+  The statements are unchanged.
+  Migration: replace `byteAt` with `byteAtOrZero` in each name.
+
+- In Lean, `Ssz.readUintBytes` and its lemma `readUintBytes_eq` are removed ([#4303](https://github.com/ethereum/EthLib/issues/4303)).
+  The function had the body of `Ssz.readUint`, and the lemma proved the two equal.
+  Migration: call `readUint data.data start width` in place of `readUintBytes data start width`.
+
+- Four theorems take new names, with unchanged statements ([#4245](https://github.com/ethereum/EthLib/issues/4245)).
+  `initiateValidatorExit_exists_ok` (`Totality/Registry.lean`) is now `initiateValidatorExit_total_of_lt_electra`.
+  `slashValidator_ok_of_room` (`Totality/SlashValidator.lean`) is now `slashValidator_total_of_room`.
+  `slashValidator_ok_of_block` (`Totality/ChainBlock.lean`) is now `slashValidator_total_of_block`.
+  `DirectSafety.signedConflict_attesterSlashing_accepted_at` (`DirectSafety/Includable.lean`) is now `DirectSafety.processAttesterSlashing_single_slashed_or_accepted_at`.
+  A caller replaces each old name with the new one.
+
+- The signed-conflict slashing theorem of [#3431](https://github.com/ethereum/EthLib/issues/3431) now also covers a block in the epoch after the state of the run, including a block at the first slot of an epoch ([#4243](https://github.com/ethereum/EthLib/issues/4243)).
+  Write `x` for the state of the run at which the block applies.
+  `DirectSafety.processAttesterSlashing_single_slashed_or_accepted_at` (`DirectSafety/Includable.lean`) takes, for each block, a bound of one epoch in place of the hypothesis that the block is in the epoch of `x`.
+  It also takes a premise for a block in the next epoch, under the guard that the block's epoch is after the epoch of `x`.
+  That premise bundles the three requirements listed in the #3431 entry on the attester slashing at its turn.
+  The block's epoch is at most the first epoch of the chain plus its number of epochs.
+  `SignersAtEnds` holds for the slots up to the block.
+  The chosen validator, if unslashed at `x`, has its withdrawable epoch recorded at `x` after the block's epoch.
+  A caller with the old hypothesis `sameEpoch` can pass `sameEpoch.le.trans (Nat.le_succ _)` for the bound, and `fun crossing => absurd crossing (by omega)` for the guarded premise.
+
+- In Lean, two lemmas are removed that restated another lemma with an added `fork < .glamsterdam` argument ([#4297](https://github.com/ethereum/EthLib/pull/4297)).
+  `effectiveKept_block` restated `effectiveKept_processBlock`, which holds at every fork, and ignored the argument.
+  `BlockLedger.validators_processBlockExecution` restated `processBlockExecution_validators`, which holds from Bellatrix, where the execution part of a block exists, at every later fork.
+  Migration: call `effectiveKept_processBlock` and `processBlockExecution_validators` without the pre-Gloas argument.
+  The implicit states of `processBlockExecution_validators` are named `state` and `after`, so a call that wrote `(s := s) (t := t)` writes `(state := s) (after := t)` or omits them.
+
+- In Lean, the leanXMSS addresses take the name the specification gives them: `Xmss.CallSite` is now `Xmss.Address` ([#4278](https://github.com/ethereum/EthLib/pull/4278)).
+  The old `Xmss.Address`, an abbreviation for the 16 bytes as `Lanes2`, is removed, and `Address.encode` now returns `Lanes2`.
+  `CallSite.tau`, `.mu`, `.hi`, `.lo`, `.encode`, `.encode_injective`, `.toNat_encode_lo`, `.bytes_encode` and `.ne_msg_of_hi` become `Address.tau` and so on, with the same statements.
+  Migration: replace `CallSite` with `Address`, and a type `Address` that meant the 16 bytes with `Lanes2`.
+
+- In Lean, the leanXMSS tweakable hash, its input and the derivations from the seed take a call site instead of a 16-byte address ([#4277](https://github.com/ethereum/EthLib/pull/4277)); [#4267](https://github.com/ethereum/EthLib/pull/4267) added the call sites.
+  `Xmss.CallSite` has one constructor for each address of the specification, and `CallSite.encode` gives its address, as two lanes.
+  `CallSite.encode_injective` says that two distinct call sites never share an address.
+  `Xmss.th`, `Xmss.thInput` and `Xmss.seedPrf` take a `CallSite`, `Xmss.SeedPrf` reads one, and `Xmss.Unforgeability.PrfInput` holds one; every hash input keeps its bytes.
+  The definitions and lemmas that took an address now take a call site, and `thInput_inj` now concludes that the call sites are equal.
+  `th_isQueryBoundP_otherLayer` in `EthLib.Cryptography.Proofs.Xmss.SignatureFailure` takes a call site whose `hi` carries the layer, in place of the four raw fields.
+  The new `CallSite.ne_msg_of_hi` says that a call site whose `hi` carries one layer is not a message call site of the other layer.
+  `encodeAddress`, `AddressType`, `AddressType.code`, `addrPrf`, `addrChain`, `addrLeaf`, `addrNode`, `addrParam`, `addrRnd` and `addrMsg` are removed.
+  So are `encodeAddress_inj`, `encodeAddress_ne_of_type_ne`, `AddressType.code_injective`, `addrPrf_inj`, `addrChain_inj`, `addrLeaf_inj`, `addrNode_inj`, `addrRnd_inj`, `addrMsg_inj`, `encodeAddress_ne_addrMsg`, `addrPrf_ne_addrRnd`, `addrParam_ne_addrRnd` and `Unforgeability.toList_encodeAddress`.
+  `toNat_encodeAddress_lo` and `bytes_encodeAddress` become `CallSite.toNat_encode_lo` and `CallSite.bytes_encode`.
+  In `Xmss.Unforgeability`, `toList_addrChain`, `toList_addrLeaf`, `toList_addrMsg`, `toList_addrRnd`, `toList_addrNode`, `toList_addrPrf` and `toList_addrParam` become `toList_encode_chain`, `toList_encode_leaf`, `toList_encode_msg`, `toList_encode_rnd`, `toList_encode_node`, `toList_encode_prf` and `toList_encode_param`.
+  Migration: write `.chain layer e mu` where a call read `addrChain layer e mu`, and `(CallSite.chain layer e mu).encode` where it needs the bytes.
+  For `addrChain_inj` and the others, rewrite with `CallSite.encode_injective.eq_iff` and the constructor's `injEq`.
+
+- From Glamsterdam, a system call starts with the accessed addresses of a transaction from the system address to its contract, with no access list ([#4071](https://github.com/ethereum/EthLib/issues/4071)).
+  So the beneficiary, the precompiles, the system address and the contract start warm in that call; up to BPO5 it still starts with no access.
+  In Lean, the new `Blocks.systemSubstate` gives that start, and `systemSubstate_of_lt_glamsterdam` and `systemSubstate_of_glamsterdam` in `EthLib.Execution.Proofs.Blocks.SystemCall` state it.
+  `systemCall_of_glamsterdam` now runs the message from `systemSubstate env target` in place of `Substate.empty`; `systemCall_of_lt_glamsterdam` keeps its statement.
+  `SystemCallBurns` in `EthLib.Execution.Proofs.Blocks.Burn` reads the same start in place of the empty substate.
+  The new `Transactions.startAccessedAddressesOf` takes an access list, and `startAccessedAddresses` reads it with the access list of the transaction, with the same value.
+  `mem_systemSubstate_accessedAddresses` lists the addresses that start accessed from Glamsterdam.
+  Migration: rewrite with `systemSubstate_of_glamsterdam` where a proof read the empty substate from Glamsterdam, and with `systemSubstate_of_lt_glamsterdam` where it reads `SystemCallBurns` before Glamsterdam.
+
+- The signed-conflict slashing theorem of [#3431](https://github.com/ethereum/EthLib/issues/3431) now covers a key whose validator has exited but is not yet withdrawable ([#4243](https://github.com/ethereum/EthLib/issues/4243)).
+  `DirectSafety.processAttesterSlashing_single_slashed_or_accepted_at` (`DirectSafety/Includable.lean`) takes `lifetime` in place of `member : key ∈ activeKeys x.state`.
+  `lifetime` gives a validator of `x` with the key that is activated and not yet withdrawable at the epoch of `x`.
+  Unlike membership in `activeKeys`, `lifetime` still holds after the validator's exit epoch, until its withdrawable epoch.
+  Unlike slashability, it does not require the validator to be unslashed.
+  An already slashed active validator was covered before too, since activity ignores the slashed flag; an exited one was not.
+  For a validator already slashed at the turn, the left disjunct holds, as before.
+  A caller with `member` builds `lifetime` with `DirectSafety.mem_keysAt_epoch_of_within`, from the registry limit and the order of exits that `holds` gives.
+  That lemma is in `EthLib.Consensus.Proofs.DirectSafety.ChurnBounds`, which the caller must import itself.
+  The registry limit is `(RunBounded.size_le holds.bounded).trans (holds.run conditions within).load.1`, and the order of exits is `holds.invariant.exitsOrdered`.
+
+- `dnsdisc.resolve` refuses a list whose root of links reaches a node record, even when the root of records also reaches it.
+  EIP-1459 says that a record "may only appear in the `enr-root` subtree".
+  It gave the list, and skipped the record under the root of links, since the walk took a hash met in either subtree as read.
+  In Lean, `walk` and `walkCollision` track each hash with its subtree, in a `List (Subtree × Hash)` in place of a `List Hash`.
+  A branch under both roots is now read in each subtree, so the hashes below it take from the budget in each.
+  A list near its budget can now end with too many entries.
+  `records_of_resolve` and `links_of_resolve` in `EthLib.Networking.Proofs.DnsDisc` state that each entry that a subtree of a resolved list reaches is a branch or a leaf of that subtree.
+
+- The signed-conflict slashing theorem of [#3431](https://github.com/ethereum/EthLib/issues/3431) now also states that the slashing leaves the validator slashed ([#4244](https://github.com/ethereum/EthLib/issues/4244)).
+  In `DirectSafety.processAttesterSlashing_single_slashed_or_accepted_at` (`DirectSafety/Includable.lean`), the right disjunct also gives the validator at the index in the state right after the slashing.
+  That validator still has the key and is slashed.
+  A caller that destructured the disjunct as `⟨after, ok⟩` now writes `⟨after, _, ok, _⟩`, where the first `_` is that validator.
+  The old disjunction follows from the new one by `.imp id fun ⟨after, _, ok, _⟩ => ⟨after, ok⟩`.
+  The left disjunct is unchanged: it covers a validator already slashed at the turn, and the theorem says nothing more about that case.
+
+- In Lean, `getUnslashedAttestingIndices_exists_ok` in `EthLib.Consensus.Proofs.Transition.Totality.Justification` drops its premise that the registry stays within its limit, which its proof did not read.
+  Committee membership alone puts each signer in the registry, by `getPendingAttestingIndices_lt`.
+  Migration: delete the `within` argument ([#4253](https://github.com/ethereum/EthLib/pull/4253)).
+
+- In Lean, `Execution.blocks_of_partiallySynchronous` is removed; its one reader, the confirmed-root step, now reads `Execution.blocks_of_partiallySynchronous_of_anchorSlot`.
+  Migration: use `Execution.blocks_of_partiallySynchronous_of_anchorSlot` (added earlier in 0.4.0), passing `fun gloas => absurd gloas (Nat.not_le_of_lt preGloas)` for `anchorSlot` and `start v honest` and `start u receiver` for the two starts.
+
+- In Lean, the confirmed root of a run of fast-confirmation calls covers honest heads from Gloas too, and keeps its Fulu floor.
+  `Execution.confirmedRoot_covers` takes `room`, `weights` and `supply`, gated on Gloas, instead of `preGloas`.
+  They are the anchor's registry room, the head-weight bundle, and the head-weight ceiling of honest justified states.
+  `CallsCtx` drops its field `preGloas`, and `StepCtx` carries `room`, `weights` and `supply`.
+  `sourceOnParentChain_of_walk`, `Execution.honestTargetVotes_of_byzantineStakeAtMost` and `Store.viable_of_ancestor` drop their pre-Gloas binder.
+  `Execution.receiverWindowExitsNear_of_sourceOnParentChain` takes `within`, the registry of the source within the limit, instead of `preGloas`.
+  Migration: pass `room`, `weights` and `supply` each as `fun g => absurd g (Nat.not_le_of_lt preGloas)`, delete the other arguments, and pass `within := source.validators.bound preGloas`.
+
+- In Lean, the quorum drift of a call is bounded from Gloas too, and keeps its Fulu floor.
+  `quorumDrift_le_quorumReserve` takes `within` at the counting state instead of `early`.
+  `Execution.quorumDriftWithin` takes `room`, the anchor's registry room from Gloas, instead of `early`.
+  `setting_runs_of_call` drops `early`.
+  Migration: pass `within := BeaconState.registryWithinLimit_of_lt early state` and `room := fun g => absurd g (Nat.not_le_of_lt early)`, and delete the argument of `setting_runs_of_call`.
+
+- In Lean, `effectiveRise_le` and `effectiveFall_le` bound the effective-balance rise and fall from Gloas too, and keep their Fulu floor at `P`.
+  They take `within`, the registry of the counting state within the limit, instead of `early`.
+  From Gloas the type of the registry does not give it.
+  Migration: pass `within := y.state.validators.bound early`.
+
+- In Lean, the sync-key lemmas hold through Gloas, still from Altair at both ends, and `depositCarry_processBlock` holds at every fork.
+  Their conclusions are unchanged.
+  `Run.currentSyncCommittee_eq_of_same_period`, `Run.currentSyncCommittee_eq_nextSyncCommittee_of_next_period`, `Run.currentSyncCommittee_eq_of_same_epoch` and `depositCarry_processBlock` drop their pre-Gloas binder.
+  Migration: delete the argument.
+
+- In Lean, the block and ledger lemmas behind the quorum reserve extend through Gloas, and their existing lower fork bounds remain.
+  These drop their pre-Gloas binder (`DirectSafety.total_active_congr` drops two, `before` and `after`), with the same conclusion: `DirectSafety.total_active_congr`, `Run.effectiveKept_of_same_epoch`, `hysteresis_of_run_slot`, `balanceDrift_upgrades_upper`, `balanceDrift_upgrades_active`, `BlockLedger.ledger_processBlockExecution`, `BlockLedger.ledger_processProposerSlashing`, `BlockLedger.ledger_processAttesterSlashing`, `processOperations_floor`, `BlockCredits.block_balances`, `Run.withdrawableKept_of_same_epoch`, `Run.balanceCorrections_of_same_epoch`, `Run.effectiveBalance_capped`, `Run.pendingConsolidationsOrdered`, `Run.pendingConsolidation_invariant`, `ConsolidationQueueRise.appendStep_processBlock`, `ConsolidationQueueRise.riseStep_processBlock`, `SamePendingQueue.blockExecution`, `applyWithdrawals_departureQueues`, `attestation_departureQueues` and `slashValidator_departureQueues`.
+  Migration: delete the arguments.
+
+- In Lean, lemmas whose proofs read no upper fork bound drop it, with the same conclusion.
+  `Run.effectiveAt_le_of_same_epoch` drops `early : y.fork < .pectra`; the other 23 drop a bound below Gloas.
+  They are `ReservedReplay.fresh_not_initial`, `effectiveAt_le_withdrawalMax`, `step_same_epoch_effective`, `run_same_epoch_effective`, `Run.effectiveAt_le_of_same_epoch`, `Run.pendingConsolidations_apart`, `Run.pendingConsolidation_targets`, `Run.pendingConsolidation_sources`, `Run.retired_validator`, `run_slashed_exit_assigned`, `Run.newly_slashed_initial_exited_unwithdrawable`, `Run.newly_slashed_withdrawableEpoch`, `Run.slashed_withdrawableEpoch_mono_epoch`, `Run.slashed_withdrawable_eq`, `Run.compounding_of_exit_assigned`, `Run.validatorCap_mono`, `pass_kept`, `epochPrefix_slashedSpan`, `cap_le_cap_of_run`, `effective_le_cap_at`, `capCeil_path`, `slashed_waits`, `newly_slashed_unwithdrawable` and `effectiveAt_le_capMax`.
+  Migration: delete the `early` argument.
+
+- In Lean, `Run.induction_of_same_epoch` and `Run.induction_of_same_period` induct over runs through Gloas.
+  `Run.induction_of_same_epoch` drops `early` and the pre-Gloas hypothesis of its block callback.
+  `Run.induction_of_same_period` drops `early` and the pre-Gloas hypotheses of both callbacks.
+  Migration: delete `early`; a callback that used the hypothesis keeps it through the motive `fun z pre => z.fork < .glamsterdam → motive z pre`, and the caller applies the result to `early`.
+
+- In Lean, `Internal.CapStep.run` holds through Gloas, and keeps the invariant of the transition.
+  It drops `early`; its `AssignedPartials` and `UnassignedEligibleBalance` conjuncts are proved before Gloas only, and now take it as a hypothesis.
+  Migration: write `.2.1 early` for `.2.1` and `.2.2.2 early` for `.2.2.2`; `.1` and `.2.2.1` are unchanged.
+
+- In Lean, the withdrawal step and the execution part of a block state their departure queues by the payload of the parent.
+  From Gloas a block whose parent has no payload pays no withdrawals.
+  `withdrawals_departureQueues` and `blockExecution_departureQueues` drop `early`.
+  They conclude with a clause for a full parent or for a fork from Electra through before Gloas, and a clause for an empty parent.
+  Migration: before Gloas, take the second half of the first clause; the second clause needs Gloas.
+
+- In Lean, `getExpectedWithdrawals_partials` reads the partial withdrawals after the prior ones.
+  From Gloas the queued builder withdrawals come first, so the read starts after them.
+  It drops `early` and concludes with the prior withdrawals and the start index.
+  Migration: before Gloas, the first clause gives no prior withdrawals and the state's next withdrawal index.
 
 - The TLS 1.3 key schedule names its Main Secret as [RFC 9846 §7.1](https://www.rfc-editor.org/rfc/rfc9846#section-7.1) does, where it kept the Master Secret of RFC 8446 ([#4242](https://github.com/ethereum/EthLib/issues/4242)).
   In Python, the field `master` of `KeySchedule` is now `main`; the tuple keeps its order, so positional reads are unchanged.
@@ -1112,6 +2087,89 @@ Not yet released.
   The lemmas `Ssz.hexDigit_toUpper`, `Ssz.hexBytesFrom_map_toUpper`, `Ssz.hexBytesFrom_eq` and `Ssz.hexBytes_cons` are removed.
   Migration: use `Base.hexValue?_toUpper` and `Base.hexBytesFrom?_map_toUpper`; the two loop lemmas have no replacement, so unfold `Ssz.hexBytes` and reason on `Base.hexBytesFrom?`.
 
+- In Lean, `Execution.honestTargetVotes_signed_of_checked` holds at every fork.
+  It no longer takes `preGloas : fork < .glamsterdam`; it takes `registries`, gated from Gloas, in its place: every honest held block state up to `time` has its registry within the limit.
+  Migration: before Gloas, pass `fun gloas => absurd gloas (Nat.not_le_of_lt preGloas)`; from `HonestRegistriesWithinLimit`, pass its first half.
+  The new statement implies the old one.
+
+- In Lean, `Execution.rootInFilteredTree_of_checked` holds at every fork.
+  It no longer takes `preGloas : fork < .glamsterdam`; it takes `room : .glamsterdam ≤ fork → AnchorRegistryRoom preset anchorState horizon` after `inHorizon`.
+  Migration: before Gloas, drop `preGloas` and pass `fun gloas => absurd gloas (Nat.not_le_of_lt preGloas)` for `room`.
+  The new statement implies the old one.
+
+- In Lean, `includedVotes_votingSource_ge` holds at every fork and no longer takes `preGloas : fork < .glamsterdam`.
+  Migration: a caller drops that argument.
+  The new statement implies the old one.
+
+- In Lean, `Store.isAncestor_iff`, `Store.comparable_of_ancestors`, `Store.eq_of_isAncestor_antisymm`, `Store.isAncestor_of_getCheckpointBlock_above` and `Store.isAncestor_of_blockTree_ancestor` hold at every fork and no longer take `before : fork < .glamsterdam`.
+  `signerHead_of_duty` and `justified_descends_of_duty` (`ForkChoice/FastConfirmation/DutyWindows.lean`) no longer take `preGloas : fork < .glamsterdam`.
+  `Store.ForwardReachableWith.weight_add_weight_add_stake_le_withBoost` and `Store.ForwardReachableWith.weight_add_weight_le_withBoost` no longer take `before : fork < .glamsterdam`.
+  Migration: a caller drops that argument.
+  The new statements imply the old ones.
+
+- In Lean, `Store.Reachable.realized_le_source` and `Store.getCheckpointBlock_of_shared_origin` hold at every fork and no longer take `before : fork < .glamsterdam`.
+  Migration: a caller drops that argument.
+  The new statements imply the old ones.
+
+- In Lean, `Store.exists_leaf_above_mem_filterNodeTree` holds at every fork.
+  It no longer takes `before : fork < .glamsterdam`; it takes `verified : ∀ gloas : .glamsterdam ≤ fork, store.FullParentsVerified gloas` in its place.
+  Migration: before Gloas, pass `fun gloas => absurd gloas (Nat.not_le_of_lt before)`; for a reachable store, pass `fun gloas => reachable.fullParentsVerified absent gloas`.
+  The new statement implies the old one.
+
+- In Lean, `Execution.rootHeld_of_honest_vote`, `Execution.justified_comparable_of_checked` and `Execution.latest_eq_of_rank_eq` hold at every fork and no longer take `preGloas : fork < .glamsterdam`.
+  From Gloas the rank of a latest vote is its slot.
+  Migration: a caller drops that argument.
+  The new statements imply the old ones.
+
+- In Lean, `receiver_fullMaximum_of_head_window` holds at every fork.
+  It no longer takes `early : fork < .glamsterdam`; it takes `registries : .glamsterdam ≤ fork → HonestRegistriesWithinLimit time` after `ceiling`.
+  Migration: before Gloas, pass `fun gloas => absurd gloas (Nat.not_le_of_lt early)`.
+  The new statement implies the old one.
+
+- In Lean, `Store.getHead_exists_of_gloas` no longer takes `supply : effectiveBalanceSum state ≤ 2 * 10 ^ 17`.
+  It takes `heads : store.HeadWeightAtMost (2 * 10 ^ 17) state` in its place, and derives the active-stake bound from it.
+  `Execution.honestHeadsExist_or_evidence_of_gloas` takes `heads : CheckpointHeadWeightCeiling (2 * 10 ^ 17) last` in place of `supply : CheckpointRegistryStakeCeiling (2 * 10 ^ 17) last`.
+  Migration: derive `heads` from the old bound with `Store.headWeightAtMost_of_effectiveBalanceSum_le`, pointwise for the ceiling.
+  The new statements imply the old ones.
+
+- In Lean, `CheckpointRegistryStakeCeiling` (`ForkChoice/FastConfirmation/HonestHeads.lean`, added earlier in 0.4.0) is removed: after the change of `Execution.honestHeadsExist_or_evidence_of_gloas` it had no reader.
+  Migration: state `CheckpointHeadWeightCeiling` instead; a bound on each honest justified state's effective-balance sum implies it, by `Store.headWeightAtMost_of_effectiveBalanceSum_le`.
+
+- In Lean, `Execution.callRolloverRead_or_evidence`, `Execution.honestHeadsCover_of_checked_call` and `Execution.rootViable_of_checked_call` hold at every fork and no longer take `preGloas : fork < .glamsterdam`.
+  They take `room`, `weights` and `supply` gated from Gloas as their last arguments, and `Execution.callRolloverRead_or_evidence` also a gated `fit`.
+  Their `supply` has the type `CheckpointHeadWeightCeiling (2 * 10 ^ 17) _`, the bound that the Gloas head endpoint now reads.
+  Migration: drop `preGloas` and pass `fun gloas => absurd gloas (Nat.not_le_of_lt preGloas)` for each gated argument.
+  The new statements imply the old ones.
+
+- In Lean, `Store.checkpointState_justified_of_getHead` holds at every fork.
+  It no longer takes `before : fork < .glamsterdam`; it takes `justifiedEarly`, which from Gloas asks that the justified block be older than the previous slot.
+  Migration: before Gloas, drop `before` and pass `fun gloas => absurd gloas (Nat.not_le_of_lt before)`.
+  The new statement implies the old one.
+
+- In Lean, `Execution.rootViableAt_of_checked` and `Execution.honestHeadsCover_of_viableAt` hold at every fork.
+  They no longer take `preGloas : fork < .glamsterdam`; they take `room : .glamsterdam ≤ fork → AnchorRegistryRoom preset anchorState horizon` as their last argument.
+  Migration: drop `preGloas` and pass `fun gloas => absurd gloas (Nat.not_le_of_lt preGloas)` as `room`.
+  The new statements imply the old ones.
+
+- In Lean, `Execution.honest_vote_of_caller_margin` holds at every fork and no longer takes `preGloas : fork < .glamsterdam`.
+  `Execution.source_surplus_or_historical_evidence_with` and `Execution.isAncestor_getHead_of_historical_anchor_with` hold at every fork; they no longer take `preGloas` and take `registries : .glamsterdam ≤ fork → HonestRegistriesWithinLimit time` as their last argument.
+  Migration: drop `preGloas`; before Gloas, pass `fun gloas => absurd gloas (Nat.not_le_of_lt preGloas)` as `registries`.
+  The new statements imply the old ones.
+
+- In Lean, `ancestor_head_of_window_margin` holds at every fork.
+  It no longer takes `before : fork < .glamsterdam`; it takes `registries`, gated from Gloas, as its last argument: every honest justified state read up to `last` has its registry within the limit.
+  From Gloas the head walk is cut at the parent's pending node and read with `Store.isAncestor_getHeadFrom_of_sibling_bound`.
+  Migration: before Gloas, drop `before` and pass `fun gloas => absurd gloas (Nat.not_le_of_lt before)`; from `HonestRegistriesWithinLimit`, pass its second half.
+  The new statement implies the old one.
+
+- In Lean, `Store.isAncestor_head_pending` moves from `EthLib.Consensus.Proofs.ForkChoice.FastConfirmation.Basic` to `EthLib.Consensus.Proofs.ForkChoice.Store`.
+  Its name and statement are unchanged.
+  Existing imports remain sufficient; for a direct import of the lemma, use `EthLib.Consensus.Proofs.ForkChoice.Store`.
+
+- In Lean, `Store.getNodeChildren_held` moves from `EthLib.Consensus.Proofs.ForkChoice.HeadTotality` to `EthLib.Consensus.Proofs.ForkChoice.Ghost`.
+  Its name and statement are unchanged.
+  Existing imports remain sufficient; for a direct import of the lemma, use `EthLib.Consensus.Proofs.ForkChoice.Ghost`.
+
 - In Lean, the IPv6 reader of the builder API reads hex digits with the reader of Base, and its own copy is removed ([#3837](https://github.com/ethereum/EthLib/issues/3837)).
   `BuilderApi.hexDigitValue?` is removed, and `BuilderApi.mem_hexGroup` now states that each character of a group has a value under `Base.hexValue?`, a byte.
   Migration: write `Base.hexValue?`, and read its value with `UInt8.toNat`.
@@ -1291,7 +2349,7 @@ Not yet released.
   It said that the epoch does not fall.
   Migration: constructors of `CapStep` must now prove `withdrawableEpoch` is unchanged after slashing.
   The new field implies the old one, so a reader of the old field reads the new one through `le_of_eq`.
-  `CapStep.refl`, `CapStep.trans` and `CapStep.data` carry the new field, and the readers in this repository keep their statements.
+  `CapStep.refl`, `CapStep.trans` and `CapStep.data` carry the new field, and the readers in this repository keep their statements (`Internal.CapStep.run` changes above).
 
 - In Lean, the result of `Store.Reachable.finalizedState_of_blockState` is stronger.
   After the anchor epoch, it also says that the store reads the finalized block of the state from the state's own block.
@@ -2790,6 +3848,59 @@ Not yet released.
   The configuration given to `rpc_serve` takes the optional keys `mergeForkBlock`, `genesisHash` and `genesisTime`.
   It rejects a malformed value of these keys, one of the genesis pair without the other, and a genesis pair that disagrees with block zero.
   The C and Python function signatures stay the same.
+
+- In Lean, `Base.Fork.le_hegota` is removed: use `Base.Fork.le_last`.
+  `Base.Fork.last` is the last fork, and `Base.Fork.le_last` states that every fork is at or before it.
+  The lookup of a fork by its name reads it, and so do the proofs that the consensus fork upgrades and their balance replay stop.
+  So a fork added at the end changes none of them; only `Base.Fork.last` must move to it.
+
+- In Lean, `Cryptography.Kzg.KZGCommitment` and `Cryptography.Kzg.VersionedHash` are now structures over their bytes.
+  The new module `EthLib.Cryptography.Kzg.Types` defines them, and `Consensus.VersionedHash` is the KZG type.
+  So Lean rejects a KZG proof, a public key or a Merkle root where one of them is expected.
+  `Cryptography.Kzg.kzgCommitmentToVersionedHash` now takes a commitment and returns a versioned hash.
+  The KZG operations that read untrusted bytes, such as `Cryptography.Kzg.verifyBlobKzgProof`, still take `Bytes48`.
+  The SSZ, RLP and JSON forms are those of the bytes, so no encoding changes.
+  The C and Python function signatures stay the same.
+  Migration: build a value with `KZGCommitment.mk` or `VersionedHash.mk`, and read its bytes with `.bytes`.
+
+- In Lean, the execution layer now types its versioned hashes as `Cryptography.Kzg.VersionedHash` ([#4551](https://github.com/ethereum/EthLib/issues/4551)).
+  A blob transaction and the environment that BLOBHASH reads hold them.
+  So do the blob check of the network form, the `engine_newPayload` check and the RPC transaction objects.
+  So the Engine layer passes the hashes of a beacon block to the execution layer without converting them.
+  `Execution.Transactions.versionedHash` is removed: use `Cryptography.Kzg.kzgCommitmentToVersionedHash`, which returns the same 32 bytes as a versioned hash.
+  The errors `TransactionError.invalidBlobVersionedHash`, `NetworkError.versionedHashMismatch` and `Engine.PayloadError.wrongVersionedHashes` carry versioned hashes, and their messages stay the same.
+  The point evaluation precompile still reads its versioned hash as raw call data.
+  The RLP and JSON forms are those of the bytes, so no encoding changes.
+  The C and Python function signatures stay the same.
+  Migration: wrap 32 bytes with `VersionedHash.mk`, and read them back with `.bytes`.
+
+- A response chunk of a request and response protocol now decodes at the bounds of its own fork.
+  Its context bytes name that fork, so the caller passes no bounds.
+  The new `reqresp_decode_chunk` of `ethlib.consensus` takes the fork of the exchange, the protocol ID, the genesis validators root and the chunk.
+  It also takes the configuration with its replacements, and returns the name of the fork of the chunk with the chunk.
+  A successful chunk of a protocol that sends a fork digest has the fork of the first epoch with that digest.
+  The other chunks have the fork of the exchange.
+  Blocks by range and by root send a digest from version 2.
+  Blocks by head and the four light client protocols send one in every version.
+  So do the blob and data column sidecar protocols, the payload envelope protocols and inclusion lists by indices.
+  A digest that no epoch of the chain has raises `ConsensusError` with the new code 305.
+  A digest of a fork before the first type of the protocol raises it with code 301.
+  The Phase 0 digest on a light client protocol is such a digest.
+  A digest that only the far future epoch has raises it with the new code 306, whatever the fork of the exchange, since no slot has that epoch.
+  On a chain that leaves its last fork unscheduled, the digest of that fork is such a digest.
+  A digest of a scheduled fork after the fork of the exchange names that fork, since the type of a chunk depends on the epoch of its digest alone.
+  Near a fork boundary, a peer can serve a block of a fork that the requester has not reached.
+  A chunk that does not decode raises it with the code of `ReqRespError`.
+  In Lean, `Consensus.decodeChunkAtFork` in the new module `EthLib.Consensus.ReqResp.Chunk` decodes, and fails with `Consensus.ResponseChunkError`.
+  `Consensus.BoundsError` has the new constructors `unknownDigest` and `unscheduledDigest`, so a match over it needs those cases.
+  `EthLib.Consensus.Proofs.ReqResp.Chunk` states that a decoded chunk is one that `decodeResponseChunk` accepts at the bounds of the fork returned (`decodeChunkAtFork_eq_ok`).
+  Take a chain where `digestsIdentify` holds.
+  A successful chunk with the digest of an epoch has the fork of that epoch (`decodeChunkAtFork_fork_of_digest`).
+  A value that a server serializes at that fork decodes and reads back, when the epoch is not the far future one (`decodeChunkAtFork_response`).
+  A successful chunk whose digest only the far future epoch has is rejected (`decodeChunkAtFork_unscheduled`).
+  The search for the epoch of a digest finds one at or before every epoch with that digest (`forkOfDigest_le`).
+  The fork of a decoded chunk is at or after `ReqRespProtocol.firstChunkFork`, the first fork at which the payload of the protocol has a type.
+  `responseDesc_isSome` states that each protocol version of a fork has a response type at the fork of every chunk.
 
 ## 0.3.0
 

@@ -6,19 +6,9 @@ public import EthLib.Consensus.Proofs.SlashingProtection
 /-!
 # Proofs: listing and deleting keys through the Keymanager API
 
-The list gives the keys that the client holds, in order.
-
 A delete gives one status for each key of the request, in order, and keeps the record.
 
 Afterwards the client holds no key of the request, unless it holds that key read-only.
-
-A key named twice in a request is deleted at most once.
-
-The data returned names only keys whose status is deleted or not active.
-
-For each such key it holds all the blocks and votes that the record holds.
-
-A delete sent again returns the same data.
 -/
 
 @[expose] public section
@@ -39,6 +29,14 @@ theorem map_validatingPubkey_listKeys (state : KeyState) :
 /-- Deleting one key leaves the record as it was. -/
 theorem protection_deleteLocalKey (state : KeyState) (pubkey : BLSPubkey) :
     (deleteLocalKey state pubkey).2.protection = state.protection := by
+  unfold deleteLocalKey
+  split
+  · rfl
+  · split <;> rfl
+
+/-- Deleting one local key leaves the remote keys as they were. -/
+theorem remoteKeys_deleteLocalKey (state : KeyState) (pubkey : BLSPubkey) :
+    (deleteLocalKey state pubkey).2.remoteKeys = state.remoteKeys := by
   unfold deleteLocalKey
   split
   · rfl
@@ -95,6 +93,13 @@ theorem protection_deleteLocalKeys (state : KeyState) (pubkeys : List BLSPubkey)
   induction pubkeys generalizing state with
   | nil => rfl
   | cons pubkey rest ih => simp [deleteLocalKeys, ih, protection_deleteLocalKey]
+
+/-- Deleting local keys leaves the remote keys as they were. -/
+theorem remoteKeys_deleteLocalKeys (state : KeyState) (pubkeys : List BLSPubkey) :
+    (deleteLocalKeys state pubkeys).2.remoteKeys = state.remoteKeys := by
+  induction pubkeys generalizing state with
+  | nil => rfl
+  | cons pubkey rest ih => simp [deleteLocalKeys, ih, remoteKeys_deleteLocalKey]
 
 /-- One status for each key. -/
 theorem length_deleteLocalKeys (state : KeyState) (pubkeys : List BLSPubkey) :
@@ -348,5 +353,13 @@ theorem slashingProtection_deleteKeys_again (call : deleteKeys state request = (
     exact named
   rw [decide_eq_decide, mem_exportedKeys_deleteKeys again namedAgain,
     mem_exportedKeys_deleteKeys call named, isReadonly_of_deleteKeys call]
+
+/-- The call that deletes keystores leaves the remote keys as they were. -/
+theorem remoteKeys_deleteKeystores (text : JsonText) (state : KeyState) (body : Json) :
+    (deleteKeystores text state body).2.remoteKeys = state.remoteKeys := by
+  unfold deleteKeystores deleteKeys
+  split
+  · rfl
+  · exact remoteKeys_deleteLocalKeys _ _
 
 end EthLib.Consensus.KeymanagerApi

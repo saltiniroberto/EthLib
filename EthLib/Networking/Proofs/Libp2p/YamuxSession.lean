@@ -1,6 +1,8 @@
 module
 
+public import EthLib.Base.Proofs.List
 public import EthLib.Networking.Libp2p.YamuxSession
+import EthLib.Base.Proofs.CodeInjective
 
 /-!
 # Proofs: the streams of a yamux session
@@ -17,71 +19,15 @@ namespace EthLib.Networking.Proofs.Libp2p.YamuxSession
 
 open EthLib.Networking.Libp2p.Yamux
 
-/-- Looking up an ID in a table with a first entry. -/
-private theorem lookup_cons' (a : UInt32) (e : UInt32 × Stream) (t : List (UInt32 × Stream)) :
-    List.lookup a (e :: t) = if a = e.1 then some e.2 else List.lookup a t := by
-  by_cases h : a = e.1
-  · have : (a == e.1) = true := by simpa using h
-    simp [List.lookup, h]
-  · have : (a == e.1) = false := by simpa using h
-    simp [List.lookup, this, h]
-
 /-- Setting a stream makes the table report that stream for its ID. -/
 theorem find?_set_self (session : Session) (id : UInt32) (s : Stream) :
-    (session.set id s).find? id = some s := by
-  unfold Session.set Session.find?
-  by_cases h : session.streams.any (·.1 = id) = true
-  · simp only [h, ↓reduceIte]
-    generalize session.streams = l at h
-    induction l with
-    | nil => simp at h
-    | cons e t ih =>
-      by_cases he : e.1 = id
-      · rw [List.map_cons, lookup_cons']
-        simp [he]
-      · have he' : ¬ id = e.1 := fun h => he h.symm
-        simp only [List.any_cons, he, decide_false, Bool.false_or] at h
-        rw [List.map_cons, lookup_cons']
-        simp only [he, he', ite_false]
-        exact ih h
-  · simp only [h, Bool.false_eq_true, ↓reduceIte]
-    generalize session.streams = l at h
-    induction l with
-    | nil => simp
-    | cons e t ih =>
-      by_cases he : e.1 = id
-      · simp [List.any_cons, he] at h
-      · have he' : ¬ id = e.1 := fun h => he h.symm
-        simp only [List.any_cons, he, decide_false, Bool.false_or] at h
-        rw [List.cons_append, lookup_cons']
-        simp only [he', ite_false]
-        exact ih h
+    (session.set id s).find? id = some s :=
+  Base.lookup_replaceKey_self session.streams id s
 
 /-- Setting a stream leaves the table as it was for every other ID. -/
 theorem find?_set_of_ne (session : Session) {id id' : UInt32} (s : Stream)
-    (h : id' ≠ id) : (session.set id s).find? id' = session.find? id' := by
-  unfold Session.set Session.find?
-  by_cases hc : session.streams.any (·.1 = id) = true
-  · simp only [hc, ↓reduceIte]
-    clear hc
-    generalize session.streams = l
-    induction l with
-    | nil => simp [List.lookup]
-    | cons e t ih =>
-      rw [List.map_cons, lookup_cons', lookup_cons']
-      by_cases he : e.1 = id
-      · have : ¬ id' = e.1 := fun h' => h (h'.trans he)
-        simp [he, h, ih]
-      · simp only [he, ite_false]
-        rw [← ih]
-  · simp only [hc, Bool.false_eq_true, ↓reduceIte]
-    clear hc
-    generalize session.streams = l
-    induction l with
-    | nil => simp [lookup_cons', List.lookup, h]
-    | cons e t ih =>
-      rw [List.cons_append, lookup_cons', lookup_cons']
-      by_cases hk : id' = e.1 <;> simp [hk, ih]
+    (h : id' ≠ id) : (session.set id s).find? id' = session.find? id' :=
+  Base.lookup_replaceKey_of_ne session.streams s h
 
 /-- Setting a stream keeps the side of the session. -/
 theorem isClient_set (session : Session) (id : UInt32) (s : Stream) :
@@ -367,21 +313,15 @@ theorem send_window {isClient : Bool} {events : List (Bool × Frame)} {after : S
   simp only [Session.find?, List.lookup, Option.map_none, Option.getD_none] at h1
   omega
 
-/-- How the flags of one stream change along one accepted frame.
-
-The flags that are on stay on.
-
-Each turns on only by its own frame flag from its own side.
-
-FIN from this side, FIN from the peer and RST turn them on.
-
-The exception is a frame from the peer that this side drops after its own reset. -/
+/-- How the flags of one stream change along one accepted frame. -/
 def FlagStep (remote : Bool) (session after : Session) (frame : Frame) (id : UInt32) : Prop :=
+  -- The flags that are on stay on.
   (∀ s, session.find? id = some s → ∃ s', after.find? id = some s' ∧
     (s.localClosed = true → s'.localClosed = true) ∧
     (s.remoteClosed = true → s'.remoteClosed = true) ∧
     (s.localReset = true → s'.localReset = true) ∧
     (s.remoteReset = true → s'.remoteReset = true)) ∧
+  -- Each flag turns on only by its own frame flag from its own side.
   (∀ s', after.find? id = some s' →
     (s'.localClosed = true → (∃ s, session.find? id = some s ∧ s.localClosed = true) ∨
       (remote = false ∧ OnStream id frame ∧ frame.hasFlag fin = true)) ∧
@@ -390,11 +330,16 @@ def FlagStep (remote : Bool) (session after : Session) (frame : Frame) (id : UIn
     ((s'.localReset = true ∨ s'.remoteReset = true) →
       (∃ s, session.find? id = some s ∧ (s.localReset = true ∨ s.remoteReset = true)) ∨
         (OnStream id frame ∧ frame.hasFlag rst = true))) ∧
+  -- FIN from this side turns on its closed flag.
   (remote = false → OnStream id frame → frame.hasFlag fin = true →
     ∃ s', after.find? id = some s' ∧ s'.localClosed = true) ∧
+  -- FIN from the peer turns on its closed flag.
+  --
+  -- The exception is a frame from the peer that this side drops after its own reset.
   (remote = true → OnStream id frame → frame.hasFlag fin = true →
     (∃ s', after.find? id = some s' ∧ s'.remoteClosed = true) ∨
       ∃ s, session.find? id = some s ∧ s.localReset = true) ∧
+  -- RST turns on a reset flag.
   (OnStream id frame → frame.hasFlag rst = true →
     ∃ s', after.find? id = some s' ∧ (s'.localReset = true ∨ s'.remoteReset = true))
 
@@ -710,7 +655,6 @@ theorem closed_iff {isClient : Bool} {events : List (Bool × Frame)} {after : Se
 /-- Two errors with one code come from one constructor. -/
 theorem _root_.EthLib.Networking.Libp2p.Yamux.YamuxSessionError.code_injective
     (e₁ e₂ : YamuxSessionError) (h : e₁.code = e₂.code) : e₁.ctorIdx = e₂.ctorIdx := by
-  cases e₁ <;> cases e₂ <;>
-    first | rfl | (simp only [YamuxSessionError.code] at h; exact absurd h (by decide))
+  code_injective YamuxSessionError.code
 
 end EthLib.Networking.Proofs.Libp2p.YamuxSession

@@ -10,18 +10,6 @@ C-ABI exports for the fork identifier, callable from the Python C extension.
 
 A remote fork identifier, and the output of the encoder, is its RLP list `[FORK_HASH, FORK_NEXT]`.
 
-A schedule crosses it as the RLP list `[genesis-hash, genesis-time, merge-fork, forks]`.
-
-- `merge-fork` is an empty list, or a list of the one block of `FORK_NEXT_VALUE`.
-- `forks` holds `[name, kind, value]` for each fork, with kind 0 for a block and 1 for a time.
-- A fork name is written as its case is, such as `homestead`.
-
-A block number and a timestamp cross the boundary as 64-bit integers.
-
-The fork identifier of a node comes back as typed Python values: its hash and its next fork.
-
-Two exports write a schedule and a fork identifier in RLP, from typed Python values.
-
 An input that the export rejects before the fork identifier rules has code 0.
 -/
 
@@ -61,6 +49,10 @@ def readActivation (item : Item) : Result (Fork × Activation) := do
 
 /-- The schedule in the RLP list `[genesis-hash, genesis-time, merge-fork, forks]`.
 
+- `merge-fork` is an empty list, or a list of the one block of `FORK_NEXT_VALUE`.
+- `forks` holds `[name, kind, value]` for each fork, with kind 0 for a block and 1 for a time.
+- A fork name is written as its case is, such as `homestead`.
+
 The chain ID does not enter the fork identifier, so the configuration has chain ID 0. -/
 def readSchedule (bytes : ByteArray) : Result Schedule := do
   let .ok item := Serialization.Rlp.decode bytes |
@@ -83,12 +75,15 @@ def readSchedule (bytes : ByteArray) : Result Schedule := do
     { chainId := 0, depositContractAddress := Vector.replicate 20 0, activations := activations }
   return ⟨hash, time, config, mergeForkBlock⟩
 
-/-- The hash and the next fork of a fork identifier. -/
+/-- The hash and the next fork of a fork identifier.
+
+The fork identifier of a node comes back to Python as these typed values. -/
 def forkIdFields (id : ForkId) : Vector UInt8 4 × UInt64 :=
   (id.hash, id.next)
 
 /-- The fork identifier of a node with a schedule in RLP at a head: its hash and its next fork. -/
 def forkIdOf (args : ByteArray × UInt64 × UInt64) : Result (Vector UInt8 4 × UInt64) := do
+  -- A block number and a timestamp cross the boundary as 64-bit integers.
   let (schedule, number, timestamp) := args
   let s ← readSchedule schedule
   return forkIdFields (s.forkId number.toNat timestamp.toNat)
@@ -126,7 +121,9 @@ def scheduleOf (args : ByteArray × Nat × Option Nat × List (String × Nat × 
 
 The arguments are the genesis hash, the genesis time, the merge fork block or `None`, and the forks.
 
-Each fork is its name, its kind, 0 for a block and 1 for a time, and its block or time. -/
+Each fork is its name, its kind, 0 for a block and 1 for a time, and its block or time.
+
+It and the encoder of a fork identifier write RLP from typed Python values. -/
 @[export eth_fork_id_schedule]
 def scheduleExport (args : PyValue) : Result PyValue :=
   pyExport scheduleOf args

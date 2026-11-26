@@ -1,5 +1,6 @@
 module
 
+public import EthLib.Base.List
 public import EthLib.Networking.Encoding.Base32
 public import EthLib.Networking.Enr.V4
 public import EthLib.Networking.Rlpx.Handshake
@@ -102,12 +103,6 @@ def DnsError.code : DnsError → UInt32
 /-- The hash that names an entry: the first 16 bytes of a Keccak-256 hash. -/
 abbrev Hash := Vector UInt8 HASH_SIZE
 
-/-- The rest of a list of characters after a prefix, if it starts with the prefix. -/
-def dropPrefix : List Char → List Char → Option (List Char)
-  | [], cs => some cs
-  | p :: ps, c :: cs => if p = c then dropPrefix ps cs else none
-  | _ :: _, [] => none
-
 /-- The base32 name of a hash. -/
 def Hash.toText (h : Hash) : List Char :=
   -- The base32 of RFC 4648 §6, and no padding is used, so 16 bytes give 26 characters.
@@ -190,13 +185,13 @@ The hashes have 26 characters and the signature 87, so the sequence number is wh
 def Root.parseFields (rest : List Char) : Except DnsError Root := do
   -- `e=<enr-root>`, the hash of the root of the subtree of node records.
   let enrRoot ← Hash.ofText (rest.take HASH_TEXT_SIZE)
-  let some rest := dropPrefix " l=".toList (rest.drop HASH_TEXT_SIZE) | throw .rootFields
+  let some rest := dropPrefix? " l=".toList (rest.drop HASH_TEXT_SIZE) | throw .rootFields
   -- `l=<link-root>`, the hash of the root of the subtree of links.
   let linkRoot ← Hash.ofText (rest.take HASH_TEXT_SIZE)
-  let some rest := dropPrefix " seq=".toList (rest.drop HASH_TEXT_SIZE) | throw .rootFields
+  let some rest := dropPrefix? " seq=".toList (rest.drop HASH_TEXT_SIZE) | throw .rootFields
   -- The text ends with the 5 characters of ` sig=`, then the 87 of the signature.
   let tail := rest.length - (5 + SIGNATURE_TEXT_SIZE)
-  let some sig := dropPrefix " sig=".toList (rest.drop tail) | throw .rootFields
+  let some sig := dropPrefix? " sig=".toList (rest.drop tail) | throw .rootFields
   -- `seq=<sequence-number>` is what lies between.
   return ⟨enrRoot, linkRoot, ← seqOf (rest.take tail), ← signatureOf sig⟩
 
@@ -317,26 +312,26 @@ def Entry.toText : Entry → Except DnsError String
 /-- The entry of a text, by its prefix. -/
 def Entry.parse (text : String) : Except DnsError Entry :=
   -- The root: `enrtree-root:v1 e=<enr-root> l=<link-root> seq=<sequence-number> sig=<signature>`.
-  match dropPrefix ROOT_PREFIX text.toList with
+  match dropPrefix? ROOT_PREFIX text.toList with
   | some rest => .root <$> Root.parseFields rest
   | none =>
     -- An intermediate tree entry: `enrtree-branch:<h_1>,<h_2>,...,<h_n>`.
-    match dropPrefix BRANCH_PREFIX text.toList with
+    match dropPrefix? BRANCH_PREFIX text.toList with
     | some rest => .branch <$> branchOf rest
     | none =>
       -- A leaf pointing to a different list: `enrtree://<key>@<fqdn>`.
-      match dropPrefix URL_PREFIX text.toList with
+      match dropPrefix? URL_PREFIX text.toList with
       | some rest => .link <$> Url.parseFields rest
       | none =>
         -- A leaf containing a node record: `enr:<node-record>`, in the text form of EIP-778.
-        match dropPrefix Enr.TEXT_PREFIX text.toList with
+        match dropPrefix? Enr.TEXT_PREFIX text.toList with
         | some _ => .enr <$> (Enr.fromText text).mapError .enr
         -- The source defines no other entry type.
         | none => throw .unknownEntry
 
 /-- The URL of a text. -/
 def Url.parse (text : String) : Except DnsError Url :=
-  match dropPrefix URL_PREFIX text.toList with
+  match dropPrefix? URL_PREFIX text.toList with
   | some rest => Url.parseFields rest
   | none => throw .unknownEntry
 
@@ -363,19 +358,29 @@ def nameOf (hash : Hash) (domain : String) : String :=
 
 /-- The walk of the subtrees of a list, with the hashes still to read and those already read.
 
+Each hash is tracked with its subtree, so a hash in both subtrees is read in each.
+
 The lookup is the DNS: any function from a name to the text of its TXT record.
 
 Each text must have the hash of its name, so a resolver cannot change it unseen. -/
 def walk (lookup : String → Option String) (domain : String) :
-    Nat → List (Subtree × Hash) → List Hash → Found → Except DnsError Found
+    Nat → List (Subtree × Hash) → List (Subtree × Hash) → Found → Except DnsError Found
   | _, [], _, found => return found
   -- Not in the source: a budget bounds the hashes taken, since a lookup can make an endless tree.
+  --
+  -- Every hash taken counts, even one already read and skipped.
+  --
+  -- So a hash under both roots counts at least once in each subtree.
   | 0, _ :: _, _, _ => throw .tooManyEntries
   | budget + 1, (tree, hash) :: pending, visited, found =>
     -- The client must track hashes and domains already resolved, to avoid an infinite loop.
     --
     -- EthLib follows no link, so it tracks only hashes.
-    if hash ∈ visited then walk lookup domain budget pending visited found
+    --
+    -- Not in the source: each hash is tracked with its subtree.
+    --
+    -- The source keeps the two subtrees apart so that clients can sync them independently.
+    if (tree, hash) ∈ visited then walk lookup domain budget pending visited found
     else do
       -- Step 3: resolve the TXT record of the hash subdomain, `<hash>.<domain>`.
       let name := nameOf hash domain
@@ -388,20 +393,24 @@ def walk (lookup : String → Option String) (domain : String) :
       --
       -- Not in the source: EthLib reads them in order, depth first, not in random order.
       | _, .branch hashes =>
-        walk lookup domain budget (hashes.map (tree, ·) ++ pending) (hash :: visited) found
+        walk lookup domain budget (hashes.map (tree, ·) ++ pending) ((tree, hash) :: visited) found
       -- For `enr`: decode, verify the node record and import it; only in the `enr-root` subtree.
       | .records, .enr record =>
         -- Not in the source: the record must verify under its own key of the scheme v4.
         unless Enr.verifyV4 record do throw (.badRecord name)
-        walk lookup domain budget pending (hash :: visited)
+        walk lookup domain budget pending ((tree, hash) :: visited)
           { found with records := found.records ++ [record] }
       -- A link may only appear in the subtree pointed to by `link-root`.
       --
       -- Step 4 does not name links: EthLib keeps them, and following them is left to the caller.
       | .links, .link url =>
-        walk lookup domain budget pending (hash :: visited)
+        walk lookup domain budget pending ((tree, hash) :: visited)
           { found with links := found.links ++ [url] }
       -- A leaf in the wrong subtree, or a root inside a subtree, is refused.
+      --
+      -- A record may only appear in the `enr-root` subtree.
+      --
+      -- So a leaf is refused in the wrong subtree even when the other subtree reaches it too.
       | _, _ => throw (.wrongSubtree name)
 
 /-- The node list at a domain, under a known key: its sequence number, records and links.
@@ -435,13 +444,15 @@ It follows the first lookup where they agree.
 
 It finds nothing when they never disagree, when a lookup has no text, or when the budget ends.
 
-It also finds nothing when the first two texts that differ have different hashes. -/
+It also finds nothing when the first two texts that differ have different hashes.
+
+It tracks each hash with its subtree, as the walk does. -/
 def walkCollision (lookup1 lookup2 : String → Option String) (domain : String) :
-    Nat → List (Subtree × Hash) → List Hash → Option (String × String)
+    Nat → List (Subtree × Hash) → List (Subtree × Hash) → Option (String × String)
   | _, [], _ => none
   | 0, _ :: _, _ => none
   | budget + 1, (tree, hash) :: pending, visited =>
-    if hash ∈ visited then walkCollision lookup1 lookup2 domain budget pending visited
+    if (tree, hash) ∈ visited then walkCollision lookup1 lookup2 domain budget pending visited
     else
       match lookup1 (nameOf hash domain), lookup2 (nameOf hash domain) with
       | some text1, some text2 =>
@@ -449,8 +460,8 @@ def walkCollision (lookup1 lookup2 : String → Option String) (domain : String)
           match Entry.parse text1 with
           | .ok (.branch hashes) =>
             walkCollision lookup1 lookup2 domain budget (hashes.map (tree, ·) ++ pending)
-              (hash :: visited)
-          | _ => walkCollision lookup1 lookup2 domain budget pending (hash :: visited)
+              ((tree, hash) :: visited)
+          | _ => walkCollision lookup1 lookup2 domain budget pending ((tree, hash) :: visited)
         else if hashOf text1 = hashOf text2 then some (text1, text2) else none
       | _, _ => none
 

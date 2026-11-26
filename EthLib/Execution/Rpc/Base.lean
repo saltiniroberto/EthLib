@@ -1,7 +1,7 @@
 module
 
 public import EthLib.Serialization.JsonRpc
-public import EthLib.Base.BigEndian
+public import EthLib.Base.ByteOrder
 public import EthLib.Base.Hash32
 public import EthLib.Base.U256
 
@@ -10,11 +10,11 @@ public import EthLib.Base.U256
 
 The base types of the execution JSON-RPC API that the shared JSON-RPC readers do not define.
 
-They are those of [`base-types.yaml`][types].
-
 A fixed byte string, such as `bytes4` or `hash32`, has exactly two lowercase digits per byte.
 
-[types]: https://github.com/ethereum/execution-apis/blob/3284ee80c3da3e516c53782dde75157cccf1ebdc/src/schemas/base-types.yaml
+Source: [`base-types.yaml`][types], at commit `1ca0818` of execution-apis: the type patterns.
+
+[types]: https://github.com/ethereum/execution-apis/blob/1ca0818569467cff85b7f41372f22e728d5daa14/src/schemas/base-types.yaml
 -/
 
 @[expose] public section
@@ -74,14 +74,13 @@ def notFound : Json := .null
 
 A numerator above the denominator counts as the denominator, so the number lies from 0 to 1.
 
-A denominator of 0 gives 0.
-
-A value of 0 is written `0`.
-
-At 18 places, the writer of numbers would print `0.e-8`, which is not JSON. -/
+A denominator of 0 gives 0. -/
 def ratioJson (places num den : Nat) : Json :=
   -- The schema: a number from 0 to 1, with no count of digits, so the count is a parameter.
   let digits := min num den * 10 ^ places / den
+  -- A value of 0 is written `0`.
+  --
+  -- At 18 places, the writer of numbers would print `0.e-8`, which is not JSON.
   if digits = 0 then .num 0 else .num ⟨(digits : Nat), places⟩
 
 /-- Four bytes. -/
@@ -118,7 +117,7 @@ def bytesMax32 (what : String) (j : Json) : Read Bytes32 := do
     match hexValue false c with
     | some d => value := 16 * value + d.toNat
     | none => reject s!"{what}: not a hex digit"
-  return ⟨(Base.natToBytes 32 value).toArray, by simp [Base.natToBytes_length]⟩
+  return Base.ByteOrder.toBE 32 value
 
 /-- A hash of 32 bytes. -/
 def hash32 (what : String) (j : Json) : Read Hash32 := fixed what 32 j

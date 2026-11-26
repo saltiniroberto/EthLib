@@ -1,30 +1,28 @@
 module
 
 public import EthLib.Execution.Evm.Precompiles.P256Verify
-import EthLib.Base.Proofs.BigEndian
+import EthLib.Base.Proofs.ByteOrder
 import EthLib.Cryptography.Proofs.Secp256r1.Ecdsa
 
 /-!
 # Proofs: `Evm.Precompiles.P256Verify`
 
-- The call fails exactly when the gas is below 6900.
-- With enough gas, a wrong length gives empty output, and every output is the word 1 or empty.
-- With enough gas, the call returns the word 1 on 160 valid bytes, and empty output otherwise.
-- On the 160-byte call data of EIP-7951, the input check gives the result of ECDSA verification.
-- A valid signature under an affine public key returns the word 1, and so does a SEC 1 signature.
-- `(r, s)` and `(r, n - s)` give the same result at every gas limit.
-- A signature component outside `(0, n)` never verifies.
+The call fails exactly when the gas is below 6900.
+
+With enough gas, it returns the word 1 on 160 valid bytes, and empty output otherwise.
+
+On the call data of EIP-7951, the input check gives the result of ECDSA verification.
 -/
 
 @[expose] public section
 
 namespace EthLib.Execution.Evm.Precompiles.P256Verify
 
-open EthLib.Base (bytesToNat bytesToNat_natToBytes bytesToNat_natToBytes_of_lt natToBytes
-  natToBytes_length)
+open EthLib.Base (ByteOrder.ofBE ByteOrder.ofBE_toBE ByteOrder.ofBE_toBE_of_lt ByteOrder.toBE
+  ByteOrder.length_toList_toBE)
 open EthLib.Cryptography.Secp256r1
 
-/-- The call fails exactly when the gas is below the price. -/
+/-- The call fails exactly when the gas is below the price, 6900. -/
 theorem p256Verify_eq_error_iff (data : ByteArray) (gas : Nat) (e : P256VerifyError) :
     p256Verify data gas = .error e ↔ gas < GAS_P256VERIFY ∧ e = .outOfGas GAS_P256VERIFY gas := by
   unfold p256Verify
@@ -56,12 +54,12 @@ theorem p256Verify_ok {data : ByteArray} {gas : Nat} {out : ByteArray}
 /-- A signature with `r` outside `(0, n)` never verifies, whatever the key and the hash. -/
 theorem verify_of_r_out (q : Point) (e : Nat) {r : Nat} (hr : ¬(0 < r ∧ r < Fn.modulus))
     (s : Nat) : verify q e r s = false := by
-  simp [verify, hr]
+  simp [verify, Cryptography.Ecdsa.Curve.verify, hr]
 
 /-- A signature with `s` outside `(0, n)` never verifies, whatever the key and the hash. -/
 theorem verify_of_s_out (q : Point) (e r : Nat) {s : Nat} (hs : ¬(0 < s ∧ s < Fn.modulus)) :
     verify q e r s = false := by
-  unfold verify
+  unfold verify Cryptography.Ecdsa.Curve.verify
   split <;> simp_all
 
 /-! ## Call data and signature verification -/
@@ -72,12 +70,13 @@ It concatenates `e`, `r`, `s`, `qx` and `qy` as 32-byte big-endian words.
 
 Each value is written modulo 2^256. -/
 def callData (e r s qx qy : Nat) : ByteArray :=
-  ⟨(natToBytes 32 e ++ natToBytes 32 r ++ natToBytes 32 s ++ natToBytes 32 qx
-    ++ natToBytes 32 qy).toArray⟩
+  ⟨((ByteOrder.toBE 32 e).toList ++ (ByteOrder.toBE 32 r).toList ++ (ByteOrder.toBE 32 s).toList
+    ++ (ByteOrder.toBE 32 qx).toList
+    ++ (ByteOrder.toBE 32 qy).toList).toArray⟩
 
 /-- The call data of a signature has 160 bytes. -/
 theorem callData_size (e r s qx qy : Nat) : (callData e r s qx qy).size = INPUT_BYTES := by
-  simp [callData, INPUT_BYTES, ByteArray.size, natToBytes_length]
+  simp [callData, INPUT_BYTES, ByteArray.size]
 
 /-- A key that verifies passes the check of the input against `(0, 0)`. -/
 private theorem not_zero_of_verify {qx qy : Fp} {e r s : Nat}
@@ -93,11 +92,11 @@ The signature verifies under that key.
 A key that verifies is never `(0, 0)`, since that point is off the curve. -/
 theorem isValid_eq_true_iff (bytes : List UInt8) :
     isValid bytes = true ↔
-      ∃ (hx : bytesToNat ((bytes.drop 96).take 32) < Fp.modulus)
-        (hy : bytesToNat (bytes.drop 128) < Fp.modulus),
-        verify (.affine ⟨_, hx⟩ ⟨_, hy⟩) (bytesToNat (bytes.take 32))
-          (bytesToNat ((bytes.drop 32).take 32))
-          (bytesToNat ((bytes.drop 64).take 32)) = true := by
+      ∃ (hx : ByteOrder.ofBE ((bytes.drop 96).take 32) < Fp.modulus)
+        (hy : ByteOrder.ofBE (bytes.drop 128) < Fp.modulus),
+        verify (.affine ⟨_, hx⟩ ⟨_, hy⟩) (ByteOrder.ofBE (bytes.take 32))
+          (ByteOrder.ofBE ((bytes.drop 32).take 32))
+          (ByteOrder.ofBE ((bytes.drop 64).take 32)) = true := by
   unfold isValid
   dsimp only
   split_ifs with hx hy
@@ -158,9 +157,10 @@ theorem p256Verify_eq_ok_empty_iff (data : ByteArray) (gas : Nat) :
 
 private theorem callData_list (e r s qx qy : Nat) :
     (callData e r s qx qy).data.toList =
-      natToBytes 32 e ++ (natToBytes 32 r ++ (natToBytes 32 s ++
-        (natToBytes 32 qx ++ natToBytes 32 qy))) := by
-  simp [callData, List.append_assoc]
+      (ByteOrder.toBE 32 e).toList
+        ++ ((ByteOrder.toBE 32 r).toList ++ ((ByteOrder.toBE 32 s).toList ++
+        ((ByteOrder.toBE 32 qx).toList ++ (ByteOrder.toBE 32 qy).toList))) := by
+  simp [callData]
 
 private theorem isValid_callData_mod (e r s qx qy : Nat) :
     isValid (callData e r s qx qy).data.toList =
@@ -173,7 +173,7 @@ private theorem isValid_callData_mod (e r s qx qy : Nat) :
       else false := by
   rw [callData_list]
   unfold isValid
-  simp [List.drop_append, natToBytes_length, List.drop_eq_nil_of_le, bytesToNat_natToBytes]
+  simp [List.drop_append, List.drop_eq_nil_of_le, ByteOrder.ofBE_toBE]
 
 /-- On call data with an affine key, the input check gives the result of ECDSA verification.
 
@@ -196,18 +196,15 @@ theorem isValid_callData {e r s : Nat} (he : e < 2 ^ 256) (hr : r < 2 ^ 256) (hs
 
 /-- A call on five words returns the word 1 exactly when three conditions hold.
 
-The call has at least 6900 gas.
-
-Both coordinates of the key lie below `p`.
-
-The signature verifies under that key.
-
 The hash, `r`, `s` and the two coordinates each fit in 32 bytes, from EIP-7951, Input. -/
 theorem p256Verify_callData_eq_ok_valid_iff {e r s qx qy : Nat} (he : e < 2 ^ 256)
     (hr : r < 2 ^ 256) (hs : s < 2 ^ 256) (hqx : qx < 2 ^ 256) (hqy : qy < 2 ^ 256) (gas : Nat) :
     p256Verify (callData e r s qx qy) gas = .ok VALID ↔
+      -- The call has at least 6900 gas.
       GAS_P256VERIFY ≤ gas ∧
+        -- Both coordinates of the key lie below `p`.
         ∃ (hx : qx < Fp.modulus) (hy : qy < Fp.modulus),
+          -- The signature verifies under that key.
           verify (.affine ⟨qx, hx⟩ ⟨qy, hy⟩) e r s = true := by
   rw [p256Verify_eq_ok_valid_iff, callData_size, isValid_callData_mod, Nat.mod_eq_of_lt he,
     Nat.mod_eq_of_lt hr, Nat.mod_eq_of_lt hs, Nat.mod_eq_of_lt hqx, Nat.mod_eq_of_lt hqy]
@@ -244,17 +241,17 @@ theorem p256Verify_callData_of_verify {qx qy : Fp} {e r s gas : Nat} (he : e < 2
 
 /-- A signature from SEC 1 v2 §4.1.3 returns the word 1 under its public key.
 
-`d` is nonzero, and `k G` is an affine point with x-coordinate `rx`, so `k` is nonzero.
-
-The hash `e` fits in 32 bytes, `r = rx mod n`, and `s = k^(-1) (e + r d)`.
-
-Neither `r` nor `s` is zero, and `Q = d G` is the affine key `(qx, qy)`.
-
-The call has at least 6900 gas. -/
+The private key `d` is nonzero, and the hash `e` fits in 32 bytes. -/
 theorem p256Verify_callData_sign (d k : Fn) {e : Nat} (he : e < 2 ^ 256) (hd : d ≠ 0)
+    -- `k G` is an affine point with x-coordinate `rx`, so `k` is nonzero.
     {rx ry qx qy : Fp} (hR : Point.mul k Point.generator = .affine rx ry)
+    -- `r = rx mod n` is not zero.
     (hr : rx.val % Fn.modulus ≠ 0)
+    -- `s = k^(-1) (e + r d)` is not zero.
     (hs : Fn.inv k * (Fin.ofNat _ e + Fin.ofNat _ (rx.val % Fn.modulus) * d) ≠ 0)
+    -- `Q = d G` is the affine key `(qx, qy)`.
+    --
+    -- The call has at least 6900 gas.
     (hQ : Point.mul d Point.generator = .affine qx qy) {gas : Nat} (hgas : GAS_P256VERIFY ≤ gas) :
     p256Verify (callData e (rx.val % Fn.modulus)
       (Fn.inv k * (Fin.ofNat _ e + Fin.ofNat _ (rx.val % Fn.modulus) * d)).val

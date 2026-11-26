@@ -1,5 +1,6 @@
 module
 
+public import EthLib.Base.Proofs.Pow
 public import EthLib.Cryptography.Secp256k1.Field
 public import EthLib.Cryptography.Proofs.Pratt
 public import EthLib.Cryptography.Proofs.Inverse
@@ -13,47 +14,19 @@ Both moduli are prime, so `ZMod p` and `ZMod n` are fields.
 
 `Fp` is `Fin p`, which is `ZMod p` by definition, with the same ring operations.
 
-So a proof states its algebra over `ZMod p`, where `ring` and `field_simp` work.
-
 An element of `Fp` crosses over unchanged.
 
-- Both moduli are prime, by Pratt certificates that the kernel checks.
-- Square and multiply computes the power.
+Square and multiply computes the power.
 -/
 
 @[expose] public section
 
 namespace EthLib.Cryptography.Secp256k1
 
-open Fin.CommRing in
-/-- Square and multiply computes `a^e`, when `e < 2^fuel`. -/
-theorem Fin.powBits_eq_pow {m : Nat} [NeZero m] (fuel : Nat) (a : Fin m) (e : Nat) (he : e < 2 ^ fuel) :
-    Fin.powBits fuel a e = a ^ e := by
-  induction fuel generalizing a e with
-  | zero =>
-    obtain rfl : e = 0 := by simpa using he
-    simp [Fin.powBits]
-  | succ fuel ih =>
-    have h2 : e / 2 < 2 ^ fuel := by rw [Nat.pow_succ] at he; omega
-    -- `a^e = a^(e mod 2) * (a^2)^(e / 2)`.
-    rw [Fin.powBits, ih _ _ h2, ← pow_two, ← pow_mul]
-    split <;> [rw [← pow_succ']; skip] <;> congr 1 <;> omega
-
-/-- Square and multiply reads only the low `fuel` bits of the exponent. -/
-theorem Fin.powBits_mod {m : Nat} [NeZero m] (fuel : Nat) (a : Fin m) (e : Nat) :
-    Fin.powBits fuel a e = Fin.powBits fuel a (e % 2 ^ fuel) := by
-  induction fuel generalizing a e with
-  | zero => rfl
-  | succ fuel ih =>
-    -- The halves agree on their low `fuel` bits, and both exponents have the same low bit.
-    have hhalf : e % 2 ^ (fuel + 1) / 2 % 2 ^ fuel = e / 2 % 2 ^ fuel := by
-      rw [Nat.pow_succ', Nat.mod_mul_right_div_self, Nat.mod_mod]
-    have hbit : e % 2 ^ (fuel + 1) % 2 = e % 2 :=
-      Nat.mod_mod_of_dvd e (Nat.dvd_of_mod_eq_zero (by simp [Nat.pow_succ, Nat.mul_mod_left]))
-    rw [Fin.powBits, Fin.powBits, ih _ (e / 2), ih _ (e % 2 ^ (fuel + 1) / 2), hhalf, hbit]
-
 namespace Fp
 
+-- Both moduli are prime, by Pratt certificates that the kernel checks.
+--
 -- The certificates compute powers mod 256-bit numbers, deeper than the default.
 set_option maxRecDepth 8000
 
@@ -216,7 +189,9 @@ theorem modulus_lt_two_pow : modulus < 2 ^ 256 := by decide
 /-- `Fp` is `ZMod modulus` as a ring.
 
 The map is the identity, so it carries every operation over, and the algebra of `ZMod` applies. -/
-def toZMod : Fp ≃+* ZMod modulus := RingEquiv.refl _
+def toZMod : Fp ≃+* ZMod modulus :=
+  -- So a proof states its algebra over `ZMod p`, where `ring` and `field_simp` work.
+  RingEquiv.refl _
 
 @[simp] theorem toZMod_zero : toZMod 0 = 0 := rfl
 
@@ -226,13 +201,9 @@ def toZMod : Fp ≃+* ZMod modulus := RingEquiv.refl _
 
 @[simp] theorem toZMod_sub (a b : Fp) : toZMod (a - b) = toZMod a - toZMod b := rfl
 
-/-- The power is square and multiply on `Fp`, for every exponent. -/
-theorem pow_eq_powBits (a : Fp) (e : Nat) : a.pow e = Fin.powBits 256 a e := rfl
-
 /-- `pow` computes `a^e`, for an exponent below `2^256`. -/
-theorem toZMod_pow (a : Fp) (e : Nat) (he : e < 2 ^ 256) : toZMod (a.pow e) = toZMod a ^ e := by
-  rw [pow_eq_powBits]
-  exact Fin.powBits_eq_pow 256 a e he
+theorem toZMod_pow (a : Fp) (e : Nat) (he : e < 2 ^ 256) : toZMod (a.pow e) = toZMod a ^ e :=
+  Base.map_powBits toZMod (map_mul toZMod) (map_one toZMod) 256 a e he
 
 /-- `p = 3 mod 4`, which gives the square root its closed form. -/
 theorem modulus_mod_four : modulus % 4 = 3 := by decide
@@ -410,7 +381,7 @@ def toZMod : Fn ≃+* ZMod modulus := RingEquiv.refl _
 
 /-- `pow` computes `a^e`, for an exponent below `2^256`. -/
 theorem toZMod_pow (a : Fn) (e : Nat) (he : e < 2 ^ 256) : toZMod (a.pow e) = toZMod a ^ e :=
-  Fin.powBits_eq_pow 256 a e he
+  Base.map_powBits toZMod (map_mul toZMod) (map_one toZMod) 256 a e he
 
 end Fn
 

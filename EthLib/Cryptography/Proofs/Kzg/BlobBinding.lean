@@ -5,31 +5,17 @@ public import EthLib.Cryptography.Proofs.Kzg.Verify
 /-!
 # Proofs: an accepted blob opening binds its blob, or names a root
 
-Let the check of a blob opening accept on a well-formed setup.
+In an accepted opening, the committed polynomial is the blob's interpolant.
 
-Let its commitment and proof represent `f(τ)` and `g(τ)`, for `f` and `g` of degree below 4096.
+Otherwise the challenge or the secret is a root of an error polynomial.
 
-Let `p` be the interpolant of the blob's decoded values, and `z` the evaluation challenge.
+No theorem here bounds the cost of finding polynomials that reach a root case when `τ` is secret.
 
-Then one of three cases holds, and the cases can overlap:
+- The algebraic group model is that of [Fuchsbauer, Kiltz and Loss, CRYPTO 2018][agm].
+- The scheme is PolyCommit_DL, §3.2 of [Kate, Zaverucha and Goldberg, ASIACRYPT 2010][kzg].
 
-- `f = p`;
-- or `f ≠ p`, `f - p` has degree below 4096, and `z` is a root of `f - p`;
-- or `h = f - p(z) - g (X - z)` is nonzero of degree at most 4096, and `τ` is a root of `h`.
-
-The cases carry meaning only when an algebraic adversary outputs `f` and `g` without `τ`.
-
-For other choices, such as constants, the third case only restates the check.
-
-No theorem here bounds the cost of finding such polynomials when `τ` is secret.
-
-The algebraic group model is that of Fuchsbauer, Kiltz and Loss, CRYPTO 2018:
-
-<https://eprint.iacr.org/2017/620>
-
-The scheme is PolyCommit_DL, §3.2 of Kate, Zaverucha and Goldberg, ASIACRYPT 2010:
-
-<https://www.iacr.org/archive/asiacrypt2010/6477178/6477178.pdf>
+[agm]: https://eprint.iacr.org/2017/620
+[kzg]: https://www.iacr.org/archive/asiacrypt2010/6477178/6477178.pdf
 -/
 
 @[expose] public section
@@ -111,9 +97,11 @@ Let the commitment and the proof pass the conversions of EIP-4844, which validat
 
 Let the converted values decode, as in EIP-4844, to points `C` and `P`.
 
-Let `C` and `P` represent `f(τ)` and `g(τ)`, for two polynomials `f` and `g` of degree below 4096.
+Let `C` and `P` represent `f(τ)` and `g(τ)`, for `f` and `g` of degree below 4096.
 
-Let the check accept, and let `p` be the interpolant of the blob's decoded values.
+Let the check accept.
+
+Let `p` be the interpolant of the blob's decoded values.
 
 Let `z` be the evaluation challenge of the blob and the commitment.
 
@@ -123,16 +111,30 @@ Then one of three cases holds, with `h = f - p(z) - g (X - z)`:
 - or `f ≠ p`, `f - p` has degree below 4096, and `z` is a root of `f - p`;
 - or `h` is nonzero of degree at most 4096, and `τ` is a root of `h`.
 
+The cases can overlap.
+
+They carry meaning only when an algebraic adversary outputs `f` and `g` without `τ`.
+
+For other choices, such as constants, the third case only restates the check.
+
 This theorem gives no bound on the cost of finding such polynomials when `τ` is secret. -/
 theorem verifyBlobKzgProof_binding {s : TrustedSetup} {τ : Fr}
     (hs : s.WellFormed τ) {blob : Blob} {commitmentBytes proofBytes : Bytes48}
     {commitment : KZGCommitment} {proof : KZGProof} {poly : Polynomial}
+    -- The blob decodes to `poly`.
     {C P : G1} {f g : Fr[X]} (hblob : blobToPolynomial blob = .ok poly)
+    -- The commitment passes the conversion of EIP-4844, which validates its bytes.
     (hc : bytesToKzgCommitment commitmentBytes = .ok commitment)
-    (hC : uncompressG1 commitment = .ok C) (hf : G1.Represents C (f.eval τ))
+    -- The converted values decode, as in EIP-4844, to points `C` and `P`.
+    --
+    -- `C` and `P` represent `f(τ)` and `g(τ)`, for two polynomials `f` and `g`.
+    (hC : uncompressG1 commitment.bytes = .ok C) (hf : G1.Represents C (f.eval τ))
+    -- The proof passes its conversion.
     (hp : bytesToKzgProof proofBytes = .ok proof)
-    (hP : uncompressG1 proof = .ok P) (hg : G1.Represents P (g.eval τ))
+    (hP : uncompressG1 proof.bytes = .ok P) (hg : G1.Represents P (g.eval τ))
+    -- The polynomials `f` and `g` have degree below 4096.
     (hfdeg : f.natDegree < FIELD_ELEMENTS_PER_BLOB) (hgdeg : g.natDegree < FIELD_ELEMENTS_PER_BLOB)
+    -- The check accepts.
     (h : verifyBlobKzgProof s blob commitmentBytes proofBytes = .ok true) :
     f = interpolant poly ∨
       f ≠ interpolant poly ∧ (f - interpolant poly).natDegree < FIELD_ELEMENTS_PER_BLOB ∧
@@ -148,15 +150,15 @@ theorem verifyBlobKzgProof_binding {s : TrustedSetup} {τ : Fr}
       (a - b).natDegree < FIELD_ELEMENTS_PER_BLOB :=
     lt_of_le_of_lt (natDegree_sub_le a b) (max_lt ha hb)
   -- The conversions return their input bytes, and validation gives the decoded points.
-  obtain ⟨rfl, hC⟩ := validateKzgG1Point_of_bytesToKzgCommitment hc hC
-  obtain ⟨rfl, hP⟩ := validateKzgG1Point_of_bytesToKzgProof hp hP
+  obtain ⟨rfl, hCv⟩ := validateKzgG1Point_of_bytesToKzgCommitment hc hC
+  obtain ⟨rfl, hPv⟩ := validateKzgG1Point_of_bytesToKzgProof hp hP
   obtain ⟨poly', C', P', hblob', hC', hP', hv⟩ := verifyBlobKzgProof_eq_ok_true h
   cases hblob.symm.trans hblob'
-  cases hC.symm.trans hC'
-  cases hP.symm.trans hP'
+  cases hCv.symm.trans hC'
+  cases hPv.symm.trans hP'
   rcases opening_eq_or_root ((verifyKzgProofImpl_iff hs hf hg
-      (computeChallenge blob commitment)
-      ((interpolant poly).eval (computeChallenge blob commitment))).mp hv)
+      (computeChallenge blob ⟨commitmentBytes⟩)
+      ((interpolant poly).eval (computeChallenge blob ⟨commitmentBytes⟩))).mp hv)
     with hfp | ⟨hne, hroot⟩ | ⟨hne, hroot⟩
   · exact Or.inl hfp
   · exact Or.inr (Or.inl ⟨hne, hsubdeg f (interpolant poly) hfdeg (natDegree_interpolant_lt poly),

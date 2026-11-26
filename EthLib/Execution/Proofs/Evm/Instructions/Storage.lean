@@ -6,35 +6,11 @@ public import EthLib.Execution.Proofs.Evm.Step
 /-!
 # Proofs: `Evm.Instructions.Storage`
 
-From Istanbul to BPO5, a write that a second write undoes costs, net of refunds, two reads.
+This file proves the gas, the refunds and the state gas of SLOAD and SSTORE, fork by fork.
 
-A cold first access adds its price on top.
+It also covers the access to a slot that they make.
 
-A write that leaves the slot as it is costs one read and changes no refund.
-
-From Glamsterdam, a write that a second write undoes costs two accesses, net of refunds.
-
-The first may be cold, and the state gas of a new slot comes back.
-
-A write that leaves the slot as it is costs one access, and no state gas.
-
-Only a write that sets a zero slot charges state gas, and only a reset to zero refills it.
-
-From Berlin, an access to a slot is cold exactly when the transaction has not accessed it.
-
-SSTORE never completes in a static frame, and from Istanbul fails with 2300 gas or less.
-
-From Glamsterdam, SSTORE in a static frame fails before it reads the stack.
-
-From Berlin, a write with its state gas costs at most 22,100 gas before Glamsterdam.
-
-From Glamsterdam, it costs at most 5 times that.
-
-SLOAD accesses the slot of the current account and pays the cold or warm price of the fork.
-
-Then it puts the word of the slot in place of the key.
-
-SLOAD and SSTORE keep memory.
+SSTORE in a frame that must not change the state is covered too.
 -/
 
 @[expose] public section
@@ -86,7 +62,7 @@ theorem sstore_restore (h : fork ≥ .istanbul) (hlt : fork < .glamsterdam) (ori
   have hne' : new ≠ original := Ne.symm hne
   have hg : ¬fork ≥ .glamsterdam := Nat.not_le_of_lt hlt
   unfold sstoreCost sstoreRefund sstoreResetCost sstoreReadCost
-  simp only [hg, ite_false]
+  simp only [gasSchedule, hg, ite_false]
   by_cases hb : fork ≥ .berlin <;> by_cases h0 : original = 0 <;> by_cases h1 : new = 0 <;>
     cases cold <;> simp [h, hb, h0, h1, hne, hne'] <;> simp_all <;> omega
 
@@ -97,7 +73,7 @@ theorem sstoreCost_le (h : fork ≥ .berlin) (hlt : fork < .glamsterdam)
   have hg : ¬fork ≥ .glamsterdam := Nat.not_le_of_lt hlt
   have hi : fork ≥ .istanbul := Nat.le_trans (by decide) h
   unfold sstoreCost sstoreResetCost sstoreReadCost
-  simp only [hg, hi, h, ite_false, ite_true]
+  simp only [gasSchedule, hg, hi, h, ite_false, ite_true]
   cases cold <;> simp only [ite_true, Bool.false_eq_true, ite_false, COLD_STORAGE_ACCESS,
     STORAGE_SET, COLD_STORAGE_WRITE, WARM_ACCESS] <;> split <;> (try split) <;> omega
 
@@ -256,9 +232,11 @@ From Berlin, the price depends on whether the slot is cold. -/
 theorem sloadStep_cons {evm : Evm fork Meter} {word : U256} {rest : List U256}
     (h : evm.stack.val = word :: rest) :
     sloadStep evm =
+      -- The step accesses the slot of the current account.
       let accessed := accessStorageKey { evm with stack := ⟨rest, by
         have := evm.stack.property; rw [h] at this; simp at this; omega⟩ }
         evm.message.currentTarget (U256.toBeBytes word)
+      -- The step pays the cold or warm price of the fork.
       (GasMeter.charge accessed.2.gas (sloadCost fork accessed.1)).map fun gas =>
         { accessed.2 with
           gas

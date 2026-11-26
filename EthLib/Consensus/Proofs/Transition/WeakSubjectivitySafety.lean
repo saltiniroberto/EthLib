@@ -9,68 +9,23 @@ public import EthLib.Consensus.Proofs.WeakSubjectivity
 
 A node that starts from a weak subjectivity checkpoint trusts the active validators of its state.
 
-Their effective balances are the stake of the Casper FFG model, and the trusted set is `V₀`.
+Their effective balances are the stake of the Casper FFG model.
+
+The trusted set is `V₀`.
 
 Take two conflicting finalized checkpoints, and the justified sets between their epochs.
 
 Measure the change of a set since `V₀` as the stake that joined plus twice the stake that left.
 
-Assume each change is at most `3 c` for each epoch of churn of the period, with `c` its churn.
+Assume each change is at most three times the churn times the epochs of churn of the period.
 
-The epochs of churn are the epochs of the period less the delay before a validator can withdraw.
+The epochs of churn are those of the period, less the delay before a validator can withdraw.
 
 Then validators with at least `1/3 - SAFETY_DECAY/100` of the stake of `V₀` are slashable.
 
+No theorem yet derives that bound on the change from the state transition, so it is an assumption.
+
 The bound follows Gasper Theorem 8.3, [arXiv 2003.03052v3](https://arxiv.org/abs/2003.03052v3).
-
-Why `3 c` for each epoch, from Electra, with [EIP-7251] and its balance churn `c`.
-
-- Deposits and exits each take at most the churn `a ≤ c` of activations and exits.
-- Consolidations take the rest of `c`, and their sources leave the set.
-- So an epoch adds at most `a` and removes at most `c`, a change of at most `a + 2 c ≤ 3 c`.
-
-From Gloas, [EIP-8061] weighs exits two thirds, activations one third and consolidations one.
-
-There an epoch changes the set by at most three times the weighted churn.
-
-Rounding can add 4 Gwei to that when the churn of consolidations is zero.
-
-The queues carry unused churn to later epochs, so the bound can hold over a window, not each epoch.
-
-No theorem yet derives that bound from the state transition, so it is an assumption here.
-
-The rule spends the delay on keeping exits slashable, and the other epochs of the period on churn.
-
-The assumption takes the change over those other epochs as given.
-
-Activations have no such delay, and a validator outside the registry of the checkpoint weighs zero.
-
-The stake of each validator stays its effective balance at the checkpoint, as the model needs.
-
-From Phase 0 to Deneb, the rule counts `N` validators of average balance `t` and largest `T`.
-
-It takes the churn of `delta` validators in an epoch, and `Delta` top-ups in an epoch.
-
-A top-up raises the balance of a validator that already exists, and the model has no such change.
-
-So the theorem assumes that the sets gain and lose at most `delta` validators per epoch of churn.
-
-With each stake at most `T`, that is a change of at most `3 delta T` for each epoch of churn.
-
-The churn of later epochs can grow with the validators.
-
-The assumption takes the churn at the checkpoint for every epoch of churn.
-
-With large balances, `230 T < 320 t`, the rule's epochs for churn always fit the decayed margin.
-
-The rule takes the longer of those and its epochs for top-ups, so the top-ups must fit too.
-
-When they do not, or with small balances, the period can exceed what the churn allows.
-
-Then the theorem gives nothing, and a model with top-ups would be needed.
-
-[EIP-7251]: https://eips.ethereum.org/EIPS/eip-7251
-[EIP-8061]: https://eips.ethereum.org/EIPS/eip-8061#churn-computations
 -/
 
 @[expose] public section
@@ -86,36 +41,80 @@ open scoped Classical in
 
 The trusted set is the active validators of the state at the checkpoint, weighed by its balances.
 
-Its stake must be at least one increment, so that it is the total active balance.
-
-The churn is the one the period uses: weighted from Gloas, the balance churn before.
-
 Take two finalized checkpoints whose blocks conflict.
 
-Take each justified checkpoint whose epoch lies between theirs.
+The set of each justified checkpoint between them must change by at most `3 c` per epoch of churn.
 
-Its set changes since the trusted set by at most three times the churn per epoch of churn.
+Then two justified checkpoints in that range have slashable validators of both sets.
 
-The change counts the stake that joined plus twice the stake that left.
-
-Then two justified checkpoints `l` and `r` in that range have slashable validators of both sets.
-
-They hold at least `1/3 - SAFETY_DECAY/100` of the trusted stake.
-
-No epoch of the model is tied to the checkpoint's epoch; the assumed change carries the window. -/
+They hold at least `1/3 - SAFETY_DECAY/100` of the trusted stake. -/
 theorem accountable_safety_of_weakSubjectivityPeriod {config : Config}
     {state : BeaconState preset fork} (electra : .pectra ≤ fork) {period churn : UInt64}
     (periodOk : computeWeakSubjectivityPeriod config state = .ok period)
+    -- The churn `c` is the one the period uses.
+    --
+    -- It is the weighted churn from Gloas, and the balance churn before.
+    --
+    -- From Gloas, [EIP-8061] weighs exits two thirds, activations one third and consolidations one.
+    --
+    -- There an epoch changes the set by at most three times the weighted churn.
+    --
+    -- [EIP-8061]: https://eips.ethereum.org/EIPS/eip-8061#churn-computations
     (churnOk : if .glamsterdam ≤ fork then gloasWeightedChurn config state = .ok churn
       else getBalanceChurnLimit config state = .ok churn)
+    -- The trusted stake must be at least one increment, so that it is the total active balance.
     (large : preset.EFFECTIVE_BALANCE_INCREMENT.toNat ≤
       stake (fun index => balanceAt state index.toNat)
         (getActiveValidatorIndices state (getCurrentEpoch state)).toFinset)
     {V : Models.Ffg.Checkpoint β → Finset ValidatorIndex} {genesis : β}
     {votes : Set (Vote ValidatorIndex β)} {c₁ c₂ : Models.Ffg.Checkpoint β}
+    -- Take a finalized checkpoint.
     (h₁ : Finalized V (fun index => balanceAt state index.toNat) genesis votes c₁)
+    -- Take a second finalized checkpoint.
     (h₂ : Finalized V (fun index => balanceAt state index.toNat) genesis votes c₂)
+    -- The blocks of the two finalized checkpoints conflict.
     (hc : Conflicting c₁.block c₂.block)
+    -- Take each justified checkpoint whose epoch lies between theirs.
+    --
+    -- Its set changes since the trusted set by at most three times the churn per epoch of churn.
+    --
+    -- The change counts the stake that joined plus twice the stake that left.
+    --
+    -- The epochs of churn are those of the period, less the delay before a validator can withdraw.
+    --
+    -- From Electra, [EIP-7251] sets the balance churn `c`.
+    --
+    -- Each epoch then changes a set by at most `3 c`.
+    --
+    -- - Deposits and exits each take at most the churn `a ≤ c` of activations and exits.
+    -- - Consolidations take the rest of `c`, and their sources leave the set.
+    -- - So an epoch adds at most `a` and removes at most `c`, a change of at most `a + 2 c ≤ 3 c`.
+    --
+    -- From Gloas, rounding can add 4 Gwei to that when the churn of consolidations is zero.
+    --
+    -- The queues carry unused churn to later epochs.
+    --
+    -- So the bound can hold over a window, not each epoch.
+    --
+    -- No epoch of the model is tied to the epoch of the checkpoint.
+    --
+    -- The assumed change carries the window.
+    --
+    -- The rule spends the delay on keeping exits slashable.
+    --
+    -- It spends the other epochs of the period on churn.
+    --
+    -- The assumption takes the change over those other epochs as given.
+    --
+    -- Activations have no such delay.
+    --
+    -- A validator outside the registry of the checkpoint weighs zero.
+    --
+    -- The stake of each validator stays its effective balance at the checkpoint.
+    --
+    -- The model needs that.
+    --
+    -- [EIP-7251]: https://eips.ethereum.org/EIPS/eip-7251
     (change : ∀ c : Models.Ffg.Checkpoint β, min c₁.epoch c₂.epoch ≤ c.epoch →
       c.epoch ≤ max c₁.epoch c₂.epoch →
       Justified V (fun index => balanceAt state index.toNat) genesis votes c →
@@ -124,6 +123,11 @@ theorem accountable_safety_of_weakSubjectivityPeriod {config : Config}
         2 * stake (fun index => balanceAt state index.toNat)
           ((getActiveValidatorIndices state (getCurrentEpoch state)).toFinset \ V c) ≤
         (period.toNat - config.MIN_VALIDATOR_WITHDRAWABILITY_DELAY.toNat) * (3 * churn.toNat)) :
+    -- Then two justified checkpoints `l` and `r` lie in that range.
+    --
+    -- They have slashable validators of both of their sets.
+    --
+    -- Those validators hold at least `1/3 - SAFETY_DECAY/100` of the trusted stake.
     ∃ l r : Models.Ffg.Checkpoint β,
       min c₁.epoch c₂.epoch ≤ l.epoch ∧ l.epoch ≤ max c₁.epoch c₂.epoch ∧
       min c₁.epoch c₂.epoch ≤ r.epoch ∧ r.epoch ≤ max c₁.epoch c₂.epoch ∧
@@ -152,48 +156,63 @@ open scoped Classical in
 
 The trusted set is the active validators of the state at the checkpoint, weighed by its balances.
 
-Its stake must be at least one increment, so that it is the total active balance.
+It assumes large balances, without which the theorem gives nothing.
 
-Assume each balance at most the largest effective balance, a whole number `T` of ether.
+The model has no top-up, which raises the balance of a validator that already exists.
 
-The rule counts `N` active validators of average balance `t` in ether, rounded down.
+Take two finalized checkpoints whose blocks conflict, and each justified checkpoint between them.
 
-Assume large balances, `230 T < 320 t`, so that the rule weighs churn against top-ups.
+Since the trusted set, at most the churn of validators per epoch of churn joins its set.
 
-Assume its epochs for top-ups move at most `N t / 20` ether at the churn of validators.
+At most as many leave it.
 
-Take two finalized checkpoints whose blocks conflict.
-
-Take each justified checkpoint whose epoch lies between theirs.
-
-At most the churn of validators per epoch of churn joined its set since the trusted set.
-
-At most as many left it.
-
-The epochs of churn leave out the withdrawal delay, as from Electra.
-
-Then two justified checkpoints `l` and `r` in that range have slashable validators of both sets.
+Then two justified checkpoints in that range have slashable validators of both sets.
 
 They hold at least `1/3 - SAFETY_DECAY/100` of the trusted stake. -/
 theorem accountable_safety_of_weakSubjectivityPeriod_of_lt_electra {config : Config}
     {state : BeaconState preset fork} (before : fork < .pectra) {period total : UInt64} (periodOk : computeWeakSubjectivityPeriod config state = .ok period)
     (totalOk : getTotalActiveBalance state = .ok total)
+    -- The trusted stake must be at least one increment, so that it is the total active balance.
     (large : preset.EFFECTIVE_BALANCE_INCREMENT.toNat ≤
       stake (fun index => balanceAt state index.toNat)
         (getActiveValidatorIndices state (getCurrentEpoch state)).toFinset)
+    -- Assume each balance at most the largest effective balance.
     (capped : ∀ index, balanceAt state index ≤ preset.MAX_EFFECTIVE_BALANCE.toNat)
+    -- That largest effective balance is a whole number `T` of ether.
     (wholeEther : preset.MAX_EFFECTIVE_BALANCE.toNat % ETH_TO_GWEI.toNat = 0)
+    -- The rule counts `N` active validators of average balance `t` in ether, rounded down.
     {N t T : ℕ} (hN : N = (getActiveValidatorIndices state (getCurrentEpoch state)).length)
+    -- The average balance `t` is in ether, rounded down.
     (ht : t = total.toNat / N / ETH_TO_GWEI.toNat)
+    -- The largest balance `T` is in ether.
     (hT : T = preset.MAX_EFFECTIVE_BALANCE.toNat / ETH_TO_GWEI.toNat)
+    -- Assume large balances, `230 T < 320 t`, where the rule takes its epochs for churn.
+    --
+    -- With large balances, the epochs that the rule gives for churn always fit the decayed margin.
     (largeBalances : 230 * T < 320 * t)
-    (topUps : 20 * (230 * N / (600 * (preset.MAX_DEPOSITS.toNat * preset.SLOTS_PER_EPOCH.toNat)) *
-      (getValidatorChurnLimit config state).toNat * T) ≤ N * t)
     {V : Models.Ffg.Checkpoint β → Finset ValidatorIndex} {genesis : β}
     {votes : Set (Vote ValidatorIndex β)} {c₁ c₂ : Models.Ffg.Checkpoint β}
+    -- Take a finalized checkpoint.
     (h₁ : Finalized V (fun index => balanceAt state index.toNat) genesis votes c₁)
+    -- Take a second finalized checkpoint.
     (h₂ : Finalized V (fun index => balanceAt state index.toNat) genesis votes c₂)
+    -- The blocks of the two finalized checkpoints conflict.
     (hc : Conflicting c₁.block c₂.block)
+    -- Take each justified checkpoint whose epoch lies between theirs.
+    --
+    -- At most the churn of validators per epoch of churn joined its set since the trusted set.
+    --
+    -- At most as many left it.
+    --
+    -- The epochs of churn leave out the withdrawal delay, as from Electra.
+    --
+    -- So the theorem assumes the sets gain and lose at most `delta` validators per epoch of churn.
+    --
+    -- With each stake at most `T`, that is a change of at most `3 delta T` for each epoch of churn.
+    --
+    -- The churn of later epochs can grow with the validators.
+    --
+    -- The assumption takes the churn at the checkpoint for every epoch of churn.
     (change : ∀ c : Models.Ffg.Checkpoint β, min c₁.epoch c₂.epoch ≤ c.epoch →
       c.epoch ≤ max c₁.epoch c₂.epoch →
       Justified V (fun index => balanceAt state index.toNat) genesis votes c →
@@ -203,6 +222,11 @@ theorem accountable_safety_of_weakSubjectivityPeriod_of_lt_electra {config : Con
         ((getActiveValidatorIndices state (getCurrentEpoch state)).toFinset \ V c).card ≤
           (period.toNat - config.MIN_VALIDATOR_WITHDRAWABILITY_DELAY.toNat) *
             (getValidatorChurnLimit config state).toNat) :
+    -- Then two justified checkpoints `l` and `r` lie in that range.
+    --
+    -- They have slashable validators of both of their sets.
+    --
+    -- Those validators hold at least `1/3 - SAFETY_DECAY/100` of the trusted stake.
     ∃ l r : Models.Ffg.Checkpoint β,
       min c₁.epoch c₂.epoch ≤ l.epoch ∧ l.epoch ≤ max c₁.epoch c₂.epoch ∧
       min c₁.epoch c₂.epoch ≤ r.epoch ∧ r.epoch ≤ max c₁.epoch c₂.epoch ∧
@@ -221,7 +245,7 @@ theorem accountable_safety_of_weakSubjectivityPeriod_of_lt_electra {config : Con
     state.validators.bound (Nat.lt_trans before (by decide))
   simp only [computeWeakSubjectivityPeriod, notGloas, notElectra, ↓reduceIte,
     computeWeakSubjectivityPeriodPhase0, bind_ok_iff, mapError_ok_iff] at periodOk
-  obtain ⟨total', totalOk', average, averageOk, Delta, DeltaOk, epochs, epochsOk, periodOk⟩ :=
+  obtain ⟨total', totalOk', average, averageOk, _, _, epochs, epochsOk, periodOk⟩ :=
     periodOk
   rw [totalOk, Except.ok.injEq] at totalOk'
   subst totalOk'
@@ -233,8 +257,6 @@ theorem accountable_safety_of_weakSubjectivityPeriod_of_lt_electra {config : Con
     rw [UInt64.toNat_div, hAverage, hNat, ht]
   have hT' : (preset.MAX_EFFECTIVE_BALANCE / ETH_TO_GWEI).toNat = T := by
     rw [UInt64.toNat_div, hT]
-  have hDelta : Delta.toNat = preset.MAX_DEPOSITS.toNat * preset.SLOTS_PER_EPOCH.toNat :=
-    (mulChecked_ok_iff.mp DeltaOk).2
   have hEpochs :
       period.toNat - config.MIN_VALIDATOR_WITHDRAWABILITY_DELAY.toNat = epochs.toNat := by
     rw [(addChecked_ok_iff.mp periodOk).2]
@@ -258,8 +280,8 @@ theorem accountable_safety_of_weakSubjectivityPeriod_of_lt_electra {config : Con
     rw [ht, hT]
     exact Nat.div_le_div_right (Nat.div_le_of_le_mul activeLe)
   have fit := churn_le_of_phase0PeriodEpochs_eq_ok epochsOk
-  rw [hNat, ht', hT', hDelta] at fit
-  have fit := fit largeBalances averageLe topUps
+  rw [hNat, ht', hT'] at fit
+  have fit := fit largeBalances averageLe
   -- Each justified set changes by at most `3 n δ` largest balances.
   obtain ⟨l, r, lo₁, hi₁, lo₂, hi₂, hl, hr, bound⟩ :=
     accountable_safety_of_change h₁ h₂ hc

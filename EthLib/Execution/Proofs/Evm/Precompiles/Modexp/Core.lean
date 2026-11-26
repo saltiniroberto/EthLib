@@ -15,8 +15,6 @@ The precompile does what EIP-198 and EIP-7823 say.
 - Data past the last field is ignored.
 - From Fusaka, a length above 1024 fails before gas is charged.
 - Otherwise the call fails exactly when the gas given is below the price.
-- A call succeeds exactly when both checks pass, and it then returns the computed output.
-- The price always fits in 64 bits.
 -/
 
 @[expose] public section
@@ -29,23 +27,23 @@ open Nat (powMod)
 
 /-- The big-endian integer held by the output bytes. -/
 def outputNat (bytes : ByteArray) : Nat :=
-  bytesToNat bytes.data.toList
+  ByteOrder.ofBE bytes.data.toList
 
 /-- The output bytes are the fixed-width encoding of the result. -/
 theorem compute_data (data : ByteArray) (l : Lengths) :
     (compute data l).data.toList
-      = natToBytes l.modulus
+      = (ByteOrder.toBE l.modulus
           (if readNat data l.modulusStart l.modulus = 0 then 0
            else powMod (readNat data BASE_OFFSET l.base) (readNat data l.exponentStart l.exponent)
-                  (readNat data l.modulusStart l.modulus)) := by
-  simp [compute]
+                  (readNat data l.modulusStart l.modulus))).toList := by
+  simp [compute] <;> rfl
 
 /-- The output has exactly `len_mod` bytes.
 
 EIP-198: "returns an output ... as a byte array with the same length as the modulus". -/
 theorem compute_size (data : ByteArray) (l : Lengths) : (compute data l).size = l.modulus := by
   have h := congrArg List.length (compute_data data l)
-  rw [natToBytes_length, Array.length_toList] at h
+  rw [ByteOrder.length_toList_toBE, Array.length_toList] at h
   exact h
 
 /-- The output is the mathematical `base ^ exponent mod modulus`.
@@ -64,10 +62,10 @@ theorem compute_eq_pow_mod (data : ByteArray) (l : Lengths) :
   rw [compute_data]
   split
   · -- A zero modulus gives the number 0 (written as zero bytes).
-    rw [bytesToNat_natToBytes, Nat.zero_mod]
+    rw [ByteOrder.ofBE_toBE, Nat.zero_mod]
   · next h =>
     -- No truncation: the remainder is below the modulus, which fits in `length_of_MODULUS` bytes.
-    rw [bytesToNat_natToBytes_of_lt, Nat.powMod_def]
+    rw [ByteOrder.ofBE_toBE_of_lt, Nat.powMod_def]
     -- The side goal is that bound, stated on the loop.
     rw [Nat.powMod_def]
     exact Nat.lt_trans (Nat.mod_lt _ (Nat.pos_of_ne_zero h)) (readNat_lt _ _ _)
@@ -77,7 +75,7 @@ theorem compute_modulus_zero (data : ByteArray) (l : Lengths)
     (h : readNat data l.modulusStart l.modulus = 0) :
     (compute data l).data = Array.replicate l.modulus 0 := by
   have := compute_data data l
-  rw [ite_eq_left h, natToBytes_zero_right] at this
+  rw [ite_eq_left h, ByteOrder.toList_toBE_zero_right] at this
   exact Array.toList_inj.mp (by simpa using this)
 
 /-- An empty modulus gives an empty output, even with an empty base.
@@ -114,15 +112,17 @@ theorem modexp_append_zeros (fork : Fork) (data : ByteArray) (n gas : Nat) :
 /-- Two inputs that agree on the bytes the lengths describe give the same result.
 
 The bytes described are the three headers, `BASE`, `EXPONENT` and `MODULUS`.
+
 A byte past the end counts as zero.
+
 This covers excess data, which EIP-198 says "is ignored", and short input. -/
 theorem modexp_congr (fork : Fork) {d₁ d₂ : ByteArray} (gas : Nat)
     (h : ∀ i, i < BASE_OFFSET + (parseLengths d₁).base + (parseLengths d₁).exponent
-                + (parseLengths d₁).modulus → byteAt d₁ i = byteAt d₂ i) :
+                + (parseLengths d₁).modulus → byteAtOrZero d₁ i = byteAtOrZero d₂ i) :
     modexp fork d₁ gas = modexp fork d₂ gas := by
   -- The lengths come from the first 96 bytes, which lie inside the covered range.
   have hl : parseLengths d₁ = parseLengths d₂ := by
-    have hh : ∀ i, i < 96 → byteAt d₁ i = byteAt d₂ i := fun i hi => h i (by
+    have hh : ∀ i, i < 96 → byteAtOrZero d₁ i = byteAtOrZero d₂ i := fun i hi => h i (by
       unfold BASE_OFFSET LENGTH_HEADER_BYTES; omega)
     simp only [parseLengths, LENGTH_HEADER_BYTES]
     have e : ∀ s, s + 32 ≤ 96 → readNat d₁ s 32 = readNat d₂ s 32 := fun s hs =>
@@ -164,7 +164,7 @@ theorem modexp_append_excess (fork : Fork) (data extra : ByteArray) (gas : Nat)
   intro i hi
   -- Every covered byte lies inside the original data, before the excess.
   have hi' : i < data.size := Nat.lt_of_lt_of_le hi h
-  simp [byteAt_eq_getD, ByteArray.data_append, Array.getD_eq_getD_getElem?,
+  simp [byteAtOrZero_eq_getD, ByteArray.data_append, Array.getD_eq_getD_getElem?,
     Array.getElem?_append_left hi']
 
 /-! ## Bounds and gas -/

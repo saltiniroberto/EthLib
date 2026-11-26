@@ -4,18 +4,14 @@ public import EthLib.Base.Proofs.MapM
 public import EthLib.Base.Proofs.Uint64
 public import EthLib.Networking.Gossip.Subnet
 public import Mathlib.Data.Nat.ModEq
+import EthLib.Base.Proofs.CodeInjective
 
 /-!
 # `Networking.Proofs.Gossip.Subnet`
 
 What the choice of attestation subnets returns.
 
-- A node gets as many subnets as the subnets per node, each below the number of subnets.
-- The choice succeeds when the parameters are nonzero and small enough, and the shuffle succeeds.
-- The subnets of a node are its shuffled prefix plus each index, modulo the number of subnets.
-- So they are distinct when a node takes no more subnets than there are.
-
-These facts hold for every shuffle, so they do not depend on how the consensus layer shuffles.
+Each result holds for every shuffle, so it does not depend on how the consensus layer shuffles.
 -/
 
 @[expose] public section
@@ -31,9 +27,7 @@ variable {ε : Type} {config : SubnetParameters}
 theorem _root_.EthLib.Networking.Gossip.SubnetError.code_injective
     (e₁ e₂ : SubnetError ε) (h : e₁.code = e₂.code) :
     e₁.ctorIdx = e₂.ctorIdx := by
-  -- Two distinct constructors have two distinct literal codes, which `decide` separates.
-  cases e₁ <;> cases e₂ <;>
-    first | rfl | (simp only [SubnetError.code] at h; exact absurd h (by decide))
+  code_injective SubnetError.code
 
 /-- Every subnet is below the number of subnets. -/
 theorem computeSubscribedSubnet_lt {index : UInt64} {subnet : SubnetID}
@@ -74,6 +68,8 @@ theorem nodePrefix_lt (nodeId : NodeID) {bits : Nat} (h : bits ≤ NODE_ID_BITS)
   exact nodeId.isLt
 
 /-- The choice of one subnet succeeds when the parameters fit and the shuffle succeeds.
+
+The parameters are nonzero, and small enough to fit 64 bits.
 
 The shuffle must succeed on every index below a count of at most `2^b`, for `b` prefix bits.
 
@@ -137,6 +133,8 @@ theorem computeSubscribedSubnet_exists {index : UInt64}
       exact ⟨_, rfl⟩
 
 /-- The choice of the subnets of a node succeeds when the parameters fit and the shuffle succeeds.
+
+The parameters are nonzero, and small enough to fit 64 bits.
 
 The shuffle must succeed on every index below a count of at most `2^b`, for `b` prefix bits.
 

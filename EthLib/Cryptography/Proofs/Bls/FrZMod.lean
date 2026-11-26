@@ -3,7 +3,7 @@ module
 public import EthLib.Cryptography.Bls.Fr
 public import EthLib.Cryptography.Proofs.Bls.Fr
 public import EthLib.Cryptography.Proofs.Pratt
-public import EthLib.Cryptography.Proofs.Montgomery
+public import EthLib.Cryptography.Proofs.Montgomery.ZMod
 public import Mathlib.Data.ZMod.Basic
 public import Mathlib.Algebra.Field.ZMod
 public import Mathlib.Tactic.NormNum.Prime
@@ -18,47 +18,21 @@ This file maps `Fr` to Mathlib's `ZMod r`.
 An element of `Fr` holds its Montgomery form, and the map sends it to the integer it stands for.
 
 The map is a ring isomorphism, so `Fr` is a field as `ZMod r` is.
-
-## Primality of the modulus
-
-The prime `r` has a Lucas certificate: `7` has order `r - 1` in the units of `ZMod r`.
-
-The certificate uses the full factorization of `r - 1`, which is the product of:
-
-- `2^32 * 3 * 11 * 19 * 10177 * 125527 * 859267`.
-- `906349^2 * 2508409 * 2529403 * 52437899 * 254760293^2`.
-
-It checks `7^(r - 1) = 1`, and `7^((r - 1) / q) ≠ 1` for each prime factor `q`.
-
-The kernel computes those powers by square and multiply on natural numbers, in seconds.
-
-The same two facts give the order of `7` exactly.
-
-So `7` is a primitive `(r - 1)`-th root of unity.
-
-And `7^((r - 1) / n)` is a primitive `n`-th root of unity for every `n` that divides `r - 1`.
-
-Those roots are the domains of the FFT and of barycentric evaluation.
-
-## The bridge to Mathlib
-
-The last section carries the field structure of `ZMod r` to `Fr` through the isomorphism.
-
-Its operations are those of `Fr`: the sum, the product, the power, the inverse and the division.
-
-So each operation of the specification is the operation of the field, by definition.
-
-The inverse is `a ^ (r - 2)`, which equals the field inverse because `r` is prime.
-
-Later proofs open the field structure with `open scoped EthLib.Cryptography.Bls.Fr`.
-
-It is scoped, as Mathlib scopes the ring instance of `Fin`, to avoid coercion loops.
 -/
 
 @[expose] public section
 
 namespace EthLib.Cryptography.Bls.Fr
 
+-- The prime `r` has a Lucas certificate: `7` has order `r - 1` in the units of `ZMod r`.
+--
+-- The certificate uses the full factorization of `r - 1`, which is the product of:
+-- - `2^32 * 3 * 11 * 19 * 10177 * 125527 * 859267`.
+-- - `906349^2 * 2508409 * 2529403 * 52437899 * 254760293^2`.
+--
+-- It checks `7^(r - 1) = 1`, and `7^((r - 1) / q) ≠ 1` for each prime factor `q`.
+--
+-- The kernel computes those powers by square and multiply on natural numbers, in seconds.
 /-- First half of the Lucas certificate: `7 ^ (r - 1) = 1` in `ZMod r`. -/
 theorem seven_pow_card_sub_one : ((7 : ℕ) : ZMod modulus) ^ (modulus - 1) = 1 := by
   rw [PowMod.natCast_pow_eq_one_iff modulus 7 (modulus - 1)]
@@ -93,34 +67,13 @@ instance : Fact (Nat.Prime modulus) := ⟨modulus_prime⟩
 
 instance : Fact (Nat.Prime params.p) := ⟨modulus_prime⟩
 
-/-- The element of `Fr` that an element of `ZMod r` stands for. -/
-def ofZMod (z : ZMod modulus) : Fr := Fr.ofNat z.val
-
-/-- An element of `ZMod r` maps back to itself. -/
-theorem toZMod_ofZMod (z : ZMod modulus) : Montgomery.toZMod (ofZMod z) = z :=
-  (Montgomery.toZMod_ofNat z.val).trans (ZMod.natCast_zmod_val z)
-
-/-- An element of `Fr` maps back to itself. -/
-theorem ofZMod_toZMod (a : Fr) : ofZMod (Montgomery.toZMod a) = a :=
-  Montgomery.toZMod_injective (toZMod_ofZMod _)
-
 /-- `Fr` and Mathlib's `ZMod r` are isomorphic rings.
 
 The map sends an element to the integer mod `r` that it stands for. -/
-def toZMod : Fr ≃+* ZMod modulus where
-  toFun := Montgomery.toZMod
-  invFun := ofZMod
-  left_inv := ofZMod_toZMod
-  right_inv := toZMod_ofZMod
-  map_mul' := Montgomery.toZMod_mul
-  map_add' := Montgomery.toZMod_add
-
-/-- `Fr` is finite, through the isomorphism. -/
-instance : Fintype Fr := Fintype.ofEquiv _ toZMod.symm.toEquiv
+def toZMod : Fr ≃+* ZMod modulus := Montgomery.toZModEquiv
 
 /-- `Fr` has `r` elements. -/
-theorem card_eq : Fintype.card Fr = modulus :=
-  (Fintype.card_congr toZMod.toEquiv).trans (ZMod.card modulus)
+theorem card_eq : Fintype.card Fr = modulus := Montgomery.card_eq
 
 /-- With primality, `ZMod r` is a finite field, and `Fr` is one through the isomorphism. -/
 example : Field (ZMod modulus) := inferInstance
@@ -131,7 +84,7 @@ example : Field (ZMod modulus) := inferInstance
 
 So it is a generator of the multiplicative group.
 
-Reuses the two halves of the Lucas certificate. -/
+Reuses the two halves of the Lucas certificate, which give that order exactly. -/
 theorem orderOf_seven : orderOf ((7 : ℕ) : ZMod modulus) = modulus - 1 :=
   orderOf_eq_of_pow_and_pow_div_prime seven_pow_card_sub_one seven_pow_div_prime_ne_one
 
@@ -142,6 +95,8 @@ theorem isPrimitiveRoot_seven :
 
 /-- `7 ^ ((r-1)/n)` is a primitive `n`-th root of unity for every `n ∣ r - 1`.
 
+Those roots are the domains of the FFT and of barycentric evaluation.
+
 This is the root the KZG spec's `computeRootsOfUnity` builds its evaluation domains from. -/
 theorem isPrimitiveRoot_seven_pow {n : Nat} (hn : n ∣ modulus - 1) :
     IsPrimitiveRoot (((7 : ℕ) : ZMod modulus) ^ ((modulus - 1) / n)) n :=
@@ -151,36 +106,16 @@ theorem isPrimitiveRoot_seven_pow {n : Nat} (hn : n ∣ modulus - 1) :
 
 /-- The field structure of `ZMod r`, carried to `Fr` by the isomorphism.
 
-The operations are those of the specification: the sum, the product, the power and the inverse.
-
-So `a / b` in the specification is the division of the field, by definition.
-
-The scalar actions and the casts from the integers and the rationals go through `ZMod r`.
-
-Proofs alone use them.
-
-It is scoped, as Mathlib scopes the ring instance of `Fin`, to avoid coercion loops.
-
 Activate with `open scoped EthLib.Cryptography.Bls.Fr`. -/
 scoped instance instField : Field Fr :=
-  letI : SMul ℕ Fr := ⟨fun n a => ofZMod (n • Montgomery.toZMod a)⟩
-  letI : SMul ℤ Fr := ⟨fun n a => ofZMod (n • Montgomery.toZMod a)⟩
-  letI : SMul ℚ≥0 Fr := ⟨fun q a => ofZMod (q • Montgomery.toZMod a)⟩
-  letI : SMul ℚ Fr := ⟨fun q a => ofZMod (q • Montgomery.toZMod a)⟩
-  letI : Pow Fr ℤ := ⟨fun a n => ofZMod (Montgomery.toZMod a ^ n)⟩
-  letI : IntCast Fr := ⟨fun n => ofZMod n⟩
-  letI : NNRatCast Fr := ⟨fun q => ofZMod q⟩
-  letI : RatCast Fr := ⟨fun q => ofZMod q⟩
-  Function.Injective.field (Montgomery.toZMod : Fr → ZMod modulus) Montgomery.toZMod_injective
-    Montgomery.toZMod_zero Montgomery.toZMod_one Montgomery.toZMod_add Montgomery.toZMod_mul
-    Montgomery.toZMod_neg Montgomery.toZMod_sub Montgomery.toZMod_inv
-    (fun a b => by
-      change Montgomery.toZMod (a * b⁻¹) = _
-      rw [Montgomery.toZMod_mul, Montgomery.toZMod_inv, div_eq_mul_inv])
-    (fun _ _ => toZMod_ofZMod _) (fun _ _ => toZMod_ofZMod _) (fun _ _ => toZMod_ofZMod _)
-    (fun _ _ => toZMod_ofZMod _) Montgomery.toZMod_pow (fun _ _ => toZMod_ofZMod _)
-    Montgomery.toZMod_natCast (fun _ => toZMod_ofZMod _) (fun _ => toZMod_ofZMod _)
-    (fun _ => toZMod_ofZMod _)
+  -- The operations are those of the specification: the sum, the product, the power and the inverse.
+  --
+  -- So `a / b` in the specification is the division of the field, by definition.
+  --
+  -- It is scoped, since its division is the one of this specification.
+  Montgomery.field fun a b => by
+    change Montgomery.toZMod (a * b⁻¹) = _
+    rw [Montgomery.toZMod_mul, Montgomery.toZMod_inv, div_eq_mul_inv]
 
 @[simp] theorem zero_def : Fr.zero = (0 : Fr) := rfl
 
@@ -203,7 +138,9 @@ theorem hpow_ofNat_eq_pow (a : Fr) {w : Nat} (hw : w < modulus) :
     a ^ Fr.ofNat w = a ^ w := by
   rw [hpow_eq_pow, val_ofNat_of_lt hw]
 
-/-- The inverse of the specification is the field inverse, and both send `0` to `0`. -/
+/-- The inverse of the specification is the field inverse, and both send `0` to `0`.
+
+The inverse is `a ^ (r - 2)`, which equals the field inverse because `r` is prime. -/
 theorem inverse_eq_inv (a : Fr) : a.inverse = a⁻¹ := rfl
 
 /-- The spec's division, a product by the inverse, is field division. -/

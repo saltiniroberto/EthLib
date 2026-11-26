@@ -77,8 +77,8 @@ From Amsterdam they also hold the builder contracts named by [EIP-8282][builders
 
 [EIP-7773][eip-7773] schedules EIP-8282 for Amsterdam.
 
-[builders]: https://github.com/ethereum/EIPs/blob/46976b2a9bf99f727fb87dc8c809e3a3cdc6b445/EIPS/eip-8282.md#constants
-[eip-7773]: https://github.com/ethereum/EIPs/blob/46976b2a9bf99f727fb87dc8c809e3a3cdc6b445/EIPS/eip-7773.md
+[builders]: https://github.com/ethereum/EIPs/blob/b055feec322fbc37e9d77a393a50b3ff56b31c92/EIPS/eip-8282.md#constants
+[eip-7773]: https://github.com/ethereum/EIPs/blob/b055feec322fbc37e9d77a393a50b3ff56b31c92/EIPS/eip-7773.md
 -/
 def configSystemContracts (config : ChainConfig) (fork : Fork) : List (String × Address) :=
   -- EIP-7910, from Cancun: the beacon roots contract of EIP-4788.
@@ -149,9 +149,7 @@ An activation time of zero stands for genesis, whose timestamp can be nonzero.
 
 It fails when no fork is active, or when the fork is outside Dencun to Glamsterdam.
 
-It fails on a chain ID of zero, and on a passed block or time that is not below `2^64`.
-
-The configuration readers of the exports refuse such a block or time, so only Lean reaches it.
+It fails on a chain ID of 0, or on a passed fork block or time of `2^64` or more.
 
 The block number stays fixed for future timestamp forks.
 
@@ -170,6 +168,10 @@ def configObject (s : Schedule) (number activationTime : Nat) : Except RpcError 
     unless s.config.chainId ≠ 0 do
       throw (internalError.toRpcError (some (.str "eth_config: zero chain ID")))
     -- EIP-6122: each passed block or time is a 64-bit number, else no fork ID; EthLib's -32603.
+    --
+    -- The configuration readers of the exports refuse such a block or time.
+    --
+    -- So only Lean reaches this check.
     unless (s.passed number timestamp).all (fun a => activationValue a < ACTIVATION_BOUND) do
       throw (internalError.toRpcError (some (.str "eth_config: activation is not below 2^64")))
     -- EIP-7910: the blob schedule of the fork, the chain ID, the fork hash of EIP-6122.
@@ -265,6 +267,8 @@ def configReport (v : ChainView) : Except RpcError ConfigReport := do
   unless configBlobsAtForks s do
     throw (internalError.toRpcError (some (.str "eth_config: blob schedule without a fork")))
   -- EthLib's choice: the head has passed every fork block, the Merge one included, else -32603.
+  --
+  -- The Merge one is the block that stands for Paris in the fork ID, by EIP-3675.
   unless s.blocks.all (· ≤ v.head.block.header.number) do
     throw (internalError.toRpcError (some (.str "eth_config: fork block not reached")))
   let number := v.head.block.header.number

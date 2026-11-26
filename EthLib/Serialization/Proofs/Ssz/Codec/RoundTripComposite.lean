@@ -56,12 +56,14 @@ theorem roundTrip_compatibleUnion {selectors : List Nat} {options : List Desc}
       Except.ok.injEq] at wrote
     subst wrote
     -- The selector byte is there to be read, and it reads back as the selector.
-    have firstIs : ((#[UInt8.ofNat selector] ++ body)[0]?.getD 0).toNat = selector := by
-      rw [Array.getElem?_eq_getElem (by simp; omega), Option.getD_some,
-        Array.getElem_append_left (by simp)]
+    have firstIs :
+        ((ByteArray.mk #[UInt8.ofNat selector] ++ body)[0]?.getD 0).toNat = selector := by
+      rw [getElem?_pos _ 0 (by simp; omega), Option.getD_some,
+        ByteArray.getElem_append_left (by simp)]
       simp [Nat.mod_eq_of_lt (show selector < 256 by have top : maxSelector = 127 := rfl; omega)]
     simp [deserialize]
-    rw [firstIs]
+    -- Past the selector byte, the rest is the option's encoding.
+    rw [firstIs, ByteArray.extract_append_eq_right (i := 1) (j := 1 + body.size) rfl rfl]
     exact deserializeOption_of_lookup selectors options selector option body data bounded named
       (inner body inside)
 
@@ -289,7 +291,7 @@ theorem recovered_struct (fields : List Desc) (values : List Value)
       ∃ parts, serializeFields fields values = .ok parts
         ∧ assemble (fields.map Desc.isFixed) parts = .ok bytes := by
     intro bytes wrote
-    simp only [serializeStruct] at wrote
+    simp only [serializeStruct, assembleStruct] at wrote
     cases encoded : serializeFields fields values <;> rw [encoded] at wrote
     · simp [Bind.bind, Except.bind] at wrote
     · exact ⟨_, rfl, wrote⟩
@@ -322,7 +324,7 @@ theorem serializeSequence_size_lt {element : Desc} {elements : List Value} {byte
     (wrote : serializeSequence element elements = .ok bytes) :
     bytes.size < 2 ^ (8 * bytesPerOffset) := by
   -- Sequence assembly checks the combined size after encoding its elements.
-  unfold serializeSequence at wrote
+  unfold serializeSequence assembleSequence at wrote
   obtain ⟨parts, -, assembled⟩ := checksPassed wrote
   rw [assemble_size _ _ _ assembled]
   exact assemble_nameable _ _ _ assembled
@@ -339,7 +341,7 @@ theorem recovered_sequence (element : Desc) (elements : List Value) (width : Nat
       ∃ parts, parts.length = elements.length ∧ (∀ part ∈ parts, part.size = width)
         ∧ bytes = concatParts parts ∧ deserializeEach element parts = .ok elements := by
   intro bytes wrote
-  simp only [serializeSequence] at wrote
+  simp only [serializeSequence, assembleSequence] at wrote
   -- A successful sequence result includes successful encodings of every element.
   cases encoded : serializeEach element elements with
   | error _ => simp [encoded, Bind.bind, Except.bind] at wrote
@@ -368,7 +370,7 @@ theorem recovered_sequence_offset (element : Desc) (elements : List Value)
             < 2 ^ (8 * bytesPerOffset)
         ∧ deserializeEach element parts = .ok elements := by
   intro bytes wrote
-  simp only [serializeSequence] at wrote
+  simp only [serializeSequence, assembleSequence] at wrote
   -- Recover the element parts before interpreting their outer offset table.
   cases encoded : serializeEach element elements with
   | error _ => simp [encoded, Bind.bind, Except.bind] at wrote

@@ -13,9 +13,9 @@ C-ABI exports for SSZ, callable from the Python C extension.
 
 A type and a value cross the boundary as Python values in their tagged form.
 
-Each constructor is a tagged `dict`, and the type `bool` is the `str` that names it.
+A tagged form is a `dict` of one key, the name of a constructor.
 
-An integer is an `int`, and bytes are `bytes` or a `str` of `0x` and hex.
+The type `bool` is the exception: it is a `str`.
 
 A rejected input comes back as the code of its error and a message that names the fault.
 
@@ -84,8 +84,10 @@ def pair (value : PyValue) : Except String (PyValue × PyValue) := do
 /-- The type that a tagged value names, reading at most `fuel` levels of nesting. -/
 def descOf : Nat → PyValue → Except String Desc
   | 0, _ => throw "the type is nested too deeply"
+  -- The type `bool` is the `str` that names it.
   | _ + 1, .str "bool" => return .bool
   | fuel + 1, document => do
+    -- Every other type is a tagged `dict`.
     let (key, body) ← tagged document
     let fields (body : PyValue) : Except String (List String × List Desc) := do
       let entries ← (← itemsOf body).toList.mapM pair
@@ -132,8 +134,9 @@ def valueOf : Nat → PyValue → Except String Value
     let (key, body) ← tagged document
     match key, body with
     | "bool", body => return .bool (← boolOf body)
+    -- An integer is an `int`.
     | "uint", body => return .uint (← natOf body)
-    | "bytes", .bytes data => return .bytes data.data
+    | "bytes", .bytes data => return .bytes data
     | "bytes", body => do
       match ofHex (← strOf body) with
       | .ok data => return .bytes data
@@ -188,7 +191,7 @@ def serializeOf (args : PyValue × PyValue) : Result ByteArray := do
   let (type, value) := args
   let shape ← readType type
   let value ← readValue "value" value (valueOf MAX_NESTING)
-  return ⟨← toResult "value rejected" (serialize shape value)⟩
+  toResult "value rejected" (serialize shape value)
 
 /-- The SSZ bytes of a value of a type, both given in their tagged form. -/
 @[export eth_ssz_serialize]
@@ -198,7 +201,7 @@ def serializeExport (args : PyValue) : Result PyValue := pyExport serializeOf ar
 def deserializeOf (args : PyValue × ByteArray) : Result PyValue := do
   let (type, data) := args
   let shape ← readType type
-  let value ← toResult "input rejected" (deserialize shape data.data)
+  let value ← toResult "input rejected" (deserialize shape data)
   return pyOfValue value
 
 /-- The value that SSZ bytes hold for a type given in its tagged form, as a tagged `dict`. -/
@@ -210,7 +213,7 @@ def hashTreeRootOf (args : PyValue × PyValue) : Result ByteArray := do
   let (type, value) := args
   let shape ← readType type
   let value ← readValue "value" value (valueOf MAX_NESTING)
-  return ⟨← toResult "value rejected" (hashTreeRoot shape value)⟩
+  toResult "value rejected" (hashTreeRoot shape value)
 
 /-- The 32-byte hash tree root of a value of a type, both given in their tagged form. -/
 @[export eth_ssz_hash_tree_root]
@@ -220,20 +223,17 @@ def hashTreeRootExport (args : PyValue) : Result PyValue := pyExport hashTreeRoo
 
 A part is a position, a word for a mixed-in node, or the name of a field of a container.
 
-The word `__len__` names the length.
-
-The word `__active_fields__` names the field layout of a progressive container.
-
-The word `__selector__` names the selector of a union.
-
 A container takes the names of its fields only; a position given for a field is refused. -/
 def pathStep (shape : Option Desc) (part : PyValue) : Result PathStep :=
   match part, shape with
   | .int position, some (.container _ _) | .int position, some (.progressiveContainer _ _ _) =>
     rejectArgument "path" s!"no field {position}"
   | .int position, _ => return .position position
+  -- The word `__len__` names the length.
   | .str "__len__", _ => return .length
+  -- The word `__active_fields__` names the field layout of a progressive container.
   | .str "__active_fields__", _ => return .activeFields
+  -- The word `__selector__` names the selector of a union.
   | .str "__selector__", _ => return .selector
   | .str name, some (.container names _) | .str name, some (.progressiveContainer _ names _) =>
     if names.contains name then return .position (names.idxOf name)
@@ -281,8 +281,7 @@ def merkleProofOf (args : PyValue × PyValue × Nat) : Result (List ByteArray) :
   let shape ← readType type
   let value ← readValue "value" value (valueOf MAX_NESTING)
   let _ ← toResult "value rejected" (serialize shape value)
-  let branch ← toResult "proof rejected" (buildProof shape value gindex)
-  return branch.map fun sibling => ⟨sibling⟩
+  toResult "proof rejected" (buildProof shape value gindex)
 
 /-- The branch that proves the node at a generalized index of a value against its root.
 
@@ -299,9 +298,8 @@ def merkleProofExport (args : PyValue) : Result PyValue := pyExport merkleProofO
 The width is the limit if one is given, and the number of chunks otherwise. -/
 def merkleizeChunksOf (args : List ByteArray × Option Nat) : Result ByteArray := do
   let (chunks, limit) := args
-  let chunks := chunks.map (·.data)
   toResult "chunks rejected" (checkChunks chunks)
-  return ⟨← toResult "chunks rejected" (merkleizeBoundedUnchecked chunks.toArray limit)⟩
+  toResult "chunks rejected" (merkleizeBoundedUnchecked chunks.toArray limit)
 
 /-- The root of 32-byte chunks, in a tree padded to a power of two.
 

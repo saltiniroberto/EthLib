@@ -1,55 +1,14 @@
 module
 
 public import EthLib.Execution.State.Tracker
+import EthLib.Base.Proofs.CodeInjective
 
 /-!
 # Proofs: the transaction state
 
-A read after a write returns the written value, and a write leaves every other place alone.
+The theorems say what each read, write and rollback of the transaction state gives.
 
-A storage write leaves the words before the transaction unchanged.
-
-Restoring a snapshot restores every read of the snapshot.
-
-A move of ether keeps the sum of the two balances, and fails when the sender lacks the amount.
-
-A move of ether between two addresses fails exactly in two cases.
-
-The sender lacks the amount, or the recipient's balance would reach 2^256.
-
-Otherwise it moves the amount exactly.
-
-A change of an account keeps every code.
-
-It keeps the storage too, unless it deletes the account.
-
-An account that the transaction created has zero words before the transaction.
-
-Each new transaction starts with an empty transient storage.
-
-The end of a transaction keeps every read of the transaction.
-
-A record of a read changes no read, and a rollback keeps the record.
-
-A wipe of the storage records the keys it drops as reads.
-
-A storage write and a change to an account record a read of the account.
-
-A move of ether records a read of the sender and of the recipient.
-
-A write of an account, a touch, a write of transient storage and a record of creation read nothing.
-
-A change of the nonce never deletes the account, so it keeps every storage read.
-
-The deletion of the touched empty accounts reads no account and keeps every storage read.
-
-From Paris, a change that deletes an account clears its written keys and reads them.
-
-The next transaction starts with an empty record of reads.
-
-Clearing an account keeps its balance, and zeroes its nonce, its code and its storage.
-
-Setting the code or the nonce of an account changes no other field and no other account.
+They also say what each of them records as read.
 
 The state after a block reads as the block does at the start of its next transaction.
 -/
@@ -63,9 +22,7 @@ open EthLib.Base
 /-- Two errors with one code come from one constructor. -/
 theorem _root_.EthLib.Execution.State.StateError.code_injective (e₁ e₂ : StateError)
     (h : e₁.code = e₂.code) : e₁.ctorIdx = e₂.ctorIdx := by
-  -- Two distinct constructors have two distinct literal codes, which `decide` separates.
-  cases e₁ <;> cases e₂ <;>
-    first | rfl | (simp only [StateError.code] at h; exact absurd h (by decide))
+  code_injective StateError.code
 
 /-! ## Accounts -/
 
@@ -1100,6 +1057,47 @@ theorem createEther_isOk_iff {fork : Fork} {tx : TransactionState} {address : Ad
     · cases hf
   · intro hfit
     exact modifyState_isOk (by simp only [Account.credit, hfit, ↓reduceIte]; rfl)
+
+/-- A read of code fails only with a missing code at its hash. -/
+theorem error_getCode {tx : TransactionState} {codeHash : Hash32} {e : StateError}
+    (h : tx.getCode codeHash = .error e) : e = .missingCode codeHash := by
+  unfold getCode at h
+  split at h
+  · cases h
+  split at h
+  · cases h
+  split at h
+  · cases h
+  unfold State.getCode at h
+  split at h
+  · cases h
+  split at h
+  · cases h
+  · exact (Except.error.inj h).symm
+
+/-- Creating ether fails only for a balance that would overflow at its address. -/
+theorem error_createEther {fork : Fork} {tx : TransactionState} {address : Address}
+    {amount : U256} {e : StateError} (h : tx.createEther fork address amount = .error e) :
+    e = .balanceOverflow address := by
+  have h := modifyState_eq_error.mp h
+  unfold Account.credit at h
+  split at h <;> cases h
+  rfl
+
+/-- Moving ether fails only for a short sender or a recipient whose balance would overflow. -/
+theorem error_moveEther {fork : Fork} {tx : TransactionState} {sender recipient : Address}
+    {amount : U256} {e : StateError} (h : tx.moveEther fork sender recipient amount = .error e) :
+    e = .insufficientBalance sender ∨ e = .balanceOverflow recipient := by
+  unfold moveEther at h
+  simp only [bind, Except.bind] at h
+  split at h
+  · cases h
+    rename_i debit
+    have debit := modifyState_eq_error.mp debit
+    unfold Account.debit at debit
+    split at debit <;> cases debit
+    exact .inl rfl
+  · exact .inr (error_createEther h)
 
 /-- Creating ether at one address adds it to that balance, and leaves every nonce and code. -/
 theorem getAccount_createEther {fork : Fork} {tx tx' : TransactionState}

@@ -14,15 +14,7 @@ The check reads the digit codes of such a string, decodes them to 48 bytes, and 
 
 Then it runs the kernel check of `G1` on that `x`.
 
-That check finds `y` with `y^2 = x^3 + 4`, and tests `[r] (x, y, 1) = 0`.
-
 If the check passes, every point that the string decodes to has order dividing `r`.
-
-The kernel decodes a string slowly, since it reads its UTF-8 bytes one at a time.
-
-So a proof first replaces each string by the list of its codes.
-
-The kernel checks that step by unfolding the literal, which is cheap.
 
 The file also declares the checks of many strings, one theorem each, and a term that gathers them.
 -/
@@ -65,6 +57,7 @@ def xOf : List Nat → Nat
 /-- The check of one string: it decodes, and its `x` passes the check of `G1`. -/
 def checkCodes (ns : List Nat) : Bool :=
   match hexBytes ns with
+  -- The check of `G1` finds `y` with `y^2 = x^3 + 4`, and tests `[r] (x, y, 1) = 0`.
   | some l => G1.TorsionCheck.check (xOf l)
   | none => false
 
@@ -77,7 +70,7 @@ theorem hexValue?_eq (c : Char) : Base.hexValue? c = (digit c.toNat).map UInt8.o
   have eA : ('A' : Char).val.toNat = 65 := rfl
   have eF : ('F' : Char).val.toNat = 70 := rfl
   unfold Base.hexValue? digit
-  simp only [Char.le_def, Char.toNat, UInt32.le_iff_toNat_le, e0, e9, ea, ef, eA, eF]
+  simp only [Char.le_def, Char.toNat, UInt32.le_iff_toNat_le, e0, e9, ea, ef, eA, eF, true_and]
   split_ifs <;> simp only [Option.map_some, Option.map_none, Nat.toUInt8_eq]
   all_goals (congr 2; omega)
 
@@ -130,11 +123,12 @@ theorem fromBytesBE_eq {l : List Nat} {x : Fp}
   | cons a t =>
     simp [ByteArray.set!, ByteArray.get!, xOf]
     -- Both sides fold over the same bytes: a byte `u` maps `acc` to `256 acc + (u mod 256)`.
-    rw [Base.bytesToNat, List.foldl_cons, List.foldl_map]
+    rw [Base.ByteOrder.ofBE_eq_foldl, List.foldl_cons, List.foldl_map]
     refine congrArg₂ (fun f i => List.foldl f i t) ?_ ?_
     · funext acc u
       rw [← Nat.shiftLeft_add_eq_or_of_lt (Nat.mod_lt u (by decide) : u % 256 < 2 ^ 8),
         Nat.shiftLeft_eq, UInt8.toNat_ofNat']
+      omega
     · simp [UInt8.toNat_and]
 
 /-! ## The check is sound -/
@@ -159,7 +153,13 @@ theorem modulus_smul_eq_zero {s : String} {b : ByteArray} {q : G1}
       rw [he] at hx
       exact G1.TorsionCheck.modulus_smul_eq_zero ((fromBytesBE_eq hx).symm ▸ hc) hy
 
-/-! ## Reading the literals -/
+/-! ## Reading the literals
+
+The kernel decodes a string slowly, since it reads its UTF-8 bytes one at a time.
+
+So a proof first replaces each string by the list of its codes.
+
+The kernel checks that step by unfolding the literal, which is cheap. -/
 
 open Lean Meta in
 /-- The codes of a literal `s`, written out as `ns`, and the equation `codes s = ns`.

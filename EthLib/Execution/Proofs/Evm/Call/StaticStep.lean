@@ -11,12 +11,6 @@ A step of such a frame keeps its message, its code and its state, up to the reco
 
 That holds for the steps of the four kinds of call before their message runs.
 
-A call sends a static message that runs the code of a callee.
-
-The code of a callee comes from an account that holds code, also through a delegation.
-
-A value that a call sends goes to its own sender, whose account holds code.
-
 A creation never completes in such a frame.
 -/
 
@@ -125,7 +119,7 @@ theorem accessDelegation_codeHash_ne {evm after : Evm fork Meter} {address : Add
 theorem staticStep_skipCall {evm after : Evm fork Meter} {gas reservoir : Nat}
     (h : skipCall evm gas reservoir = .ok after) : StaticStep evm after := by
   obtain ⟨stack, -, rfl⟩ := skipCall_eq_ok h
-  exact ⟨.refl _, rfl, rfl, rfl, rfl, rfl, rfl⟩
+  exact ⟨.refl _, rfl, rfl, rfl, rfl, rfl, rfl, .refl _⟩
 
 /-- The caller that takes in a child has the state of the child. -/
 theorem state_incorporateChild (caller child : Evm fork Meter) :

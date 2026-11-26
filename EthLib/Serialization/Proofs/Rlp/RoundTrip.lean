@@ -7,31 +7,20 @@ public import EthLib.Serialization.Rlp.Decode
 public import EthLib.Serialization.Proofs.Rlp.Item
 
 /-!
-# `Serialization.Proofs.Rlp.RoundTrip`
+# Proofs: RLP decoding undoes encoding
 
 Decoding undoes encoding: for every item `x`, if `encode x = .ok b`, then `decode b = .ok x`.
 
 So the encoding is injective: two items never share an encoding.
 
 No encoding is a proper prefix of another.
-
-The proof follows the shape of an encoding.
-
-1. The first byte and the length bytes of a prefix read back as the kind and the length.
-2. A byte string reads back from its prefix and its bytes.
-3. A list reads back from its prefix and the encodings of its items.
-4. Items read back one after another, by induction on the tree.
-
-Each step holds with any bytes after the encoding, since a list holds more items after each one.
-
-Each step also holds wherever the encoding sits in the array that the decoder reads.
 -/
 
 @[expose] public section
 
 namespace EthLib.Serialization.Rlp
 
-open EthLib.Base (byteArray_getElem_eq_get!)
+open EthLib.Base (byteArray_eq_of_toList byteArray_getElem_eq_get!)
 
 /-- The short prefix `offset + length` reads back as its kind and its length. -/
 theorem readPrefix_short (kind : PayloadKind) (length : Nat) (h : length < 56) (input : ByteArray)
@@ -57,7 +46,7 @@ theorem bigEndian_length_bounds (length : Nat) (h1 : 56 ≤ length) (h2 : length
   have hValue := bigEndian_value length
   rcases hNil : (bigEndian length).data.toList with _ | ⟨b, bs⟩
   · rw [hNil] at hValue
-    rw [ofBigEndian_nil] at hValue
+    rw [Base.ByteOrder.ofBE_nil] at hValue
     omega
   · rw [hNil] at hSize
     simp at hSize
@@ -214,7 +203,7 @@ theorem readItem_bytes {input : ByteArray} {pos stop : Nat} (data : ByteArray) {
   -- The bytes read are the bytes of the byte string.
   have hData : input.extract (pos + 1 + lengthBytes.length)
       (pos + 1 + lengthBytes.length + data.size) = data :=
-    byteArray_eq_of_toList _ _ hPayload
+    byteArray_eq_of_toList hPayload
   -- One byte below `0x80` would be its own encoding, which the byte string is not.
   have hOne : ¬ (data.size = 1 ∧ pos + 1 + lengthBytes.length < input.size ∧
       input.get! (pos + 1 + lengthBytes.length) < 0x80) := by
@@ -317,6 +306,14 @@ theorem joinEncodings_cons_ok (item : Item) (rest : List Item) (e : ByteArray)
       exact ⟨head, tail, by simp, by simp, h.symm⟩
 
 mutual
+
+-- The proof follows the shape of an encoding.
+--
+-- Items read back one after another, by induction on the tree.
+--
+-- Each step holds with any bytes after the encoding, since a list holds more items after each one.
+--
+-- Each step also holds wherever the encoding sits in the array that the decoder reads.
 
 /-- An encoding, then more bytes, reads back as the item and the position after the encoding. -/
 theorem readItem_encode : (x : Item) → (e : ByteArray) → encode x = .ok e →

@@ -1,6 +1,7 @@
 module
 
 public import EthLib.Consensus.Containers.Operations
+public import EthLib.Consensus.Proofs.Types
 public import EthLib.Cryptography.Kzg.Constants
 public import EthLib.Serialization.Proofs.Ssz.Typed.Basic
 public import EthLib.Serialization.Proofs.Ssz.Typed.Collections
@@ -100,7 +101,7 @@ theorem hashTreeRoot_historicalSummary {preset : Preset} {batch : HistoricalBatc
   simp only [blocksNode, statesNode] at blocksRooted statesRooted
   simp only [SszType.root, Except.ok.injEq] at blocksNode statesNode
   have chunk : ∀ root : Root,
-      hashTreeRoot (.byteVector 32) (.bytes root.toArray) = .ok root.toArray :=
+      hashTreeRoot (.byteVector 32) (.bytes ⟨root.toArray⟩) = .ok ⟨root.toArray⟩ :=
     fun root => hashTreeRoot_chunk (by simp [bytesPerChunk])
   simp only [SszType.root, SszFields.roots, summaryRoot, blocksNode, statesNode,
     toChunk_ok_iff.mp blocksRooted, toChunk_ok_iff.mp statesRooted, chunk, bind, Except.bind, pure,

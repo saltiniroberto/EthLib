@@ -1,9 +1,10 @@
 module
 
 public import EthLib.Base.Exports
-public import EthLib.Base.BigEndian
+public import EthLib.Base.ByteOrder
 public import EthLib.Cryptography.Secp256r1.Curve
 public import EthLib.Cryptography.Secp256r1.Errors
+public import EthLib.Cryptography.Secp256r1.Encoding
 public import EthLib.Cryptography.Ecdsa.Encoding
 
 /-!
@@ -39,22 +40,24 @@ instance : ExportError Secp256r1Error where
   code := Secp256r1Error.code
   message := Secp256r1Error.message
 
-/-- A coordinate below `p`, or an error. -/
-def readCoordinate (bytes : List UInt8) : Except Secp256r1Error Fp :=
-  let v := Base.bytesToNat bytes
-  if h : v < Fp.modulus then .ok ⟨v, h⟩ else .error (.coordinateTooLarge v)
+/-- 32 bytes as a coordinate below `p`, by SEC 1 v2 §2.3.6, or an error. -/
+def readCoordinate (bytes : ByteArray) : Except Secp256r1Error Fp :=
+  match Sec1.fieldOfBytes? sec1 bytes with
+  | some x => .ok x
+  -- The integer of the 32 bytes is `p` or more.
+  | none => .error (.coordinateTooLarge (Base.ByteOrder.ofBE bytes.data.toList))
 
 /-- The affine point of a 64-byte public key, or an error for any other length. -/
 def readPublicKey (bytes : ByteArray) : Except Secp256r1Error Point := do
   if bytes.size = PUBLIC_KEY_LEN then
-    let x ← readCoordinate (bytes.data.toList.take 32)
-    let y ← readCoordinate (bytes.data.toList.drop 32)
+    let x ← readCoordinate (bytes.extract 0 32)
+    let y ← readCoordinate (bytes.extract 32 PUBLIC_KEY_LEN)
     pure (.affine x y)
   else throw (.badPublicKeySize bytes.size)
 
 /-- The integer of a 32-byte hash, or an error for any other length. -/
 def readHash (bytes : ByteArray) : Except Secp256r1Error Nat :=
-  if bytes.size = HASH_LEN then .ok (Base.bytesToNat bytes.data.toList)
+  if bytes.size = HASH_LEN then .ok (Base.ByteOrder.ofBE bytes.data.toList)
   else .error (.badHashSize bytes.size)
 
 /-! ## Sizes

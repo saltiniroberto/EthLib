@@ -17,10 +17,6 @@ The source is `discv5-theory.md` in `ethereum/devp2p`:
 
 Its sections are Identity-Specific Cryptography in the Handshake, and Steps 3 and 4 of it.
 
-- The shared secret is the point `d Q` of an ECDH, in its 33-byte compressed form.
-- HKDF over SHA-256 turns the secret into two 16-byte session keys.
-- The ID signature is an ECDSA signature of a SHA-256 hash, written as the 64 bytes `r || s`.
-
 The private keys are secret, and these functions make no constant-time claim.
 -/
 
@@ -30,9 +26,6 @@ namespace EthLib.Networking.Discv5
 
 open EthLib.Cryptography.Secp256k1
 open EthLib.Cryptography.Hash
-
-/-- The ASCII bytes of a string. -/
-def asciiBytes (s : String) : ByteArray := s.toUTF8
 
 /-- The shared secret of a private key and a public key: `d Q`, compressed to 33 bytes.
 
@@ -49,7 +42,9 @@ def ecdh (sk : Fn) (pk : Point) : Except Secp256k1Error ByteArray :=
     -- The 33-byte secret is `y || eph.x`, with `y = 0x02` for an even `eph.y` and `0x03` otherwise.
     | p => .ok p.encodeCompressed
 
-/-- The session keys of a handshake: the first and the last 16 bytes of the HKDF output. -/
+/-- The session keys of a handshake: the first and the last 16 bytes of the HKDF output.
+
+HKDF over SHA-256 turns the shared secret into these two keys. -/
 structure SessionKeys where
   /-- The key of the node that starts the handshake. -/
   initiatorKey : ByteArray
@@ -63,7 +58,7 @@ The initiator is node A, and the recipient is node B, which sent the challenge. 
 def deriveKeys (secret challengeData : ByteArray) (nodeIdA nodeIdB : NodeId) :
     Except Hkdf.HkdfError SessionKeys := do
   -- `kdf-info = "discovery v5 key agreement" || node-id-A || node-id-B`.
-  let info := asciiBytes "discovery v5 key agreement" ++ ⟨nodeIdA.toArray⟩ ++ ⟨nodeIdB.toArray⟩
+  let info := "discovery v5 key agreement".toUTF8 ++ ⟨nodeIdA.toArray⟩ ++ ⟨nodeIdB.toArray⟩
   -- `prk = HKDF-Extract(challenge-data, secret)`, then `key-data = HKDF-Expand(prk, kdf-info)`.
   --
   -- RFC 5869 with HMAC-SHA-256, and 32 bytes of output.
@@ -81,10 +76,10 @@ def idSignatureHash (challengeData ephemeralPubkey : ByteArray) (nodeIdB : NodeI
   -- `id-signature-input = id-signature-text || challenge-data || ephemeral-pubkey || node-id-B`.
   --
   -- The hash is `sha256(id-signature-input)`.
-  Sha256.hash32 (asciiBytes "discovery v5 identity proof" ++ challengeData ++
+  Sha256.hash32 ("discovery v5 identity proof".toUTF8 ++ challengeData ++
     ephemeralPubkey ++ ⟨nodeIdB.toArray⟩)
 
-/-- The ID signature of node A: the 64 bytes `r || s` of an ECDSA signature of the hash.
+/-- The ID signature of node A: the 64 bytes `r || s` of an ECDSA signature of the SHA-256 hash.
 
 The signature is deterministic, with the nonces of RFC 6979, and its `s` is at most `n / 2`. -/
 def idSign (sk : Fn) (challengeData ephemeralPubkey : ByteArray) (nodeIdB : NodeId) :

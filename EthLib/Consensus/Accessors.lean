@@ -1,6 +1,6 @@
 module
 
-public import EthLib.Base.LittleEndian
+public import EthLib.Base.ByteOrder
 public import EthLib.Consensus.Containers.State
 public import EthLib.Consensus.Shuffle
 public import EthLib.Consensus.Signing
@@ -309,7 +309,7 @@ def getSeed (state : BeaconState preset fork) (epoch : Epoch) (domainType : Doma
   let mix ← getRandaoMix state shifted
   -- `SHA-256(domain type || e as 8 bytes, little-endian || mix)`.
   return Cryptography.Hash.Sha256.hash32
-    ⟨domainType.toArray ++ (uintToBytes 8 epoch.toNat).toArray ++ mix.toArray⟩
+    ⟨domainType.toArray ++ (ByteOrder.toLE 8 epoch.toNat).toArray ++ mix.toArray⟩
 
 /-- The number of committees in each slot, for a number of active validators.
 
@@ -406,7 +406,7 @@ def drawsPerHash (fork : Base.Fork) : Nat :=
 
 The bytes are little-endian. -/
 def drawInput (seed : Bytes32) (block : Nat) : ByteArray :=
-  ⟨seed.toArray ++ (uintToBytes 8 block).toArray⟩
+  ⟨seed.toArray ++ (ByteOrder.toLE 8 block).toArray⟩
 
 /-- The hash that draw number `i` reads its random bytes from.
 
@@ -528,8 +528,25 @@ def getBeaconProposerIndex (state : BeaconState preset fork) :
     let epoch := getCurrentEpoch state
     let epochSeed ← getSeed state epoch DOMAIN_BEACON_PROPOSER
     let seed := Cryptography.Hash.Sha256.hash32
-      ⟨epochSeed.toArray ++ (uintToBytes 8 state.slot.toNat).toArray⟩
+      ⟨epochSeed.toArray ++ (ByteOrder.toLE 8 state.slot.toNat).toArray⟩
     computeProposerIndex state (← getActiveValidatorIndicesChecked state epoch).toArray seed
+
+/-- The key of the validator at an index of a state, if there is one. -/
+def validatorPubkey? (state : BeaconState preset fork) (index : ValidatorIndex) :
+    Option Cryptography.Bls.BLSPubkey :=
+  state.validators.data[index.toNat]?.map (·.pubkey)
+
+/-- From Fulu: the proposer of a slot of the current or next epoch, by the lookahead of a state.
+
+Other slots, and slots past the end of the lookahead, have none. -/
+def lookaheadSchedule (state : BeaconState preset fork) (fulu : .fusaka ≤ fork) (slot : Slot) :
+    Option ValidatorIndex :=
+  -- EIP-7917: the lookahead holds the proposers of two epochs, from the current epoch's start.
+  if currentEpochStart state ≤ slot.toNat ∧
+      slot.toNat < currentEpochStart state + 2 * preset.SLOTS_PER_EPOCH.toNat then
+    -- The proposer of slot s is at index s minus the first slot of the current epoch.
+    (state.proposerLookahead fulu)[slot.toNat - currentEpochStart state]?
+  else none
 
 /-- The signature domain of a kind of message in an epoch, by default the epoch of the state.
 

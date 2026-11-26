@@ -1,30 +1,14 @@
 module
 
-public import EthLib.Base.LittleEndian
+public import EthLib.Base.ByteOrder
 public import EthLib.Networking.Encoding.Varint
 
 /-!
 # `Networking.Snappy.Block`
 
-Decompression of the Snappy block format.
+Decompression of the Snappy block format, with which consensus gossip compresses every message.
 
 Source: [`format_description.txt`][format] of `google/snappy`, §1 and §2.
-
-Gossip on the consensus layer compresses every message with it.
-
-A block is a preamble that declares the uncompressed length, then literals and copies.
-
-A peer controls every byte, so decompression is total and names each way a block can be malformed.
-
-The output is a byte array, so a copy reads each of its bytes in one step.
-
-A copy then costs its length, amortized, however far back it reaches.
-
-The array grows as bytes arrive, and never reserves the declared length, which a peer controls.
-
-The bytes of one literal element are here too, for the compressor and the proofs (§2.1).
-
-The compressor, which writes literals and copies, is in its own module.
 
 [format]: https://github.com/google/snappy/blob/7406111ac4ae539ea0db8b7ea2dc76730cd957f4/format_description.txt
 -/
@@ -33,7 +17,7 @@ The compressor, which writes literals and copies, is in its own module.
 
 namespace EthLib.Networking.Snappy
 
-open EthLib.Base (bytesToUint uintToBytes)
+open EthLib.Base (ByteOrder.ofLE ByteOrder.toLE)
 
 /-- The most bytes the preamble may occupy.
 
@@ -44,7 +28,10 @@ def preambleMaxLength : Nat := 5
 /-- The largest uncompressed length a block may declare (§1). -/
 def maxUncompressedLength : Nat := 2 ^ 32 - 1
 
-/-- Every way decompression can reject its input. -/
+/-- Every way decompression can reject its input.
+
+A peer controls every byte, so decompression is total and names each way a block can be malformed.
+-/
 inductive SnappyError where
   /-- The input ended inside the preamble. -/
   | preambleTruncated
@@ -123,7 +110,11 @@ The preamble takes at most five bytes, so this reads no more, and decompresses n
 def declaredLength (bs : ByteArray) : Except SnappyError Nat :=
   (readPreamble (bs.extract 0 preambleMaxLength).toList).map (·.1)
 
-/-- Copy the given number of bytes from `offset` back onto the end of the output (§2.2). -/
+/-- Copy the given number of bytes from `offset` back onto the end of the output (§2.2).
+
+The output is a byte array, so the copy reads each of its bytes in one step.
+
+A copy then costs its length, amortized, however far back it reaches. -/
 def copyBytes (out : ByteArray) (offset : Nat) : Nat → Except SnappyError ByteArray
   | 0 => .ok out
   | len + 1 =>
@@ -179,18 +170,18 @@ attribute [local instance high] decideLeLength decideLengthLt
 
 /-- Decode the elements of a block onto the end of the output, up to the declared length.
 
-An element that would take the output past the declared length is rejected before it is written.
+An element that would take the output past that length is rejected before it is written.
 
 So the output never holds more than the declared length.
 
 The fuel bounds the number of elements.
-
-Each element takes at least its tag byte, so the input length is enough fuel.
 -/
 def decompressElements (declared : Nat) :
     List UInt8 → ByteArray → Nat → Except SnappyError ByteArray
   | [], out, _ => .ok out
   -- Out of fuel: unreachable when the fuel is at least the input length.
+  --
+  -- Each element takes at least its tag byte, so the input length is enough fuel.
   --
   -- The fields of this error are therefore arbitrary.
   | l@(_ :: _), _, 0 => .error (.literalPastEnd (l.length + 1) l.length)
@@ -224,7 +215,7 @@ def decompressElements (declared : Nat) :
             .error (.literalPastEnd extra rest.length)
           else
             -- §2.1: len - 1 is stored after the tag byte, little-endian.
-            let len := bytesToUint (rest.take extra).toArray.toVector + 1
+            let len := ByteOrder.ofLE (rest.take extra).toArray.toVector + 1
             let rest := rest.drop extra
             -- §2.1: the literal itself follows after the length.
             if rest.length < len then
@@ -250,8 +241,8 @@ def decompressElements (declared : Nat) :
           --
           -- §2.2.2 and §2.2.3: the offset is a little-endian 16-bit or 32-bit integer.
           let offset :=
-            if t == 1 then upper / 8 * 256 + bytesToUint (rest.take 1).toArray.toVector
-            else bytesToUint (rest.take width).toArray.toVector
+            if t == 1 then upper / 8 * 256 + ByteOrder.ofLE (rest.take 1).toArray.toVector
+            else ByteOrder.ofLE (rest.take width).toArray.toVector
           -- §2.2: offsets of zero can be encoded, but are not legal.
           if offset == 0 then
             .error (.copyOffsetZero out.size)
@@ -271,6 +262,10 @@ def decompressToArray (bs : List UInt8) : Except SnappyError ByteArray :=
   | .error e => .error e
   | .ok (declared, rest) =>
       -- §2: then elements in any order, up to the end of the input.
+      --
+      -- A block is thus a preamble that declares the uncompressed length, then literals and copies.
+      --
+      -- The array grows as bytes arrive, and never reserves the declared length, set by a peer.
       --
       -- Each element takes at least its tag byte, so the input length is enough fuel.
       match decompressElements declared rest ByteArray.empty rest.length with
@@ -306,9 +301,13 @@ def literalHeader (n : Nat) : List UInt8 :=
   else
     let k := literalLengthBytes (n - 1)
     -- §2.1: the upper six bits of the tag are 60, 61, 62 or 63 for 1 to 4 bytes, so 59 + k.
-    UInt8.ofNat ((59 + k) * 4) :: (uintToBytes k (n - 1)).toList
+    UInt8.ofNat ((59 + k) * 4) :: (ByteOrder.toLE k (n - 1)).toList
 
-/-- One literal element that holds `data`, of 1 to 2^32 bytes (§2.1). -/
+/-- One literal element that holds `data`, of 1 to 2^32 bytes (§2.1).
+
+The bytes of one literal element are here, for the compressor and the proofs.
+
+The compressor, which writes literals and copies, is in its own module. -/
 def literal (data : List UInt8) : List UInt8 :=
   -- §2.1: the tag and the length, then the literal itself.
   literalHeader data.length ++ data

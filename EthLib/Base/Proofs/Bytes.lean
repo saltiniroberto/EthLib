@@ -5,27 +5,11 @@ public import EthLib.Base.Bytes
 /-!
 # Proofs: `Bytes`
 
-The bytes of a fixed-size object have its length.
+The bytes of a fixed-size object have its length, and reading them returns the object.
 
-A read of a buffer gives the entries of its array of bytes.
+The module also covers the exclusive or of byte strings, and the bytes of joins and slices.
 
-A read of those bytes returns the object.
-
-So two objects with the same bytes are the same object.
-
-The exclusive or of byte strings is commutative, and applying one string twice undoes it.
-
-Applying an untyped string twice undoes it too: a byte past its end reads as zero.
-
-A byte of a join or a slice is a byte of a part, or zero past its end.
-
-Two strings of one size are equal when they agree on every byte.
-
-A loop over the bytes of a string runs as a loop over the list of those bytes, in order.
-
-Inside the array, a bounded read of a byte agrees with the defaulting one.
-
-A defaulting write changes the byte it writes and no other.
+It covers loops over the bytes of a string too, and reads and writes of one byte.
 -/
 
 @[expose] public section
@@ -56,6 +40,67 @@ theorem byteArray_get!_set!_ne (b : ByteArray) {i j : Nat} (v : UInt8)
   · rw [getElem!_neg (b.data.setIfInBounds j v) i
         (by rw [Array.size_setIfInBounds]; exact hi),
       getElem!_neg b.data i hi]
+
+/-- Bytes built from an array have the size of that array. -/
+@[simp] theorem byteArray_size_mk (a : Array UInt8) : (ByteArray.mk a).size = a.size := rfl
+
+/-- A read of bytes built from an array is the read of that array. -/
+@[simp] theorem byteArray_getElem_mk (a : Array UInt8) (i : Nat)
+    (inside : i < (ByteArray.mk a).size) :
+    (ByteArray.mk a)[i] = a[i]'inside :=
+  rfl
+
+/-- Bytes built from an empty array are the empty bytes. -/
+@[simp] theorem byteArray_mk_empty : ByteArray.mk #[] = .empty := rfl
+
+/-- Joining bytes built from two arrays gives the bytes built from the joined arrays. -/
+@[simp] theorem byteArray_mk_append_mk (a b : Array UInt8) :
+    ByteArray.mk a ++ ByteArray.mk b = ByteArray.mk (a ++ b) :=
+  ByteArray.ext ByteArray.data_append
+
+/-- A slice of bytes built from an array is built from the same slice of that array. -/
+@[simp] theorem byteArray_mk_extract (a : Array UInt8) (start stop : Nat) :
+    (ByteArray.mk a).extract start stop = ByteArray.mk (a.extract start stop) :=
+  ByteArray.ext ByteArray.data_extract
+
+/-- A slice from the start that reaches the end is the whole of the bytes. -/
+theorem byteArray_extract_eq_self_of_le {b : ByteArray} {stop : Nat} (h : b.size ≤ stop) :
+    b.extract 0 stop = b :=
+  ByteArray.ext (by rw [ByteArray.data_extract]; exact Array.extract_eq_self_of_le h)
+
+/-- The slice of a join that covers its first part is that part. -/
+@[simp] theorem byteArray_extract_append_size (a b : ByteArray) : (a ++ b).extract 0 a.size = a :=
+  ByteArray.extract_append_eq_left rfl
+
+/-- The slice of a join that starts past a front and covers the next part is that part. -/
+@[simp] theorem byteArray_extract_append_append_size (a b c : ByteArray) :
+    (a ++ (b ++ c)).extract a.size (a.size + b.size) = b := by
+  -- Past the front, the slice reads the rest, where the part comes first.
+  simpa using ByteArray.extract_append_size_add (a := a) (b := b ++ c) (i := 0) (j := b.size)
+
+/-- An optional read of bytes is the same read of the array that holds them. -/
+theorem byteArray_getElem?_eq_data (b : ByteArray) (i : Nat) : b[i]? = b.data[i]? := by
+  -- Both reads test the same bound, since the bytes and their array have one size.
+  by_cases h : i < b.size
+  · rw [getElem?_pos b i h, getElem?_pos b.data i h]; rfl
+  · rw [getElem?_neg b i h, getElem?_neg b.data i h]
+
+/-- An optional read of bytes built from an array is the read of that array. -/
+@[simp] theorem byteArray_getElem?_mk (a : Array UInt8) (i : Nat) :
+    (ByteArray.mk a)[i]? = a[i]? :=
+  byteArray_getElem?_eq_data _ i
+
+/-- A read of joined bytes reads the first part below its size, and the second part past it. -/
+theorem byteArray_getElem?_append (a b : ByteArray) (i : Nat) :
+    (a ++ b)[i]? = if i < a.size then a[i]? else b[i - a.size]? := by
+  simp only [byteArray_getElem?_eq_data, ByteArray.data_append, Array.getElem?_append]
+  rfl
+
+/-- A read of a slice reads the bytes from its start, while the index stays inside the slice. -/
+theorem byteArray_getElem?_extract (b : ByteArray) (start stop i : Nat) :
+    (b.extract start stop)[i]? = if i < min stop b.size - start then b[start + i]? else none := by
+  simp only [byteArray_getElem?_eq_data, ByteArray.data_extract, Array.getElem?_extract]
+  rfl
 
 /-- Two arrays of one size are equal when their defaulting reads agree inside them. -/
 theorem byteArray_ext_get! {a b : ByteArray} (hsz : a.size = b.size)
@@ -274,8 +319,8 @@ theorem xorBytes_comm {n : Nat} (a b : Vector UInt8 n) : xorBytes a b = xorBytes
 /-! ## One byte of a buffer -/
 
 /-- A byte of the buffer is the byte of its array, or zero past its end. -/
-theorem byteAt_eq_getD (data : ByteArray) (i : Nat) : byteAt data i = data.data.getD i 0 := by
-  unfold byteAt
+theorem byteAtOrZero_eq_getD (data : ByteArray) (i : Nat) : byteAtOrZero data i = data.data.getD i 0 := by
+  unfold byteAtOrZero
   split
   · rename_i h
     simp [Array.getD_eq_getD_getElem?, ByteArray.getElem_eq_getElem_data,
@@ -285,15 +330,15 @@ theorem byteAt_eq_getD (data : ByteArray) (i : Nat) : byteAt data i = data.data.
       (by simpa [← ByteArray.size_data] using Nat.le_of_not_lt h)]
 
 /-- Past the end of the buffer every byte reads as zero. -/
-theorem byteAt_of_size_le {data : ByteArray} {i : Nat} (h : data.size ≤ i) :
-    byteAt data i = 0 := by
-  simp [byteAt_eq_getD, Array.getD_eq_getD_getElem?, Array.getElem?_eq_none h]
+theorem byteAtOrZero_of_size_le {data : ByteArray} {i : Nat} (h : data.size ≤ i) :
+    byteAtOrZero data i = 0 := by
+  simp [byteAtOrZero_eq_getD, Array.getD_eq_getD_getElem?, Array.getElem?_eq_none h]
 
 /-- A byte of two strings joined is a byte of the first, or of the second past its end. -/
-theorem byteAt_append (a b : ByteArray) (i : Nat) :
-    byteAt (a ++ b) i = if i < a.size then byteAt a i else byteAt b (i - a.size) := by
+theorem byteAtOrZero_append (a b : ByteArray) (i : Nat) :
+    byteAtOrZero (a ++ b) i = if i < a.size then byteAtOrZero a i else byteAtOrZero b (i - a.size) := by
   have hs := @ByteArray.size_append a b
-  unfold byteAt
+  unfold byteAtOrZero
   by_cases ha : i < a.size
   · rw [ite_eq_left ha, dite_eq_left ha, dite_eq_left (show i < (a ++ b).size by omega),
       ByteArray.getElem_append_left ha]
@@ -304,44 +349,44 @@ theorem byteAt_append (a b : ByteArray) (i : Nat) :
     · rw [dite_eq_right hb, dite_eq_right (show ¬i < (a ++ b).size by omega)]
 
 /-- Padding the buffer with zero bytes on the right changes no byte. -/
-theorem byteAt_append_zeros (data : ByteArray) (n i : Nat) :
-    byteAt (data ++ ByteArray.mk (Array.replicate n 0)) i = byteAt data i := by
-  rw [byteAt_append]
+theorem byteAtOrZero_append_zeros (data : ByteArray) (n i : Nat) :
+    byteAtOrZero (data ++ ByteArray.mk (Array.replicate n 0)) i = byteAtOrZero data i := by
+  rw [byteAtOrZero_append]
   split
   · rfl
-  · rw [byteAt_eq_getD, Nat.not_lt.mp ‹_› |> byteAt_of_size_le |>.symm]
+  · rw [byteAtOrZero_eq_getD, Nat.not_lt.mp ‹_› |> byteAtOrZero_of_size_le |>.symm]
     simp [Array.getD_eq_getD_getElem?, Array.getElem?_replicate]
     split <;> rfl
 
 /-- A byte of a slice is the byte at the same offset from its start, or zero past its end. -/
-theorem byteAt_extract (b : ByteArray) (start stop j : Nat) :
-    byteAt (b.extract start stop) j
-      = if start + j < min stop b.size then byteAt b (start + j) else 0 := by
+theorem byteAtOrZero_extract (b : ByteArray) (start stop j : Nat) :
+    byteAtOrZero (b.extract start stop) j
+      = if start + j < min stop b.size then byteAtOrZero b (start + j) else 0 := by
   have hs := @ByteArray.size_extract b start stop
   have hm := Nat.min_le_right stop b.size
-  unfold byteAt
+  unfold byteAtOrZero
   by_cases hj : start + j < min stop b.size
   · rw [ite_eq_left hj, dite_eq_left (show j < (b.extract start stop).size by omega),
       dite_eq_left (show start + j < b.size by omega), ByteArray.getElem_extract]
   · rw [ite_eq_right hj, dite_eq_right (show ¬j < (b.extract start stop).size by omega)]
 
 /-- Two strings of one size are equal when they agree on every byte. -/
-theorem eq_of_byteAt {a b : ByteArray} (size : a.size = b.size)
-    (bytes : ∀ i, byteAt a i = byteAt b i) : a = b := by
+theorem eq_of_byteAtOrZero {a b : ByteArray} (size : a.size = b.size)
+    (bytes : ∀ i, byteAtOrZero a i = byteAtOrZero b i) : a = b := by
   apply ByteArray.ext
   apply Array.ext size
   intro i ha hb
   have h := bytes i
-  unfold byteAt at h
+  unfold byteAtOrZero at h
   rw [dite_eq_left (show i < a.size from ha), dite_eq_left (show i < b.size from hb)] at h
   exact h
 
 /-- Writing one byte of a buffer changes that byte and no other. -/
-theorem byteAt_set {acc : ByteArray} {i : Nat} (h : i < acc.size) (v : UInt8) (j : Nat) :
-    byteAt (acc.set i v h) j = if j = i then v else byteAt acc j := by
+theorem byteAtOrZero_set {acc : ByteArray} {i : Nat} (h : i < acc.size) (v : UInt8) (j : Nat) :
+    byteAtOrZero (acc.set i v h) j = if j = i then v else byteAtOrZero acc j := by
   have hs : (acc.set i v h).size = acc.size := by
     simp only [ByteArray.set, ByteArray.size, Array.size_set]
-  unfold byteAt
+  unfold byteAtOrZero
   by_cases hj : j = i
   · subst hj
     rw [ite_eq_left rfl, dite_eq_left (show j < (acc.set j v h).size by omega)]
@@ -353,25 +398,25 @@ theorem byteAt_set {acc : ByteArray} {i : Nat} (h : i < acc.size) (v : UInt8) (j
     · rw [dite_eq_right (show ¬j < (acc.set i v h).size by omega), dite_eq_right hlt]
 
 /-- A byte of the exclusive or is the exclusive or of both bytes, or zero past the first string. -/
-theorem byteAt_xorByteArray (a b : ByteArray) (j : Nat) :
-    byteAt (xorByteArray a b) j = if j < a.size then byteAt a j ^^^ byteAt b j else 0 := by
+theorem byteAtOrZero_xorByteArray (a b : ByteArray) (j : Nat) :
+    byteAtOrZero (xorByteArray a b) j = if j < a.size then byteAtOrZero a j ^^^ byteAtOrZero b j else 0 := by
   -- From index `i` on, the loop XORs each byte of the buffer with the byte of `b`.
-  suffices ∀ i acc, byteAt (xorByteArray.go b i acc) j =
-      if i ≤ j ∧ j < acc.size then byteAt acc j ^^^ byteAt b j else byteAt acc j by
+  suffices ∀ i acc, byteAtOrZero (xorByteArray.go b i acc) j =
+      if i ≤ j ∧ j < acc.size then byteAtOrZero acc j ^^^ byteAtOrZero b j else byteAtOrZero acc j by
     rw [xorByteArray, this 0 a]
     by_cases hj : j < a.size
     · simp [hj]
-    · simp [hj, byteAt_of_size_le (Nat.le_of_not_lt hj)]
+    · simp [hj, byteAtOrZero_of_size_le (Nat.le_of_not_lt hj)]
   intro i acc
   induction i, acc using xorByteArray.go.induct b with
   | case1 i acc h ih =>
-    rw [xorByteArray.go, dite_eq_left h, ih, byteAt_set h]
-    have hs : (acc.set i (acc[i] ^^^ byteAt b i) h).size = acc.size := by
+    rw [xorByteArray.go, dite_eq_left h, ih, byteAtOrZero_set h]
+    have hs : (acc.set i (acc[i] ^^^ byteAtOrZero b i) h).size = acc.size := by
       simp only [ByteArray.set, ByteArray.size, Array.size_set]
     rw [hs]
     by_cases hji : j = i
     · subst hji
-      have hacc : acc[j] = byteAt acc j := by unfold byteAt; rw [dite_eq_left h]
+      have hacc : acc[j] = byteAtOrZero acc j := by unfold byteAtOrZero; rw [dite_eq_left h]
       simp [hacc, h, show ¬(j + 1 ≤ j) by omega]
     · by_cases hle : i + 1 ≤ j ∧ j < acc.size
       · simp [hji, hle, show i ≤ j by omega]
@@ -385,12 +430,12 @@ theorem byteAt_xorByteArray (a b : ByteArray) (j : Nat) :
 /-- Applying the same string twice gives back the first string. -/
 @[simp] theorem xorByteArray_xorByteArray_cancel_right (a b : ByteArray) :
     xorByteArray (xorByteArray a b) b = a := by
-  apply eq_of_byteAt (by rw [xorByteArray_size, xorByteArray_size])
+  apply eq_of_byteAtOrZero (by rw [xorByteArray_size, xorByteArray_size])
   intro j
-  rw [byteAt_xorByteArray, byteAt_xorByteArray, xorByteArray_size]
+  rw [byteAtOrZero_xorByteArray, byteAtOrZero_xorByteArray, xorByteArray_size]
   by_cases hj : j < a.size
   · simp [hj, UInt8.xor_assoc]
-  · simp [hj, byteAt_of_size_le (Nat.le_of_not_lt hj)]
+  · simp [hj, byteAtOrZero_of_size_le (Nat.le_of_not_lt hj)]
 
 /-! ## A loop over the bytes -/
 
@@ -443,5 +488,20 @@ namespace EthLib.Base
     bytes.data.toList.toByteArray = bytes := by
   apply ByteArray.ext
   simp
+
+/-- A byte array rebuilt from the list of its bytes is itself. -/
+theorem byteArray_mk_toArray_toList (bytes : ByteArray) :
+    (⟨bytes.data.toList.toArray⟩ : ByteArray) = bytes := by
+  simp
+
+/-- Two byte arrays with the same list of bytes are equal. -/
+theorem byteArray_eq_of_toList {a b : ByteArray} (h : a.data.toList = b.data.toList) : a = b :=
+  ByteArray.ext (Array.toList_inj.mp h)
+
+/-- A vector of four entries is the vector of its four entries. -/
+theorem vector_four {α : Type} (v : Vector α 4) : v = #v[v[0], v[1], v[2], v[3]] := by
+  ext i hi
+  match i, hi with
+  | 0, _ | 1, _ | 2, _ | 3, _ => rfl
 
 end EthLib.Base

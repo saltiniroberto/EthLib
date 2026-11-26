@@ -2,43 +2,36 @@ module
 
 public import EthLib.Execution.Evm.Precompiles.Blake2f
 import EthLib.Base.Proofs.Bytes
+import EthLib.Base.Proofs.CodeInjective
 
 /-!
 # Proofs: `Precompiles.Blake2f`
 
-For every input:
+The precompile handles each input in one of three ways:
 
 - an input that is not 213 bytes long is rejected;
 - a 213-byte input whose flag byte is neither `0` nor `1` is rejected;
-- any other input returns F on its fields.
-
-The flag byte is byte 212 of a 213-byte input.
-
-The statements about the flag byte read it with a default, which a 213-byte input never uses.
-
-The fields are decoded as EIP-152 encodes them, for every input:
-
-- the rounds field is big-endian;
-- every word of `h`, `m`, `t0` and `t1` is little-endian;
-- the output words are little-endian too, the encoding of the input.
-
-With its gas, a 213-byte call fails exactly when the gas is below the number of rounds, and otherwise returns the precompile's result.
-
-A call succeeds exactly on a 213-byte input with enough gas and a flag byte of `0` or `1`.
+- any other input returns F on its fields, decoded as EIP-152 encodes them.
 -/
 
 @[expose] public section
 
 namespace EthLib.Execution.Evm.Precompiles.Blake2f
 
-/-! ## The errors and the result -/
+/-! ## The errors and the result
+
+The flag byte is byte 212 of a 213-byte input.
+
+The statements read it with a default, which a 213-byte input never uses. -/
 
 /-- The price of a 213-byte input is one gas per round. -/
 theorem gasCost_of_size (data : ByteArray) (h : data.size = INPUT_BYTES) :
     gasCost data = GAS_PER_ROUND * (readRounds ⟨data.data, h⟩).toNat := by
   simp [gasCost, Base.exactBytes?_of_size_eq h]
 
-/-- A call with a 213-byte input and too little gas runs out of gas, whatever its flag byte. -/
+/-- A call with a 213-byte input and too little gas runs out of gas, whatever its flag byte.
+
+So a 213-byte call runs out of gas exactly when the gas is below the number of rounds. -/
 theorem blake2f_outOfGas (data : ByteArray) (h : data.size = INPUT_BYTES) {gas : Nat}
     (hgas : gas < gasCost data) : blake2f data gas = .error (.outOfGas (gasCost data) gas) := by
   simp [blake2f, h, hgas]
@@ -130,7 +123,7 @@ theorem blake2f_eq_error_iff (data : ByteArray) (gas : Nat) (e : Blake2fError) :
 
 /-! ## Decoding
 
-The test vectors only sample the encoding.
+The test vectors only sample the encoding of EIP-152.
 
 These theorems fix it for every input. -/
 
@@ -164,7 +157,7 @@ private theorem foldr_bytes_toNat (l : List UInt8) (hl : l.length ≤ 8) :
     have := Nat.mul_le_mul_left (2 ^ 8) (Nat.succ_le_of_lt lt)
     omega
 
-/-- Every word is read little-endian, RFC 7693 §2.4. -/
+/-- Every word of `h`, `m`, `t0` and `t1` is read little-endian, RFC 7693 §2.4. -/
 theorem readWord_toNat (input : Input) (offset : Nat) (h : offset + 8 ≤ INPUT_BYTES) :
     (readWord input offset h).toNat =
       input[offset].toNat + 2 ^ 8 * input[offset + 1].toNat + 2 ^ 16 * input[offset + 2].toNat +
@@ -230,7 +223,7 @@ theorem writeState_byte (h : Vector UInt64 8) (i k : Fin 8) :
 
 /-- Output word `i`, read back little-endian, is state word `i`.
 
-So the output keeps the encoding of the input, EIP-152 Specification. -/
+So the output words keep the little-endian encoding of the input words, EIP-152 Specification. -/
 theorem writeState_word (h : Vector UInt64 8) (i : Fin 8) :
     ((writeState h)[8 * i.val]'(by simp only [OUTPUT_BYTES]; omega)).toNat +
       2 ^ 8 * ((writeState h)[8 * i.val + 1]'(by simp only [OUTPUT_BYTES]; omega)).toNat +
@@ -325,8 +318,6 @@ theorem blake2f_eq_ok_iff (data : ByteArray) (gas : Nat) (out : ByteArray) :
 /-- Two errors with one code come from one constructor. -/
 theorem Blake2fError.code_injective (e₁ e₂ : Blake2fError) (h : e₁.code = e₂.code) :
     e₁.ctorIdx = e₂.ctorIdx := by
-  -- Two distinct constructors have two distinct literal codes, which `decide` separates.
-  cases e₁ <;> cases e₂ <;>
-    first | rfl | (simp only [Blake2fError.code] at h; exact absurd h (by decide))
+  code_injective Blake2fError.code
 
 end EthLib.Execution.Evm.Precompiles.Blake2f

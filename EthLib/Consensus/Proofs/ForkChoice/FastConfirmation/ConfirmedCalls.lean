@@ -6,11 +6,12 @@ public import EthLib.Consensus.Proofs.ForkChoice.FastConfirmation.RootViability
 public import EthLib.Consensus.Proofs.ForkChoice.FastConfirmation.TargetCount
 public import EthLib.Consensus.Proofs.ForkChoice.JustifiedVotes
 public import EthLib.Consensus.Proofs.Transition.BalanceDrift
+public import EthLib.Consensus.Proofs.ForkChoice.FastConfirmation.HonestHeads
+public import EthLib.Consensus.Proofs.ForkChoice.HeadTotality
 import EthLib.Consensus.Proofs.ForkChoice.FastConfirmation.Committees
 import EthLib.Consensus.Proofs.ForkChoice.FastConfirmation.ConfirmedWalk
 import EthLib.Consensus.Proofs.ForkChoice.FastConfirmation.HistoricalCoverage
 import EthLib.Consensus.Proofs.ForkChoice.FastConfirmation.HistoricalTransport
-import EthLib.Consensus.Proofs.ForkChoice.FastConfirmation.HonestHeads
 import EthLib.Consensus.Proofs.ForkChoice.FastConfirmation.QuorumDrift
 import EthLib.Consensus.Proofs.ForkChoice.FastConfirmation.SourceWindowMargin
 import EthLib.Consensus.Proofs.ForkChoice.HonestEquivocators
@@ -24,10 +25,6 @@ import EthLib.Consensus.Proofs.HonestAggregation
 One honest validator calls the rule at consecutive slots.
 
 Each call stores a confirmed root, the start it selected or a root of the walk from its head.
-
-The balance source of a call is on the chain of the parent of each walked member.
-
-Each call assumes inputs that the rule does not check, for the call and for each walked member.
 
 The call invariant of a stored root says that up-to-date honest heads descend from it.
 
@@ -49,7 +46,10 @@ variable {preset : Preset} {fork : Fork} {config : Config} {checks : SignatureCh
   {e : Execution (honestForkChoice config checks sources anchorState anchorBlock assignment
     genesisTimeMs) J}
 
-/-! ## The calls of one validator and their obligations -/
+/-! ## The calls of one validator and their obligations
+
+Each call assumes inputs that the rule does not check, for the call and for each walked member.
+-/
 
 /-- One call of the rule in a run of calls by one validator. -/
 def CallAt (u : ValidatorIndex) (events : List ℕ) (first : FastConfirmationStore)
@@ -59,33 +59,10 @@ def CallAt (u : ValidatorIndex) (events : List ℕ) (first : FastConfirmationSto
       (fun fcr store => store.onFastConfirmation config fcr) first = .ok fcr ∧
     ((e.world n).state u).onFastConfirmation config fcr = .ok after
 
-/-- The inputs of the coverage step for one walked member of one call.
-
-They read the member's block, its parent, the proposer score and the windows of the parent.
-
-The member's margin then exceeds the committee weight, the boost and the adversary's weight.
-
-The excess `shift` pays for the drift of each later window from the source's balances.
-
-Each later window keeps the near exit reserve of the source.
-
-The late duty majority of the parent's epoch holds from the call to the horizon.
-
-So do the newly active voters of the parent's window.
-
-With a positive `shift`, the margin asks more than the rule's one-confirmation test.
-
-An assumption on the run: the drift bound of the excess and the reserve of each later window.
-
-An assumption on the run: the late duty majority and the newly active voters of the window.
-
-The majority buys the receivers more than two epochs after the parent's epoch.
-
-It needs one epoch's honest duties to outweigh the rest of the active stake and the boost.
-
-The newly active voters buy the voters activated two epochs after the parent. -/
+/-- The inputs of the coverage step for one walked member of one call. -/
 def MemberObligations [DecidablePred (· ∈ J)] (u : ValidatorIndex) (n : ℕ) (head : Root)
     (source : BeaconState preset fork) (slot : Slot) (member : Root) (limit : ℕ) : Prop :=
+  -- They read the member's block, its parent, the proposer score and the windows of the parent.
   ∀ (block parent : BeaconBlock preset fork) (first last beforeBlock : Slot)
     (boost maximum support discount adversary : Gwei)
     (parentParticipants : Std.TreeSet ValidatorIndex),
@@ -103,9 +80,18 @@ def MemberObligations [DecidablePred (· ∈ J)] (u : ValidatorIndex) (n : ℕ) 
     ((e.world n).state u).computeEmptySlotSupportDiscount config head source member =
       .ok discount →
     ((e.world n).state u).getAdversarialWeight config head source member = .ok adversary →
+    -- The member's margin then exceeds the committee weight, the boost and the adversary's weight.
+    --
+    -- With a positive `shift`, the margin asks more than the rule's one-confirmation test.
     ∃ shift, maximum.toNat + boost.toNat + 2 * adversary.toNat + shift <
         discount.toNat + 2 * support.toNat ∧
+      -- The excess `shift` pays for the drift of each later window from the source's balances.
+      --
+      -- An assumption on the run: the drift bound of the excess.
       WindowMarginDrift (e := e) n limit source shift ∧
+      -- Each later window keeps the near exit reserve of the source.
+      --
+      -- The reserve of each later window is an assumption on the run too.
       (∀ x ∈ J, ∀ m (referenceSlot finish : Slot), limit ≤ (e.world m).time →
         UpToDate config checks sources (e.world m).time ((e.world m).view x)
           ((e.world m).state x) →
@@ -113,26 +99,28 @@ def MemberObligations [DecidablePred (· ∈ J)] (u : ValidatorIndex) (n : ℕ) 
         subChecked referenceSlot 1 = .ok finish →
         SourceWindowReserveWith (J := J) (config := config) ((e.world n).state u) head source
           first finish (exitReserveNear source)) ∧
+      -- The late duty majority of the parent's epoch holds from the call to the horizon.
+      --
+      -- An assumption on the run: the late duty majority and the newly active voters of the window.
+      --
+      -- The majority buys the receivers more than two epochs after the parent's epoch.
+      --
+      -- It needs one epoch's honest duties to outweigh the rest of the active stake and the boost.
       LateDutyMajority (e := e) (computeEpochAtSlot preset parent.slot) (e.world n).time limit ∧
+      -- The newly active voters of the parent's window also hold from the call to the horizon.
+      --
+      -- They buy the voters activated two epochs after the parent.
       NewlyActiveVotersInHeadWindow (e := e) block.parentRoot (e.world n).time limit
 
 /-- The inputs of one confirming call that the call step assumes.
 
 They apply only when the call walks from its head to the start it selected, through the stored root.
 
-They are the source reads of the later windows and the count.
-
-The count bounds carry the call's pin reserve on top of the margin.
-
-They include the realized justification guards of the accepted roots, and each member's inputs.
-
 An assumption on the run: the source reads, the count bounds and the realized guards.
 
 The rule checks none of them.
 
 They buy the call's honest target count and the realized justification of each walked root.
-
-The source reads fail for a window member deposited after the source state, and on overflow.
 
 A call that keeps its start walks no roots, so it assumes nothing. -/
 def CallObligations [DecidablePred (· ∈ J)] (margin limit : ℕ) (u : ValidatorIndex) (n : ℕ)
@@ -146,7 +134,11 @@ def CallObligations [DecidablePred (· ∈ J)] (margin limit : ℕ) (u : Validat
       .ok source →
     ((e.world n).state u).getAncestorRoots head.root start =
       .ok (chain ++ after.confirmedRoot :: later) →
+    -- They are the source reads of the later windows and the count.
+    --
+    -- The source reads fail for a window member deposited after the source state, and on overflow.
     SourceWindowReads (e := e) n limit source ∧
+    -- The count bounds carry the call's pin reserve on top of the margin.
     (∀ slot (pulled anc fin : BeaconState preset fork) (target : Checkpoint),
       ((e.world n).state u).getCurrentSlot config = .ok slot →
       isStartSlotAtEpoch preset slot = .ok false →
@@ -157,14 +149,19 @@ def CallObligations [DecidablePred (· ∈ J)] (margin limit : ℕ) (u : Validat
         ((e.world n).state u).blockStates[anc.finalizedCheckpoint.root]? = some fin) →
       (anc.finalizedCheckpoint.epoch ≤ getCurrentEpoch anchorState → fin = anchorState) →
       TargetCountBounds (e := e) (margin + pinReserve config pulled anc fin) u n head.root) ∧
+    -- They include the realized justification guards of the accepted roots.
     AcceptedRealizedRecent ((e.world n).state u) (chain ++ [after.confirmedRoot]) ∧
     AcceptedRealizedHead ((e.world n).state u) config head.root (chain ++ [after.confirmedRoot]) ∧
+    -- They include each member's inputs.
     ∀ member ∈ chain ++ [after.confirmedRoot],
       MemberObligations (e := e) u n head.root source slot member limit
 
 namespace ConfirmedCalls
 
-/-! ## The balance source of a walked member -/
+/-! ## The balance source of a walked member
+
+The balance source of a call is on the chain of the parent of each walked member.
+-/
 
 /-- The anchor state does not hash to the zero root, as no honest store holds a zero state root. -/
 theorem anchorState_hash_nonzero {anchor : Store preset fork}
@@ -438,7 +435,6 @@ structure CallsCtx (anchor : Store preset fork) (u : ValidatorIndex) (events : L
   slots : 0 < config.SLOT_DURATION_MS
   positive : 0 < preset.SLOTS_PER_EPOCH.toNat
   long : 1 < preset.SLOTS_PER_EPOCH
-  preGloas : fork < .glamsterdam
   window : 2 * preset.SLOTS_PER_EPOCH.toNat ≤ preset.SLOTS_PER_HISTORICAL_ROOT.toNat
   roots : HeldBlockStateRootsNonzero (e := e) limit
   absent : AnchorParentAbsent (e := e) limit
@@ -898,7 +894,7 @@ theorem sourceOnParentChain_of_walk {anchor : Store preset fork}
     (anchorBoundary : isStartSlotAtEpoch preset anchorBlock.slot = .ok true)
     (start : ∀ w ∈ J, e.start w = anchor)
     (slots : 0 < config.SLOT_DURATION_MS) (positive : 0 < preset.SLOTS_PER_EPOCH.toNat)
-    (long : 1 < preset.SLOTS_PER_EPOCH) (preGloas : fork < .glamsterdam)
+    (long : 1 < preset.SLOTS_PER_EPOCH)
     (window : 2 * preset.SLOTS_PER_EPOCH.toNat ≤ preset.SLOTS_PER_HISTORICAL_ROOT.toNat)
     {limit : ℕ} (roots : HeldBlockStateRootsNonzero (e := e) limit)
     (absent : AnchorParentAbsent (e := e) limit)
@@ -927,7 +923,7 @@ theorem sourceOnParentChain_of_walk {anchor : Store preset fork}
       SourceOnParentChain ((e.world n).state u) after.currentEpochObservedJustifiedCheckpoint
         block.parentRoot parent := by
   have ctx : CallsCtx (e := e) anchor u events firstSlot limit :=
-    ⟨anchored, sound, anchorSlot, anchorBoundary, start, slots, positive, long, preGloas, window,
+    ⟨anchored, sound, anchorSlot, anchorBoundary, start, slots, positive, long, window,
       roots, absent, caller, anchorEpochBefore, atSlots⟩
   obtain ⟨below, -, startRec⟩ := start_recent ctx calls nBound
     (fun j _ m fcr' c b => facts ctx j m fcr' fcr c b)
@@ -942,21 +938,17 @@ theorem sourceOnParentChain_of_walk {anchor : Store preset fork}
 
 /-! ## The call invariant -/
 
-/-- The call invariant of the root that a call of one validator stores.
-
-The up-to-date honest heads descend from the root from the next slot to the horizon.
-
-If the root is of the current epoch or the one before, an ancestor of it is too.
-
-That ancestor covers the honest heads from the start of the current epoch.
-
-A root of the current epoch passes the target checks of the call, covered to the horizon. -/
+/-- The call invariant of the root that a call of one validator stores. -/
 def CallInvariant (margin limit : ℕ) (anchorRoot : Root) (u : ValidatorIndex) (n : ℕ)
     (root : Root) : Prop :=
+  -- The up-to-date honest heads descend from the root from the next slot to the horizon.
   (∀ slot next following, ((e.world n).state u).getCurrentSlot config = .ok slot →
     addChecked slot 1 = .ok next →
     computeTimeAtSlotMs config genesisTimeMs next = .ok following →
     HonestHeadsCover (e := e) root following.toNat (limit + 1)) ∧
+  -- If the root is of the current epoch or the one before, an ancestor of it is too.
+  --
+  -- That ancestor covers the honest heads from the start of the current epoch.
   (∀ epoch rootEpoch, ((e.world n).state u).getCurrentStoreEpoch config = .ok epoch →
     ((e.world n).state u).getBlockEpoch root = .ok rootEpoch →
     epoch.toNat ≤ rootEpoch.toNat + 1 →
@@ -967,6 +959,7 @@ def CallInvariant (margin limit : ℕ) (anchorRoot : Root) (u : ValidatorIndex) 
       computeStartSlotAtEpoch preset epoch = .ok epochStart ∧
       computeTimeAtSlotMs config genesisTimeMs epochStart = .ok epochStartTime ∧
       HonestHeadsCover (e := e) historical epochStartTime.toNat (limit + 1)) ∧
+  -- A root of the current epoch passes the target checks of the call, covered to the horizon.
   (∀ epoch, ((e.world n).state u).getCurrentStoreEpoch config = .ok epoch →
     ((e.world n).state u).getBlockEpoch root = .ok epoch →
     TargetChecked (e := e) margin anchorRoot u n epoch root (limit + 1))
@@ -1011,6 +1004,9 @@ structure StepCtx {g : ForkedBeaconState preset}
   minLookahead : 1 ≤ preset.MIN_SEED_LOOKAHEAD.toNat
   exitWindow : preset.SeedLookaheadAtLeastThree
   ring : preset.MIN_SEED_LOOKAHEAD.toNat + 3 < preset.EPOCHS_PER_HISTORICAL_VECTOR.toNat
+  room : .glamsterdam ≤ fork → AnchorRegistryRoom preset anchorState horizon
+  weights : .glamsterdam ≤ fork → config.HeadWeightsFit preset (2 * 10 ^ 17)
+  supply : .glamsterdam ≤ fork → CheckpointHeadWeightCeiling (e := e) (2 * 10 ^ 17) limit
   admitted : BlocksAdmitted e 0 Δ limit
   half : 2 * config.CONFIRMATION_BYZANTINE_THRESHOLD.toNat ≤ 100
   maxAligned : MaxEffectiveBalancesAligned preset
@@ -1045,17 +1041,59 @@ structure StepCtx {g : ForkedBeaconState preset}
   upToDate : ∀ n ∈ events, UpToDate config checks sources (e.world n).time
     ((e.world n).view u) ((e.world n).state u)
 
+/-- A balance source no later than a held parent's epoch has its registry within the limit.
+
+From Gloas the anchor's room bounds it.
+
+The source is at its checkpoint's epoch or at a held block's epoch, and the horizon bounds both. -/
+private theorem source_within {Δ : ℕ} {anchor : Store preset fork} {limit : ℕ}
+    {horizon anchorEpoch : Epoch} {g : ForkedBeaconState preset}
+    {pre : Run config checks g ⟨fork, anchorState⟩} {u : ValidatorIndex} {events : List ℕ}
+    {firstSlot : Slot}
+    (ctx : StepCtx (e := e) pre Δ anchor limit horizon anchorEpoch u events firstSlot)
+    {n : ℕ} (nBound : (e.world n).time ≤ limit) {checkpoint : Checkpoint}
+    {source : BeaconState preset fork}
+    (sourceOk : ((e.world n).state u).checkpointState checkpoint = .ok source)
+    {parent : Root} {parentBlock : BeaconBlock preset fork}
+    (parentOk : ((e.world n).state u).block parent = .ok parentBlock)
+    (notAfter : checkpoint.epoch.toNat ≤ (computeEpochAtSlot preset parentBlock.slot).toNat) :
+    source.RegistryWithinLimit := by
+  by_cases gloas : .glamsterdam ≤ fork
+  swap
+  · exact BeaconState.registryWithinLimit_of_lt (Nat.lt_of_not_le gloas) source
+  have forward := ctx.forward n
+  have anchorLe : anchorBlock.slot ≤ anchorState.slot := UInt64.le_of_eq ctx.anchorSlot
+  obtain ⟨now, nowOk, blocksLe, -⟩ := forward.slots_le_current ctx.slots anchorLe
+  have epochOk : ((e.world n).state u).getCurrentStoreEpoch config =
+      .ok (computeEpochAtSlot preset now) := by
+    simp [Store.getCurrentStoreEpoch, nowOk, bind, Except.bind, pure, Except.pure]
+  have nowLe := ctx.bounded u ctx.caller n _ nBound epochOk
+  have blockLe := forward.blockState_epoch_le_current ctx.slots anchorLe epochOk
+  have found := Store.checkpointState_ok_iff.mp sourceOk
+  have size := (forward.reachable.validators_size_le_of_gloas gloas).2 _ source found
+  -- The source is within the horizon: at a held block's epoch, or at its checkpoint's.
+  have sourceLe : getCurrentEpoch source ≤ horizon := by
+    obtain ⟨base, startSlot, baseHeld, startOk, kept⟩ :=
+      forward.reachable.checkpointStatesFromBlocks found
+    rcases kept with ⟨-, rfl⟩ | ⟨-, _, -, processed⟩
+    · exact UInt64.le_trans (blockLe _ _ baseHeld) nowLe
+    have sourceEpoch : getCurrentEpoch source = checkpoint.epoch := by
+      rw [getCurrentEpoch, (processSlots_slot processed).2]
+      exact computeEpochAtSlot_computeStartSlotAtEpoch
+        (UInt64.lt_iff_toNat_lt.mpr ctx.positive) startOk
+    have parentLe :=
+      UInt64.le_iff_toNat_le.mp (blocksLe _ _ (Store.block_ok_iff.mp parentOk))
+    have parentEpochLe : (computeEpochAtSlot preset parentBlock.slot).toNat ≤
+        (computeEpochAtSlot preset now).toNat := by
+      simp only [computeEpochAtSlot, UInt64.toNat_div]
+      exact Nat.div_le_div_right parentLe
+    rw [sourceEpoch, UInt64.le_iff_toNat_le]
+    exact Nat.le_trans notAfter (Nat.le_trans parentEpochLe (UInt64.le_iff_toNat_le.mp nowLe))
+  exact registryWithinLimit_of_anchorRoom size sourceLe (ctx.room gloas)
+
 /-! ## The walk of a call -/
 
-/-- The checkpoint inputs of a call that confirms a walked root.
-
-The call's count bounds give its reserved count off the epoch's first slot.
-
-The start's checked target, covered up to `limit + 1`, is covered up to the next instant.
-
-At the epoch's first slot the root is of an earlier epoch, as none of that epoch is confirmed.
-
-The call is at or after the first slot, so its epoch is at least two and after the anchor's. -/
+/-- The checkpoint inputs of a call that confirms a walked root. -/
 theorem walk_inputs [DecidablePred (· ∈ J)] {Δ : ℕ} {anchor : Store preset fork}
     {limit : ℕ} {horizon anchorEpoch : Epoch} {g : ForkedBeaconState preset}
     {pre : Run config checks g ⟨fork, anchorState⟩} {u : ValidatorIndex} {events : List ℕ}
@@ -1091,7 +1129,9 @@ theorem walk_inputs [DecidablePred (· ∈ J)] {Δ : ℕ} {anchor : Store preset
     (fun x hx => (ctx.start x hx).symm ▸ Store.ForwardReachable.anchor ctx.anchored) n u
     ctx.caller
   refine ⟨checked, headAbove, ?_, ?_, ?_, ?_⟩
-  · -- The count bounds give the honest count.
+  · -- The call's count bounds give its reserved count off the epoch's first slot.
+    --
+    -- The count bounds give the honest count.
     intro slot' slotOk' inside pulled anc fin target pulledOk targetOk ancOk finOk finAnchor
     have bounds := (obligations head slot start source chain later headOk slotOk selects
       sourceOk walked).2.1 slot' pulled anc fin target slotOk' inside pulledOk targetOk ancOk
@@ -1100,7 +1140,7 @@ theorem walk_inputs [DecidablePred (· ∈ J)] {Δ : ℕ} {anchor : Store preset
       have : 3 ≤ preset.MAX_SEED_LOOKAHEAD.toNat := ctx.exitWindow
       omega
     exact Execution.honestTargetVotes_of_byzantineStakeAtMost ctx.anchored ctx.start
-      (UInt64.le_of_eq ctx.anchorSlot) ctx.sound ctx.maxAligned ctx.slots ctx.preGloas
+      (UInt64.le_of_eq ctx.anchorSlot) ctx.sound ctx.maxAligned ctx.slots
       ctx.minLookahead maxLookahead (by have := ctx.ring; omega) ctx.stale ctx.increment ctx.caller
       nBound ⟨head, headOk, rfl⟩ bounds
   · -- The start's checked target is covered up to `limit + 1`, so up to the next instant.
@@ -1109,6 +1149,8 @@ theorem walk_inputs [DecidablePred (· ∈ J)] {Δ : ℕ} {anchor : Store preset
       startInv.2.2 epoch currentOk startOk
     exact ⟨k, before, origin, rootOk, originOk, below, checkedOrigin,
       honestHeadsCover_mono cover le_rfl (by omega)⟩
+  -- At the epoch's first slot the root is of an earlier epoch, as none of that epoch is confirmed.
+  --
   · -- At an epoch start no walked root of the current epoch is one-confirmed.
     intro slot' epoch rootEpoch slotOk' boundary currentOk rootOk same
     have sameSlot : slot' = slot := Except.ok.inj (slotOk'.symm.trans slotOk)
@@ -1136,15 +1178,7 @@ theorem walk_inputs [DecidablePred (· ∈ J)] {Δ : ℕ} {anchor : Store preset
     simp only [UInt64.toNat_ofNat] at two
     omega
 
-/-- A call that confirms a walked root keeps the call invariant for that root.
-
-The root covers honest heads from the call on, so from the next slot's start.
-
-The start's recent historical root is below the root too, since the start is below it.
-
-For a root of the current epoch, the start's checked origin serves if the start is of that epoch.
-
-Otherwise the root is its own origin, checked by this call. -/
+/-- A call that confirms a walked root keeps the call invariant for that root. -/
 theorem walk_invariant [DecidablePred (· ∈ J)] {Δ : ℕ} {anchor : Store preset fork}
     {limit : ℕ} {horizon anchorEpoch : Epoch} {g : ForkedBeaconState preset}
     {pre : Run config checks g ⟨fork, anchorState⟩} {u : ValidatorIndex} {events : List ℕ}
@@ -1181,7 +1215,7 @@ theorem walk_invariant [DecidablePred (· ∈ J)] {Δ : ℕ} {anchor : Store pre
   have sameCall : callSlot = slot := Except.ok.inj (callSlotOk.symm.trans slotOk)
   subst callSlot
   refine ⟨?_, ?_, ?_⟩
-  · -- The root covers from the call on, so from the next slot's start.
+  · -- The root covers honest heads from the call on, so from the next slot's start.
     intro readSlot next following readOk nextOk followingOk
     have sameRead : readSlot = slot := Except.ok.inj (readOk.symm.trans slotOk)
     subst readSlot
@@ -1192,7 +1226,7 @@ theorem walk_invariant [DecidablePred (· ∈ J)] {Δ : ℕ} {anchor : Store pre
     obtain rfl : time = begin := Except.ok.inj (timeOk.symm.trans beginOk)
     exact honestHeadsCover_mono rootCovers
       (by rw [atSlot]; exact UInt64.le_iff_toNat_le.mp timeLe) le_rfl
-  · -- The start's historical root is below the root too.
+  · -- The start's recent historical root is below the root too, since the start is below it.
     intro epoch readRootEpoch currentOk readRootOk _
     obtain rfl := Store.getCurrentStoreEpoch_eq slotOk currentOk
     obtain ⟨historical, historicalEpoch, epochStart, epochStartTime, above, historicalOk,
@@ -1206,6 +1240,9 @@ theorem walk_invariant [DecidablePred (· ∈ J)] {Δ : ℕ} {anchor : Store pre
     obtain rfl := Store.getCurrentStoreEpoch_eq slotOk currentOk
     have rootSame : rootEpoch = computeEpochAtSlot preset slot :=
       Except.ok.inj (rootEpochOk.symm.trans readRootOk)
+    -- The root here is of the current epoch.
+    --
+    -- The start's checked origin serves if the start is of that epoch.
     by_cases startSame : startEpoch = computeEpochAtSlot preset slot
     · -- The start's checked origin is below the root.
       obtain ⟨k, before, origin, -, originOk, below, checkedOrigin, cover⟩ :=
@@ -1214,7 +1251,7 @@ theorem walk_invariant [DecidablePred (· ∈ J)] {Δ : ℕ} {anchor : Store pre
       exact ⟨k, before, origin, readRootOk, originOk,
         Store.isAncestor_trans startHeld found rootAbove below,
         checkedOrigin, cover⟩
-    · -- The root itself is the origin, checked by this call.
+    · -- Otherwise the root is its own origin, checked by this call.
       have target : ((e.world n).state u).willCurrentTargetBeJustified config head.root =
           .ok true := by
         rcases cases with old | current
@@ -1280,6 +1317,10 @@ theorem walk_holds [DecidablePred (· ∈ J)] {Δ : ℕ} {anchor : Store preset 
     ctx.caller
   have reached := forwardWith.reachable
   have anchorLe : anchorBlock.slot ≤ anchorState.slot := UInt64.le_of_eq ctx.anchorSlot
+  -- The balance source is on the chain of each walked member's parent.
+  have onChainAll := sourceOnParentChain_of_walk ctx.anchored ctx.sound ctx.anchorSlot
+    ctx.anchorBoundary ctx.start ctx.slots ctx.positive ctx.long ctx.window ctx.roots ctx.absent
+    ctx.caller ctx.anchorEpochBefore ctx.atSlots calls nBound headOk slotOk selects checked walked
   -- The root is above the start, and the call is at most one epoch after the start.
   obtain ⟨rootBlock, startBlock, rootBlockOk, startBlockOk, aboveStart⟩ :=
     Store.slot_lt_of_mem_getAncestorRoots walked (by simp) rootWalked
@@ -1365,7 +1406,8 @@ theorem walk_holds [DecidablePred (· ∈ J)] {Δ : ℕ} {anchor : Store preset 
     rw [ctx.start w hw, Store.getForkchoiceStore_equivocatingIndices ctx.anchored] at member
     simp at member
   have positive := e.lt_two_mul_honest_supportersOf_of_isOneConfirmed ctx.slots noEquivocator n
-    ctx.caller (BeaconState.registryWithinLimit_of_lt ctx.preGloas source) slotOk blockOk
+    ctx.caller (source_within ctx nBound sourceOk parentOk
+      (onChainAll _ rootMem block parent blockOk parentOk).1) slotOk blockOk
     parentOk boostOk firstOk lastOk maximumOk discountOk adversaryOk rangeOk participantsOk
     confirmed inside (reached.checkpointState_aligned ctx.sound ctx.maxAligned sourceOk)
     ctx.increment byzantine
@@ -1398,14 +1440,13 @@ theorem walk_holds [DecidablePred (· ∈ J)] {Δ : ℕ} {anchor : Store preset 
     obtain ⟨attestation, sentMessage, inView, messageEq, signed, origin⟩ :=
       e.exists_signed_origin_of_latestMessages ctx.anchored ctx.start ctx.caller latest
     subst messageEq
-    rw [Store.getSupportedNode_of_lt ctx.preGloas, Except.ok.injEq] at supportedOk
-    subst supportedOk
+    rw [Store.isAncestor_getSupportedNode supportedOk] at voteDescends
     obtain ⟨readSlot, readSlotOk, past⟩ := origin.past
     rw [slotOk, Except.ok.injEq] at readSlotOk
     subst readSlot
     exact ⟨v, honest, n, le_rfl, sentMessage, e.view_subset_sent n u inView, attestation.data,
       signed, past, voteDescends⟩
-  rcases Execution.rootHeld_of_honest_vote pre ctx.sync ctx.slots ctx.preGloas ctx.fits
+  rcases Execution.rootHeld_of_honest_vote pre ctx.sync ctx.slots ctx.fits
       ctx.admitted ctx.prompt ctx.anchored ctx.sound ctx.anchorSlot
       ctx.anchorBoundary ctx.start ctx.bounded ctx.roots ctx.absent ctx.parameters ctx.genesis
       ctx.heldEarly ctx.enough ctx.terminal ctx.caller beginOk timeEq nBound blockFound
@@ -1519,10 +1560,11 @@ theorem walkMembers_cover [DecidablePred (· ∈ J)] {Δ : ℕ} {anchor : Store 
   -- The caller reads its head at each rollover, unless stores collide or historical evidence holds.
   have signed : JustifiedHonestlySigned (e := e) anchor.justifiedCheckpoint.epoch 0 limit :=
     ctx.anchorEpochOk ▸ ctx.signedAll
-  rcases e.callRolloverRead_or_evidence ctx.sync ctx.slots ctx.preGloas ctx.admitted
+  rcases e.callRolloverRead_or_evidence ctx.sync ctx.slots ctx.admitted
       ctx.fits ctx.prompt ctx.votes ctx.anchored ctx.start ctx.anchorSlot ctx.anchorBoundary signed
       ctx.roots ctx.absent ctx.bounded ctx.parameters ctx.genesis pre ctx.heldEarly ctx.enough
-      ctx.terminal ctx.ceiling ctx.scoreFits ctx.fit.seeds ctx.caller n head.root with
+      ctx.terminal ctx.ceiling ctx.scoreFits ctx.fit.seeds ctx.caller n head.root
+      ctx.room ctx.weights ctx.supply (fun _ => ctx.fit) with
     rollover | collision | evidence
   rotate_left
   · exact .inr (.inl collision)
@@ -1537,7 +1579,8 @@ theorem walkMembers_cover [DecidablePred (· ∈ J)] {Δ : ℕ} {anchor : Store 
   have rootViable : ∀ T, (e.world n).time ≤ T → T ≤ limit →
       HonestHeadsCover (e := e) after.confirmedRoot (e.world n).time T →
       RootViableAt (e := e) after.confirmedRoot T := fun T low high covers =>
-    (e.rootViableAt_of_checked pre ctx.sync ctx.slots ctx.preGloas ctx.admitted
+    (e.rootViableAt_of_checked (room := ctx.room)
+      pre ctx.sync ctx.slots ctx.admitted
       ctx.fits ctx.prompt ctx.votes ctx.windows ctx.fit ctx.ring ctx.incrementPositive
       ctx.anchored ctx.sound ctx.anchorSlot ctx.anchorBoundary ctx.start ctx.anchorEpochOk
       ctx.bounded ctx.roots ctx.absent ctx.pinned ctx.signedAll
@@ -1586,9 +1629,11 @@ theorem walkMembers_cover [DecidablePred (· ∈ J)] {Δ : ℕ} {anchor : Store 
   rw [show parentOrSelf ((e.world n).state u) m = block.parentRoot by
     simp [parentOrSelf, blockOk]] at parentCovers
   -- The member's near exit bound at time T, or a collision.
+  have onChain := onChainAll m hm block parent blockOk parentOk
+  have within := source_within ctx nBound sourceOk parentOk onChain.1
   rcases Execution.receiverWindowExitsNear_of_sourceOnParentChain ctx.anchored ctx.start
-      ctx.anchorSlot ctx.positive ctx.exitWindow ctx.preGloas ctx.caller callerTime sourceOk
-      parentOk firstOk (onChainAll m hm block parent blockOk parentOk) parentCovers
+      ctx.anchorSlot ctx.positive ctx.exitWindow ctx.caller callerTime sourceOk within
+      parentOk firstOk onChain parentCovers
     with exits | collision
   swap
   · exact .inr (.inl (collisionAt collision))
@@ -1622,19 +1667,20 @@ theorem walkMembers_cover [DecidablePred (· ∈ J)] {Δ : ℕ} {anchor : Store 
         ((reach n u ctx.caller).anchorSlot_le (UInt64.le_of_eq ctx.anchorSlot)
           (Store.block_ok_iff.mp blockOk))
         (holds w hw k kLow kHigh ready) rootAbove
-    exact Store.viable_of_ancestor ctx.preGloas tree below
+    exact Store.viable_of_ancestor tree below
       (rootViable T' low (high.trans hT) rootCovers w hw k nodes hd atTime ready receiverHead
         tree)
   -- The member's step at time T.
-  rcases Execution.honestHeadsCover_of_viableAt ctx.sync ctx.slots ctx.minLookahead maxLookahead
-      ctx.ring ctx.preGloas
+  rcases Execution.honestHeadsCover_of_viableAt
+      (room := ctx.room) ctx.sync ctx.slots
+      ctx.minLookahead maxLookahead ctx.ring
       (fun v hv w hw n k le => ctx.admitted v hv w hw n k (le.trans hT)) ctx.half
       (fun v hv s c d a b early le => ctx.votes v hv s c d a b early (le.trans hT)) ctx.fits
       (fun w hw s st a b le => ctx.prompt w hw s st a b (le.trans hT))
       (fun w hw k le => ctx.windows w hw k (le.trans hT)) membership
       ctx.anchored ctx.sound ctx.anchorSlot ctx.anchorBoundary ctx.start ctx.caller upToDate
       ⟨head, headOk, rfl⟩ slotOk beginOk timeEq blockOk parentOk sourceOk boostOk firstOk lastOk
-      beforeOk maximumOk participantsOk (BeaconState.registryWithinLimit_of_lt ctx.preGloas source)
+      beforeOk maximumOk participantsOk within
       (Store.Reachable.checkpointState_aligned ctx.sound (reach n u ctx.caller) ctx.maxAligned
         sourceOk)
       ctx.increment supportOk discountOk adversaryOk margin callerTime

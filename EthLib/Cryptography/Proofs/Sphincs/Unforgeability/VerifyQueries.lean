@@ -2,9 +2,10 @@ module
 
 public import EthLib.Cryptography.Proofs.Sphincs.Constants
 public import EthLib.Cryptography.Proofs.HashSig
-public import EthLib.Cryptography.Proofs.Merkle.Completeness
+public import EthLib.Cryptography.Proofs.Merkle.QueryBound
 public import EthLib.Cryptography.Proofs.Sphincs.Encoding
-public import EthLib.Cryptography.Proofs.Sphincs.Unforgeability.Game
+public import EthLib.Cryptography.Sphincs
+public import EthLib.Cryptography.Proofs.HashSig.Bytes
 public import EthLib.Cryptography.Proofs.Wots
 public import EthLib.Cryptography.Proofs.HashSig.Calls
 
@@ -13,27 +14,7 @@ public import EthLib.Cryptography.Proofs.HashSig.Calls
 
 Verification makes at most 491 hash calls, whatever the key, the message and the signature.
 
-- The digest: 2 calls.
-- FORS: a leaf and 10 nodes in each of the 24 trees, then `T_k` over the roots, 265 calls.
-- Each of the 3 layers: an encoding, 64 chain steps and a leaf, 66 calls.
-- The paths: one call per height, `8 + 8 + 10 = 26` calls.
-
-That is `2 + 265 + 3 * 66 + 26 = 491`.
-
-A layer walks `3 * 64 - 128 = 64` chain steps, because the digits of a codeword sum to 128.
-
-Verification stops at the first layer whose encoding is not a codeword, so it can make fewer calls.
-
-A signature that verifies passes every layer, so it takes exactly 491 calls.
-
-The count holds for every hash that makes at most one oracle call, and the game's `H` is one.
-
 Verification also reads nothing but the answers to its own calls.
-
-- Let a fixed function answer every call.
-  Verification then computes EthLib's verification, with that function as its hash.
-- Take two functions that agree on the inputs that verification hashes under the first.
-  They give the same verdict.
 -/
 
 @[expose] public section
@@ -214,17 +195,6 @@ theorem chain_isTotalQueryBound {α : Type} {k : Nat} (step : Fin k → α → O
     exact isTotalQueryBound_bind (chain_isTotalQueryBound step hstep start s _ value)
       fun _ => hstep _ _
 
-/-- A climb makes one call per sibling, when each node hash makes at most one. -/
-theorem climb_isTotalQueryBound {α : Type} (hash : Merkle.Position → α → α → OracleComp spec α)
-    (hhash : ∀ p left right, IsTotalQueryBound (hash p left right) 1) :
-    ∀ (siblings : List α) (p : Merkle.Position) (current : α),
-      IsTotalQueryBound (Merkle.climb hash p current siblings) siblings.length
-  | [], _, _ => isQueryBound_pure _ _ _ _
-  | _ :: rest, p, current => by
-    rw [Merkle.climb, List.length_cons]
-    exact (isTotalQueryBound_bind (hhash _ _ _)
-      fun _ => climb_isTotalQueryBound hash hhash rest _ _).mono (by omega)
-
 /-- The chains of a codeword have `3 * 64 - 128 = 64` steps left above the revealed positions. -/
 theorem sum_steps_of_codeword {d : Digest} {x : Codeword} (h : codeword? d = some x) :
     ∑ i : Fin V, (CHAIN_LENGTH - 1 - (x[i] : Nat)) = CHAIN_HASHES := by
@@ -265,7 +235,7 @@ theorem treeRecover_isTotalQueryBound (pkSeed : PkSeed) (idx : Nat) (kappa : Fin
     IsTotalQueryBound (treeRecover H pkSeed idx kappa s opening) (1 + FORS_HEIGHT) := by
   rw [treeRecover]
   refine isTotalQueryBound_bind (th_isTotalQueryBound H hH _ _ _) fun leaf => ?_
-  have := climb_isTotalQueryBound (forsNodeHash H pkSeed idx kappa)
+  have := Merkle.isTotalQueryBound_climb (hash := forsNodeHash H pkSeed idx kappa)
     (fun _ _ _ => th_isTotalQueryBound H hH _ _ _) opening.path.toList ⟨0, s.val⟩ leaf
   rwa [Vector.length_toList] at this
 
@@ -311,12 +281,20 @@ theorem layerRoot_isTotalQueryBound (pkSeed : PkSeed) (layer : Layer) (idx : Nat
     rw [← Nat.add_zero layer.height]
     refine isTotalQueryBound_bind ?_ fun _ => isQueryBound_pure _ _ _ _
     rw [fold]
-    have := climb_isTotalQueryBound (nodeHash H pkSeed layer (OtsKey.ofIndex layer idx).tree)
+    have := Merkle.isTotalQueryBound_climb
+      (hash := nodeHash H pkSeed layer (OtsKey.ofIndex layer idx).tree)
       (fun _ _ _ => th_isTotalQueryBound H hH _ _ _) sig.path.toList
       ⟨0, (OtsKey.ofIndex layer idx).leaf⟩ leaf
     rwa [Vector.length_toList] at this
 
-/-- The most hash calls verification makes: the digest, FORS, three layers and their paths. -/
+/-- The most hash calls verification makes: the digest, FORS, three layers and their paths.
+
+- The digest: 2 calls.
+- FORS: a leaf and 10 nodes in each of the 24 trees, then `T_k` over the roots, 265 calls.
+- Each of the 3 layers: an encoding, 64 chain steps and a leaf, 66 calls.
+- The paths: one call per height, `8 + 8 + 10 = 26` calls.
+
+That is `2 + 265 + 3 * 66 + 26 = 491`. -/
 def verifyCalls : Nat :=
   DIGEST_CALLS + (FORS_TREES * (1 + FORS_HEIGHT) + 1) + LAYERS * (CHAIN_HASHES + 2) + HEIGHT
 
@@ -331,6 +309,9 @@ theorem verifyWith_isTotalQueryBound (pk : PublicKey) (msg : Message) (sig : Sig
     (hMsg_isTotalQueryBound H hH _ _ _ _) fun _ =>
     isTotalQueryBound_bind (forsRecover_isTotalQueryBound H hH _ _ _ _) fun _ =>
     isTotalQueryBound_bind (layerRoot_isTotalQueryBound H hH _ _ _ _ _) fun r₀ => ?_).mono ?_
+  -- Verification stops at the first layer whose encoding is not a codeword.
+  --
+  -- So it can make fewer calls.
   · cases r₀ with
     | none => exact isQueryBound_pure _ _ _ _
     | some r₀ =>
@@ -475,6 +456,10 @@ theorem verifyCalls_eq : verifyCalls = 491 := by
   decide
 
 /-! ## Verification in the game -/
+
+/-- `H` in the game: a query to the random oracle, which answers every hash call. -/
+abbrev H : ByteArray → OracleComp HashSig.OracleWorld (Vector UInt8 32) :=
+  HashSig.queryH
 
 /-- The game's `H` makes one oracle call. -/
 theorem H_isTotalQueryBound (x : ByteArray) : IsTotalQueryBound (H x) 1 :=

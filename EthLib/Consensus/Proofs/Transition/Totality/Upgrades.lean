@@ -11,31 +11,22 @@ public import EthLib.Consensus.Proofs.Transition.Upgrade
 /-!
 # Proofs: the upgrades of the beacon state succeed under bounds
 
-The upgrade to Altair turns the pending attestations into flags and draws the sync committee.
+Four upgrades do work that can fail, so each succeeds under bounds on the state before it:
 
-It succeeds when those attestations read and the draw has its bounds and assumptions.
+- The upgrade to Altair turns the pending attestations into flags and draws the sync committee.
+- The upgrade to Electra starts the churns of exits and consolidations, and the queue of deposits.
+- The upgrade to Fulu computes the first lookahead of proposers.
+- The upgrade to Gloas computes the first window of payload timeliness committees.
 
-The upgrade to Electra starts the churns of exits and consolidations, and the queue of deposits.
+The upgrade to Gloas then moves the pending deposits of builders to a new registry of builders.
 
-It succeeds under bounds on the registry, the epoch and the deposit queue.
+Where an upgrade draws, it also needs assumptions on its draws.
 
-The upgrade to Fulu computes the first lookahead of proposers, and fails only if that draw fails.
+[EIP-7917] specifies the first lookahead of proposers at Fulu.
 
-[EIP-7917] specifies that lookahead.
+[EIP-7732] specifies the onboarding of builders at the fork to Gloas.
 
-The upgrade to Gloas computes the first window of payload timeliness committees.
-
-It then moves the pending deposits of builders to a new registry of builders.
-
-[EIP-7732] specifies that onboarding at the fork, and [EIP-8282] keeps it.
-
-The onboarding overflows no builder balance when the pending deposits hold under `2^64` Gwei.
-
-The checks of the deposit signatures and the root of the empty requests never fail.
-
-The bounds of each draw are stated on the state before the upgrade.
-
-The upgrade keeps the registry, the mixes and the slot, so the draws read the same values.
+[EIP-8282] keeps that onboarding.
 
 [EIP-7732]: https://eips.ethereum.org/EIPS/eip-7732#fork-transition
 [EIP-7917]: https://eips.ethereum.org/EIPS/eip-7917#specification
@@ -66,8 +57,14 @@ theorem upgradeToFulu_ok {pre : BeaconState preset .pectra}
     (drawable : ∀ offset ≤ preset.MIN_SEED_LOOKAHEAD.toNat,
       ProposersDrawable pre (getCurrentEpoch pre + offset.toUInt64)) :
     ∃ post, upgradeToFulu config pre = .ok post := by
+  -- The bounds of each draw are stated on the state before the upgrade.
+  --
+  -- The upgrade keeps the registry, the mixes and the slot, so the draws read the same values.
   have epoch : getCurrentEpoch (carryFields config .fusaka pre (by decide) (by decide)) =
       getCurrentEpoch pre := rfl
+  -- The upgrade to Fulu computes the first lookahead of proposers.
+  --
+  -- It fails only if that draw fails.
   obtain ⟨proposers, drawn⟩ := initializeProposerLookahead_ok
     (state := carryFields config .fusaka pre (by decide) (by decide))
     (by rw [epoch]; exact seedRoom) lookahead (by rw [epoch]; exact slotRoom)
@@ -154,8 +151,6 @@ private theorem onboardDeposit_ok {validatorKeys : List Cryptography.Bls.BLSPubk
       Uint64.addChecked_of_lt (Nat.lt_of_le_of_lt (Nat.add_le_add_right below _) funded)]
     simp only [liftAccessor, liftArith, Except.mapError, bind, Except.bind, pure, Except.pure]
     exact ⟨_, _, rfl, by simp [BeaconState.putBuilder]⟩
-  split
-  · exact ⟨_, _, rfl, by omega⟩
   obtain ⟨pending, pendingOk⟩ := isPendingValidator_total (config := config) (checks := checks)
     kept.toList deposit.pubkey
   obtain ⟨valid, validOk⟩ := isValidDepositSignature_exists_ok config checks
@@ -164,8 +159,9 @@ private theorem onboardDeposit_ok {validatorKeys : List Cryptography.Bls.BLSPubk
     (version := PAYLOAD_BUILDER_VERSION)
     (executionAddress := credentialAddress deposit.withdrawalCredentials)
     (amount := deposit.amount) (slot := deposit.slot) few
-  cases pending <;> cases valid <;>
-    simp only [pendingOk, validOk, addedOk, bind, Except.bind, pure, Except.pure,
+  by_cases known : deposit.pubkey ∈ validatorKeys <;>
+    cases pending <;> cases valid <;>
+    simp only [pendingOk, validOk, addedOk, known, bind, Except.bind, pure, Except.pure,
       Bool.false_eq_true, ↓reduceIte] <;>
     exact ⟨_, _, rfl, by omega⟩
 
@@ -226,10 +222,6 @@ It draws the committees of the current epoch and of each epoch of the seed looka
 
 In each of these epochs the draws must end: an assumption, not a bound.
 
-An epoch must have at least one slot.
-
-The pending deposits must also hold less than `2^64` Gwei.
-
 The bounds of the draw are those of the first window, read on the Fulu state. -/
 theorem upgradeToGloas_ok {pre : BeaconState preset .fusaka}
     (seedRoom : (getCurrentEpoch pre).toNat + preset.MIN_SEED_LOOKAHEAD.toNat +
@@ -237,19 +229,29 @@ theorem upgradeToGloas_ok {pre : BeaconState preset .fusaka}
     (lookahead : preset.MIN_SEED_LOOKAHEAD.toNat < preset.EPOCHS_PER_HISTORICAL_VECTOR.toNat)
     (slotRoom : ((getCurrentEpoch pre).toNat + preset.MIN_SEED_LOOKAHEAD.toNat + 1) *
       preset.SLOTS_PER_EPOCH.toNat ≤ 2 ^ 64)
+    -- An epoch must have at least one slot.
     (perEpoch : preset.SLOTS_PER_EPOCH ≠ 0)
     (drawable : ∀ offset ≤ preset.MIN_SEED_LOOKAHEAD.toNat,
       PtcDrawable pre (getCurrentEpoch pre + offset.toUInt64))
+    -- The pending deposits must also hold less than `2^64` Gwei.
     (funded : pendingAmount (pre.pendingDeposits (by decide)).data.toList < 2 ^ 64) :
     ∃ post, upgradeToGloas config checks pre = .ok post := by
+  -- The root of the empty requests never fails.
   obtain ⟨root, rooted⟩ :=
     Serialization.Ssz.SszType.hashTreeRoot_total (ExecutionRequests.empty preset .glamsterdam)
+  -- The upgrade keeps the registry, the mixes and the slot, so the draws read the same values.
   have epoch : getCurrentEpoch (upgradeFields config pre root) = getCurrentEpoch pre := rfl
+  -- The upgrade to Gloas computes the first window of payload timeliness committees.
   obtain ⟨window, windowOk⟩ := initializePtcWindow_ok (state := upgradeFields config pre root)
     (by rw [epoch]; exact seedRoom) lookahead (by rw [epoch]; exact slotRoom) perEpoch
     (fun offset le => by
       rw [epoch]
       exact PtcDrawable.of_eq (state := pre) rfl rfl (by decide) (drawable offset le))
+  -- It then moves the pending deposits of builders to a new registry of builders.
+  --
+  -- The onboarding overflows no builder balance when the pending deposits hold under `2^64` Gwei.
+  --
+  -- The checks of the deposit signatures never fail.
   obtain ⟨post, onboarded⟩ := onboardBuildersFromPendingDeposits_ok (config := config)
     (checks := checks)
     (state := { upgradeFields config pre root with ptcWindow := fun _ => window }) rfl
@@ -299,44 +301,29 @@ private theorem translateAttestation_exists_ok {state : BeaconState preset .alta
   rw [folded]
   exact ⟨_, rfl⟩
 
-/-- In Phase 0, each attester of a pending attestation is in the registry.
-
-It is a member of a committee, so an active validator. -/
-private theorem getPendingAttestingIndices_lt {pre : BeaconState preset .phase0}
-    {attestation : PendingAttestation preset} {attesters : List ValidatorIndex}
-    (ok : getPendingAttestingIndices pre attestation = .ok attesters) :
-    ∀ index ∈ attesters, index.toNat < pre.validators.data.size := by
-  intro index member
-  simp only [getPendingAttestingIndices, bind, Except.bind] at ok
-  split at ok
-  · cases ok
-  · rename_i committee committeeOk
-    have inCommittee := mem_of_committeeAttesters ok member
-    have active := mem_getActiveValidatorIndices_of_getBeaconCommittee committeeOk inCommittee
-    exact lt_size_of_mem_getActiveValidatorIndices active
-
 /-- The upgrade to Altair succeeds when the pending attestations read and the draw has its bounds.
 
-Each pending attestation of the previous epoch must give its flags and its attesters.
-
-That is an assumption on the pending attestations, not a bound.
-
-The sync committee is drawn under the bounds of the draw, read on the state before the upgrade.
-
-The draw also needs valid keys, and it must end.
-
-Those are assumptions too. -/
+The sync committee is drawn under the bounds of the draw, read on the state before the upgrade. -/
 theorem upgradeToAltair_exists_ok {pre : BeaconState preset .phase0}
     (epochRoom : (getCurrentEpoch pre).toNat + 1 + preset.EPOCHS_PER_HISTORICAL_VECTOR.toNat <
       2 ^ 64)
     (lookahead : preset.MIN_SEED_LOOKAHEAD.toNat < preset.EPOCHS_PER_HISTORICAL_VECTOR.toNat)
     (members : preset.SYNC_COMMITTEE_SIZE ≠ 0)
+    -- The draw also needs valid keys.
+    --
+    -- It must end.
+    --
+    -- Those are assumptions.
     (drawable : SyncDrawable pre)
+    -- Each pending attestation of the previous epoch must give its flags and its attesters.
+    --
+    -- That is an assumption on the pending attestations, not a bound.
     (translated : ∀ attestation ∈ (pre.previousEpochAttestations (by decide)).data.toList,
       (∃ flags, getAttestationParticipationFlagIndices pre attestation.data
           attestation.inclusionDelay pre.latestBlockHeader.slot = .ok flags) ∧
         ∃ attesters, getPendingAttestingIndices pre attestation = .ok attesters) :
     ∃ post, upgradeToAltair config pre = .ok post := by
+  -- The upgrade to Altair turns the pending attestations into flags and draws the sync committee.
   let carried := carryFields config .altair pre (by decide) (by decide)
   -- Each translation keeps the carried state, up to the flags of the previous epoch.
   have walk : ∀ list : List (PendingAttestation preset),
@@ -604,23 +591,25 @@ private theorem churns_exists_ok {state : BeaconState preset .pectra}
 
 /-- The upgrade to Electra succeeds under bounds on the registry, the epoch and the deposit queue.
 
-The registry must have one balance for each validator.
-
-The effective balances must sum below `2^64`, for the churns.
-
-The first epoch at which an exit can start, plus one, must be below `2^64`.
-
-Each validator queues at most two pending deposits, so twice the registry must fit in that queue.
-
-That bound is not tight, since a validator queued before activation has no excess left.
-
 The end of the exit queue needs no bound: a finite exit epoch is below the far future epoch. -/
 theorem upgradeToElectra_exists_ok {pre : BeaconState preset .dencun}
+    -- The registry must have one balance for each validator.
+    --
+    -- The effective balances must sum below `2^64`, for the churns.
     (matched : BalancesMatch pre) (summed : effectiveBalanceSum pre < 2 ^ 64)
+    -- The first epoch at which an exit can start, plus one, must be below `2^64`.
     (activationRoom : (getCurrentEpoch pre).toNat + 1 + preset.MAX_SEED_LOOKAHEAD.toNat + 1 <
       2 ^ 64)
+    -- Each validator queues at most two pending deposits.
+    --
+    -- So twice the registry must fit in that queue.
+    --
+    -- That bound is not tight, since a validator queued before activation has no excess left.
     (queueRoom : 2 * pre.validators.data.size ≤ preset.PENDING_DEPOSITS_LIMIT.toNat) :
     ∃ post, upgradeToElectra config pre = .ok post := by
+  -- The upgrade to Electra starts the churns of exits and consolidations.
+  --
+  -- It also starts the queue of deposits.
   have small : pre.validators.data.size < 2 ^ 64 :=
     Nat.lt_of_le_of_lt (pre.validators.bound (by decide)) (UInt64.toNat_lt _)
   have epochOne : (getCurrentEpoch pre).toNat + (1 : UInt64).toNat < 2 ^ 64 := by

@@ -130,13 +130,13 @@ Those proofs are in `Core.lean`, `Cells.lean` and `Recovery.lean`.
 Field elements travel as 32-byte big-endian integers, so decoding must not merge two inputs.
 Those proofs are in `Polynomials.lean`.
 
-Big-endian decoding is injective on byte strings of one length (`Base.bytesToNat_inj`).
+Big-endian decoding is injective on byte strings of one length (`Base.ByteOrder.ofBE_inj`).
 The length matters: without it decoding is not injective, since `00` and `00 00` both decode to 0.
 
 In the other direction, take the `len`-byte encoding of `n`.
-Its decoding is `n` when `n < 256^len` (`Base.bytesToNat_natToBytes_of_lt`).
-Otherwise it is `n mod 256^len` (`Base.bytesToNat_natToBytes`).
-Encoding a decoded string at its own length returns that string (`Base.natToBytes_bytesToNat`).
+Its decoding is `n` when `n < 256^len` (`Base.ByteOrder.ofBE_toBE_of_lt`).
+Otherwise it is `n mod 256^len` (`Base.ByteOrder.ofBE_toBE`).
+Encoding a decoded string at its own length returns that string (`Base.ByteOrder.toList_toBE_ofBE`).
 
 **Bit reversal.**
 A blob stores its values in bit-reversed order of the roots of unity.
@@ -248,7 +248,9 @@ The KZG proofs use the proved pairing law of BLS12-381 (`pairingLaws`, `Proofs/B
   if the setup decodes.
   The kernel checks each of the 4096 points from its `x` coordinate.
   No theorem says that the setup decodes, or that its points are powers of one secret.
-  No theorem says that its Lagrange points or its points of `G2` lie in the subgroup.
+  `TrustedSetup.ofHex_lagrangeTorsion` proves that each Lagrange point of `G1` has an order that divides `r`,
+  if the setup decodes.
+  No theorem says that its points of `G2` lie in the subgroup.
   Each KZG vector of the Python suite runs an operation that first decodes the setup.
   The Python suite also checks that each point decodes and lies in the subgroup,
   in `bindings/python/tests/kzg/test_trusted_setup.py`.

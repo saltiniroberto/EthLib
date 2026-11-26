@@ -41,7 +41,7 @@ structure LayoutOutcome where
 /-- Queries the input of a root's last hash again, if the run found one. -/
 def queryLastInput : Except Err (Option Bytes) → OracleComp HashOracle Unit
   | .ok (some input) => do
-    let _ ← queryHash (ByteArray.mk input)
+    let _ ← queryHash input
     return ()
   | _ => pure ()
 
@@ -93,9 +93,9 @@ theorem cached_of_extractLayouts {cache : HashOracle.QueryCache} {f : QueryImpl 
     (hf : cache.AgreesWithFn f) {first second : Desc × Value} {outcome : LayoutOutcome}
     (hrun : simulateQ cache.toPartialImpl (extractLayouts (first, second)) = some outcome) :
     (∀ input, mixinMessage first.1 first.2 (tableHash f) = some input →
-      cache (ByteArray.mk input) = some (f (ByteArray.mk input))) ∧
+      cache input = some (f input)) ∧
     ∀ input, mixinMessage second.1 second.2 (tableHash f) = some input →
-      cache (ByteArray.mk input) = some (f (ByteArray.mk input)) := by
+      cache input = some (f input) := by
   simp only [extractLayouts, simulateQ_bind] at hrun
   obtain ⟨_, -, hrun⟩ := Option.bind_eq_some_iff.mp hrun
   obtain ⟨_, -, hrun⟩ := Option.bind_eq_some_iff.mp hrun
@@ -113,7 +113,7 @@ theorem cached_of_extractLayouts {cache : HashOracle.QueryCache} {f : QueryImpl 
       (match result with
         | .ok message => message
         | .error _ => none) = some input →
-      cache (ByteArray.mk input) = some (f (ByteArray.mk input)) := by
+      cache input = some (f input) := by
     intro input result hquery hfound
     rcases result with _ | (_ | message)
     · cases hfound
@@ -162,13 +162,12 @@ theorem collision_of_extractLayouts {cache : HashOracle.QueryCache}
 
 `Q` bounds the oracle calls of the whole experiment, repeats included.
 
-The extraction computes each root twice, once whole and once up to its last hash.
-
-It then queries the input of each last hash once more.
-
 The oracle cache starts empty, and the adversary's private sampling is not counted. -/
 theorem prEvent_layoutWins_le [SampleableType Hash32]
     (adversary : OracleComp (unifSpec + HashOracle) ((Desc × Value) × (Desc × Value))) {Q : Nat}
+    -- The extraction computes each root twice, once whole and once up to its last hash.
+    --
+    -- It then queries the input of each last hash once more.
     (hQ : IsQueryBoundP (experimentWith extractLayouts adversary) (fun t => t.isRight = true) Q) :
     Pr{let z ← (simulateQ HashOracle.romImpl
       (experimentWith extractLayouts adversary)).run ∅}[LayoutWins z.1] ≤

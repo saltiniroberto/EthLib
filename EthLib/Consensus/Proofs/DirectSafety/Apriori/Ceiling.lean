@@ -28,18 +28,6 @@ From a start `v` from Electra, the effective stake active at each state of a bra
 It is the ceiling of the epoch of the state.
 
 The ceiling grows each epoch by twice the issuance envelope and one epoch of deposit churn.
-
-The proof runs over the prefixes of the branch, one epoch at a time.
-
-At the start of epoch `t`, the keys active at `t - 1` and at `t` weigh at most the ceiling of `t`.
-
-Then the blocks and the rewards pass of `t` issue at most twice the envelope of that ceiling.
-
-So the funding at the start of `t + 1` is at most the ceiling of `t + 1`.
-
-The other credits, the floor of the active stake and a few facts of the preset are hypotheses.
-
-The floor is read only at earlier epochs, so a strong induction can supply it.
 -/
 
 /-- The funding credit of an event, unless it is a reward or a sync credit. -/
@@ -329,16 +317,9 @@ private theorem replayRewards_unscaled_credits_zero
 
 /-- The issuance of one epoch from Electra is at most twice the issuance envelope of the ceiling.
 
-It is the proposer and sync credits of the blocks of the epoch, and the rewards of its pass.
-
-The epoch runs from `r` to `s`, and the slot from `s` to `w` ends it.
-
-The keys active at the previous and the current epoch of `r` weigh at most the ceiling.
-
-Twice the ceiling is at most three times the total active balance.
-
-The slot moves the epoch on by one. -/
+It is the proposer and sync credits of the blocks of the epoch, and the rewards of its pass. -/
 private theorem epoch_issuance_actual {r s w : ForkedBeaconState preset}
+    -- The epoch runs from `r` to `s`, and the slot from `s` to `w` ends it.
     (inner : Run config checks r s) (same : getCurrentEpoch s.state = getCurrentEpoch r.state)
     (electra : .pectra ≤ r.fork) (boundary : advanceSlotAcross config checks s = .ok w)
     (early : w.fork < .glamsterdam)
@@ -349,15 +330,18 @@ private theorem epoch_issuance_actual {r s w : ForkedBeaconState preset}
     (aligned : EffectiveBalancesAligned r.state)
     (inc : 0 < preset.EFFECTIVE_BALANCE_INCREMENT.toNat)
     {ceiling : Nat} (unit : preset.EFFECTIVE_BALANCE_INCREMENT.toNat ≤ ceiling)
+    -- The keys active at the previous and the current epoch of `r` weigh at most the ceiling.
     (previousLe : ∑ i ∈ (getActiveValidatorIndices r.state (getPreviousEpoch r.state)).toFinset,
       effectiveAt r i.toNat ≤ ceiling)
     (currentLe : ∑ i ∈ (getActiveValidatorIndices r.state (getCurrentEpoch r.state)).toFinset,
       effectiveAt r i.toNat ≤ ceiling)
+    -- Twice the ceiling is at most three times the total active balance.
     (ratio : ∀ total, getTotalActiveBalance r.state = .ok total →
       2 * ceiling ≤ 3 * total.toNat) :
     sourceCredits .rewards inside + sourceCredits .sync inside +
         (sourceCredits .rewards after + sourceCredits .sync after) ≤
       2 * preset.epochIssuanceBeforeAltair ceiling ∧
+      -- The slot moves the epoch on by one.
       (getCurrentEpoch w.state).toNat = (getCurrentEpoch s.state).toNat + 1 := by
   have sEarly : s.fork < .glamsterdam :=
     Nat.lt_of_le_of_lt (Step.slot boundary).chainStep.fork_le early
@@ -392,9 +376,9 @@ private theorem epoch_issuance_actual {r s w : ForkedBeaconState preset}
   obtain ⟨just, pass, ⟨rewardState, rewardEvents⟩, justified, scored, rewarded, rewardsSame,
     syncNone⟩ := epochReplay_rewards altair (epochBalanceReplay_trace epochReplay)
   -- The pass reads the total of `r`, and its participants weigh at most the ceiling.
-  obtain ⟨activeKept, effectiveKept, passEpoch⟩ := pass_kept inner electra sEarly same cachedOk
+  obtain ⟨activeKept, effectiveKept, passEpoch⟩ := pass_kept inner electra same cachedOk
     justified scored
-  have totalSame := total_active_congr rEarly sEarly
+  have totalSame := total_active_congr
     (activeKept.mono (getCurrentEpoch_le_activityFixedEpoch _)) passEpoch effectiveKept
   have cases : (∃ total perIncrement, getTotalActiveBalance r.state = .ok total ∧
       getBaseRewardPerIncrement preset total = .ok perIncrement) ∨
@@ -489,15 +473,7 @@ theorem ceiling_ge (ceiling : Nat → Nat) {start allowance : Nat}
 
 /-- The active-stake ceiling over the prefixes of a branch from `v`, one epoch at a time.
 
-Each prefix ends inside an epoch that started at a state `r`.
-
-The run to `r` issues at most twice the envelope of each earlier ceiling.
-
-At `r` the keys active at the previous and at the current epoch weigh at most its ceiling.
-
-The ratio of the ceiling to the total active balance is read only before the epoch of `y`.
-
-At `y` the keys active at the current and at the previous epoch weigh at most that ceiling. -/
+Each prefix ends inside an epoch that started at a state `r`. -/
 private theorem apriori_prefix_witness {g v y : ForkedBeaconState preset}
     (shared : Run config checks g v) (genesis : Genesis (config := config) (checks := checks) g)
     (tail : Run config checks v y) (electra : .pectra ≤ v.fork) (early : y.fork < .glamsterdam)
@@ -514,6 +490,7 @@ private theorem apriori_prefix_witness {g v y : ForkedBeaconState preset}
     (others : ∀ {u : ForkedBeaconState preset} (head : Run config checks v u),
       u.fork < .glamsterdam → (getCurrentEpoch u.state).toNat ≤ high + 1 → ∀ found,
         head.balanceEvents high = .ok found → (found.map otherCredit).sum ≤ allowance)
+    -- The ratio of the ceiling to the total active balance is read only before the epoch of `y`.
     (ratio : ∀ {u : ForkedBeaconState preset}, Run config checks v u → u.fork < .glamsterdam →
       (getCurrentEpoch u.state).toNat < (getCurrentEpoch y.state).toNat → ∀ total,
         getTotalActiveBalance u.state = .ok total →
@@ -523,16 +500,26 @@ private theorem apriori_prefix_witness {g v y : ForkedBeaconState preset}
       (inner : Run config checks r y) (before during : List (BalanceEvent preset)),
       tail = pre.append inner ∧
       pre.balanceEvents high = .ok before ∧ inner.balanceEvents high = .ok during ∧
+      -- `y` lies in the epoch that started at `r`, so the bounds at `r` below hold for its epoch.
       getCurrentEpoch y.state = getCurrentEpoch r.state ∧
+      -- At `r` the keys active at the previous and at the current epoch weigh at most its ceiling.
       (∑ i ∈ (getActiveValidatorIndices r.state (getCurrentEpoch r.state)).toFinset,
         effectiveAt r i.toNat) ≤
         ceiling ((getCurrentEpoch r.state).toNat - (getCurrentEpoch v.state).toNat) ∧
       (∑ i ∈ (getActiveValidatorIndices r.state (getPreviousEpoch r.state)).toFinset,
         effectiveAt r i.toNat) ≤
         ceiling ((getCurrentEpoch r.state).toNat - (getCurrentEpoch v.state).toNat) ∧
+      -- The run to `r` issues at most twice the envelope of each earlier ceiling.
       sourceCredits .rewards before + sourceCredits .sync before ≤
         ∑ s ∈ Finset.range ((getCurrentEpoch r.state).toNat - (getCurrentEpoch v.state).toNat),
           2 * preset.epochIssuanceBeforeAltair (ceiling s) := by
+  -- The proof runs over the prefixes of the branch, one epoch at a time.
+  --
+  -- At the start of epoch `t`, the keys active at `t - 1` and `t` weigh at most the ceiling of `t`.
+  --
+  -- Then the blocks and the rewards pass of `t` issue at most twice the envelope of that ceiling.
+  --
+  -- So the funding at the start of `t + 1` is at most the ceiling of `t + 1`.
   have mono : Monotone ceiling := monotone_nat_of_le_succ fun t =>
     (Nat.le_add_right _ _).trans ((Nat.le_add_right _ _).trans (grows t))
   have total := ceiling_ge (config := config) ceiling base grows
@@ -664,7 +651,7 @@ theorem activeStake_eq_of_same_epoch {r y : ForkedBeaconState preset}
     ∑ i ∈ (getActiveValidatorIndices y.state epoch).toFinset, effectiveAt y i.toNat =
       ∑ i ∈ (getActiveValidatorIndices r.state epoch).toFinset, effectiveAt r i.toNat := by
   have rEarly := Nat.lt_of_le_of_lt (fork_le_of_chainSteps inner.chainSteps) early
-  have weights := run_same_epoch_effective inner early same
+  have weights := run_same_epoch_effective inner same
   rw [(activeKept_of_chainSteps inner.chainSteps).getActiveValidatorIndices_eq
     (UInt64.le_trans low (getCurrentEpoch_le_activityFixedEpoch _))]
   refine Finset.sum_congr rfl fun i member => weights i.toNat ?_
@@ -703,27 +690,24 @@ theorem ceilingAt_mono {x : ForkedBeaconState preset} (electra : .pectra ≤ x.f
 
 `T_plus` is read at the epoch of the state, and the stake is the effective stake of the active keys.
 
-The keys active at the previous epoch of the state weigh at most the same `T_plus`.
-
-Two hypotheses remain: a floor and the whistleblower allowance.
-
-The floor `T_minus` bounds the total active balance of each state of an earlier epoch from below.
-
-The credits other than rewards and sync credits fit the whistleblower allowance `Omega`.
-
-Four facts of the preset and the ceiling are hypotheses too. -/
+Two hypotheses remain: a floor and the whistleblower allowance. -/
 theorem activeStake_prefix_witness {g x y : ForkedBeaconState preset}
     (shared : Run config checks g x) (genesis : Genesis (config := config) (checks := checks) g)
     (tail : Run config checks x y) (electra : .pectra ≤ x.fork) (early : y.fork < .glamsterdam)
     (high : Nat) (endEpoch : (getCurrentEpoch y.state).toNat ≤ high + 1)
+    -- Four facts of the preset and the ceiling are hypotheses.
     (guard : aprioriGuardAt config x high) (maxAligned : MaxEffectiveBalancesAligned preset)
     (unit : preset.EFFECTIVE_BALANCE_INCREMENT.toNat ≤ stakeCeilingAt config x high 0)
+    -- The credits other than rewards and sync credits fit the whistleblower allowance `Omega`.
     (others : ∀ {u : ForkedBeaconState preset} (head : Run config checks x u),
       u.fork < .glamsterdam → (getCurrentEpoch u.state).toNat ≤ high + 1 → ∀ found,
         head.balanceEvents high = .ok found → (found.map otherCredit).sum ≤
           whistleblowerAllowance preset config (referenceCount x) (scheduledActivationCount x)
             (unassignedPreStake x) (fundingCarry x) (exitedSlashableCount x)
             (driftHorizon x high) (preElectraEpochs config x high))
+    -- The floor `T_minus` is a lower bound on the total active balance at each earlier epoch.
+    --
+    -- The floor is read only at earlier epochs, so a strong induction can supply it.
     (floor : ∀ {u : ForkedBeaconState preset}, Run config checks x u → u.fork < .glamsterdam →
       (getCurrentEpoch u.state).toNat < (getCurrentEpoch y.state).toNat → ∀ total,
         getTotalActiveBalance u.state = .ok total →
@@ -737,6 +721,7 @@ theorem activeStake_prefix_witness {g x y : ForkedBeaconState preset}
       (∑ i ∈ (getActiveValidatorIndices r.state (getCurrentEpoch r.state)).toFinset,
         effectiveAt r i.toNat) ≤ stakeCeilingAt config x high
           ((getCurrentEpoch r.state).toNat - (getCurrentEpoch x.state).toNat) ∧
+      -- The keys active at the previous epoch of the state weigh at most the same `T_plus`.
       (∑ i ∈ (getActiveValidatorIndices r.state (getPreviousEpoch r.state)).toFinset,
         effectiveAt r i.toNat) ≤ stakeCeilingAt config x high
           ((getCurrentEpoch r.state).toNat - (getCurrentEpoch x.state).toNat) ∧
@@ -863,8 +848,7 @@ private theorem unassigned_assignment_budget {g x u : ForkedBeaconState preset}
       unassignedPreStake x + fundingCarry x +
         config.MAX_PER_EPOCH_ACTIVATION_EXIT_CHURN_LIMIT.toNat *
           ((getCurrentEpoch u.state).toNat - (getCurrentEpoch x.state).toNat + 1) := by
-  have bound := shared.unassigned_assignment_resources genesis head caps.activation
-    caps.compounding aligned electra early
+  have bound := shared.unassigned_assignment_resources genesis head caps aligned electra early
   dsimp only at bound
   change _ ≤ _ at bound
   have initial := unassigned_resources_eq_pre shared genesis finite
@@ -930,16 +914,16 @@ private theorem newly_slashed_initial_classification {g x y : ForkedBeaconState 
         decide (getCurrentEpoch x.state < v.exitEpoch)) = true ∨
     ∃ v, x.state.validators.data[i]? = some v ∧ v.slashed = false ∧
       v.exitEpoch ≤ getCurrentEpoch x.state ∧ getCurrentEpoch x.state < v.withdrawableEpoch := by
-  have assigned := (shared.append tail).slashed_activation_assigned genesis caps.activation
-    caps.compounding aligned early finite i w after slashed
+  have assigned := (shared.append tail).slashed_activation_assigned genesis caps aligned early
+      finite i w after slashed
   cases before : x.state.validators.data[i]? with
   | none => exact .inl (by simp [after, assigned])
   | some v =>
     have unslashed : v.slashed = false := by simpa [before] using initialFlag
     by_cases exited : v.exitEpoch ≤ getCurrentEpoch x.state
     · exact .inr ⟨v, rfl, unslashed, exited,
-        tail.newly_slashed_initial_exited_unwithdrawable caps.activation caps.compounding
-          early i v w before after unslashed slashed exited⟩
+        tail.newly_slashed_initial_exited_unwithdrawable caps
+          i v w before after unslashed slashed exited⟩
     · have live := UInt64.not_le.mp exited
       exact .inl (by simp [after, assigned, live])
 
@@ -1104,7 +1088,7 @@ theorem consolidationChurn_mono {low high : Nat} (le : low ≤ high) :
 
 The epoch prefix starts after slot processing, which keeps the validator registry. -/
 private theorem newly_slashed_epoch_prefix {x m : ForkedBeaconState preset}
-    (pre : Run config checks x m) (caps : CapOrder preset) (early : m.fork < .glamsterdam)
+    (pre : Run config checks x m) (caps : CapOrder preset)
     (delay : 0 < config.MIN_VALIDATOR_WITHDRAWABILITY_DELAY.toNat)
     {s t : BeaconState preset m.fork}
     (same : s.validators = m.state.validators)
@@ -1118,7 +1102,7 @@ private theorem newly_slashed_epoch_prefix {x m : ForkedBeaconState preset}
     w.slashed = true ∧ w.exitEpoch = u.exitEpoch ∧
       (getCurrentEpoch x.state).toNat + preset.EPOCHS_PER_SLASHINGS_VECTOR.toNat ≤
         w.withdrawableEpoch.toNat := by
-  have lower := pre.newly_slashed_withdrawableEpoch caps.activation caps.compounding early
+  have lower := pre.newly_slashed_withdrawableEpoch caps
     delay i v u initial middle unslashed slashed
   have located : s.validators.data[i]? = some u := by rwa [same]
   have kept := trace.slashed_withdrawableEpoch_mono i u w located site slashed lower.1
@@ -1197,9 +1181,9 @@ private theorem epoch_delayed_slashing_nondebit {x m n : ForkedBeaconState prese
     rfl
   have sameEpoch : getCurrentEpoch cached = getCurrentEpoch m.state := by
     simp only [getCurrentEpoch, (frame_processSlot cachedOk).slot]
-  obtain ⟨justified, scored, rewarded, registered, after, reset, deposited,
-    rewards, limit, _, justifiedOk, scoredOk, rewardedOk, registeredOk,
-    slashOk, _, _, _, rewardReplay, shape⟩ := funding_epoch_site processed epochReplay
+  obtain ⟨reset, deposited, ⟨⟨justified, scored, rewarded, registered, after, justifiedOk,
+    scoredOk, rewardedOk, registeredOk, slashOk, _⟩, rewards, limit, rewardReplay, _⟩, _, _,
+    shape⟩ := funding_epoch_site processed epochReplay
   have quiet := replayRewards_induction
     (fun pre => ∀ e ∈ pre.2, e.source ≠ .slashings)
     (fun held ok => by
@@ -1271,15 +1255,13 @@ private theorem epoch_delayed_slashing_nondebit {x m n : ForkedBeaconState prese
   cases slashed : u.slashed with
   | true =>
     rcases start with ⟨unslashed, short⟩ | ⟨vslashed, wait⟩
-    · have kept := newly_slashed_epoch_prefix pre caps
-        (Nat.lt_of_le_of_lt step.chainStep.fork_le early) delay same fixed
+    · have kept := newly_slashed_epoch_prefix pre caps delay same fixed
         i.toNat v u w initial located found unslashed slashed
       exact sites.2.2.2.2.2.1 rfl i w found kept.1
         (newly_slashed_epoch_not_due (getCurrentEpoch x.state)
           (getCurrentEpoch registered) w kept.2.2 (by rwa [epoch]))
     · -- A key slashed at the start keeps its slash and its withdrawable epoch.
-      obtain ⟨flag, -, lower⟩ := Run.slashed_withdrawableEpoch_mono_epoch pre caps.activation
-        caps.compounding (Nat.lt_of_le_of_lt step.chainStep.fork_le early) cachedOk fixed
+      obtain ⟨flag, -, lower⟩ := Run.slashed_withdrawableEpoch_mono_epoch pre caps cachedOk fixed
         i.toNat v w initial found vslashed (assigned vslashed)
       refine sites.2.2.2.2.2.1 rfl i w found flag ?_
       intro due
@@ -2143,18 +2125,18 @@ private theorem FloorTrace.slot_transport {g x y : ForkedBeaconState preset}
   obtain ⟨u, found, life⟩ := (registryLifecycle_advanceSlot advanceOk).validators i v initial
   have kept : effectiveAt y i = effectiveAt ⟨x.fork, advanced⟩ i := by
     rcases activated with activated | fulu
-    · exact balanceDrift_upgrades_active upgrades early i u found
+    · exact balanceDrift_upgrades_active upgrades i u found
         (by rwa [life.activationEpoch activated])
     · rw [processUpgrades_eq_of_window upgrades fulu early]
   obtain ⟨last, done, balance, debt, slashed, raised⟩ := trace.slot_update advanceOk i
     (Array.getElem?_eq_some_iff.mp initial).1 balance high
   have tail : Run config checks x y := Run.nil.snoc (.slot ok)
-  obtain ⟨z, located, mono⟩ := tail.validatorCap_mono caps.activation caps.compounding
-    early i v initial
+  obtain ⟨z, located, mono⟩ := tail.validatorCap_mono caps
+    i v initial
   have equal := Option.some.inj (located.symm.trans final)
   subst z
-  have endpoint := (shared.append tail).effectiveBalance_capped genesis caps.activation
-    caps.compounding early w (Array.mem_of_getElem? final)
+  have endpoint := (shared.append tail).effectiveBalance_capped genesis caps w
+      (Array.mem_of_getElem? final)
   have old := capped.trans (UInt64.le_iff_toNat_le.mp mono)
   have current : effectiveAt y i ≤ (withdrawalMaxEffectiveBalance preset y.fork w).toNat := by
     simpa [effectiveAt, final] using UInt64.le_iff_toNat_le.mp endpoint
@@ -2324,8 +2306,8 @@ theorem FloorTrace.step_general_or_fulu {g x m y : ForkedBeaconState preset}
         (retained.imp_right (fun r => ⟨r, delay⟩)) balance budget capped effective
         positive quotient_le
     have tail : Run config checks ⟨fork, s⟩ ⟨fork, t⟩ := .snoc .nil (.block engine signed due ok)
-    obtain ⟨z, located, mono⟩ := tail.validatorCap_mono caps.activation caps.compounding
-      early i.toNat u middle
+    obtain ⟨z, located, mono⟩ := tail.validatorCap_mono caps
+      i.toNat u middle
     have same := Option.some.inj (located.symm.trans final)
     subst z
     refine ⟨last, done, balance', debt, ?_, ?_, by omega, ?_, ?_, marks, ?_⟩
@@ -2365,15 +2347,7 @@ theorem FloorTrace.step_general_or_fulu {g x m y : ForkedBeaconState preset}
     · exact ⟨before, folded, atBefore, by omega, by rw [sameFlag]⟩
     · exact ⟨last, done, balance', le_rfl, le_rfl⟩
 
-/-- Concrete Steps preserve the carried account and cover each balance-path point.
-
-The key is unslashed at the start of the run and within the short window of a slash.
-
-Or it is slashed at the start with an assigned exit.
-
-Then its delayed penalty is not due in the epoch of the step.
-
-The high-water mark of the carried account rises at most to the effective balance after the step. -/
+/-- Concrete Steps preserve the carried account and cover each balance-path point. -/
 private theorem FloorTrace.step_general {g x m y : ForkedBeaconState preset}
     (shared : Run config checks g x) (pre : Run config checks x m)
     (genesis : Genesis (config := config) (checks := checks) g) (caps : CapOrder preset)
@@ -2384,8 +2358,12 @@ private theorem FloorTrace.step_general {g x m y : ForkedBeaconState preset}
     (initial : x.state.validators.data[i.toNat]? = some v)
     (middle : m.state.validators.data[i.toNat]? = some u)
     (final : y.state.validators.data[i.toNat]? = some w)
+    -- A key slashed at the start has an assigned exit.
     (assigned : v.slashed = true → v.exitEpoch ≠ FAR_FUTURE_EPOCH)
     (activated : u.activationEpoch ≠ FAR_FUTURE_EPOCH)
+    -- The key is unslashed at the start of the run and within the short window of a slash.
+    --
+    -- Or it is slashed at the start, and its delayed penalty is not due in the epoch of the step.
     (window : (v.slashed = false ∧
       (getCurrentEpoch m.state).toNat < (getCurrentEpoch x.state).toNat +
       preset.EPOCHS_PER_SLASHINGS_VECTOR.toNat -
@@ -2412,6 +2390,7 @@ private theorem FloorTrace.step_general {g x m y : ForkedBeaconState preset}
       (∀ p ∈ step.balancePath, ∃ c, FloorTrace low base quotient a c ∧
         c.balance = actualBalanceAt p i.toNat ∧ c.debt ≤ last.debt ∧
         (if c.slashedHigh.isSome then 1 else 0) ≤ (if last.slashedHigh.isSome then 1 else 0)) ∧
+      -- The carried high-water mark rises at most to the effective balance after the step.
       last.high ≤ max b.high (effectiveAt y i.toNat) ∧
       (∀ h, last.slashedHigh = some h → b.slashedHigh = some h ∨ h = b.high) ∧
       (u.slashed = true → b.slashedHigh = none → last.slashedHigh = none) :=

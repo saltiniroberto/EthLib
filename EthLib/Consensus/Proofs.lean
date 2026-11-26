@@ -1,6 +1,7 @@
 module
 
 public import EthLib.Consensus.Proofs.Accessors
+public import EthLib.Consensus.Proofs.Types
 public import EthLib.Consensus.Proofs.Accessors.Draw
 public import EthLib.Consensus.Proofs.Accessors.DrawBounds
 public import EthLib.Consensus.Proofs.Accessors.DrawProbability
@@ -10,8 +11,10 @@ public import EthLib.Consensus.Proofs.BeaconApi.Blocks
 public import EthLib.Consensus.Proofs.BeaconApi.Committees
 public import EthLib.Consensus.Proofs.BeaconApi.ChainEvents
 public import EthLib.Consensus.Proofs.BeaconApi.Duties
+public import EthLib.Consensus.Proofs.BeaconApi.DutiesReachable
 public import EthLib.Consensus.Proofs.BeaconApi.Config
 public import EthLib.Consensus.Proofs.BeaconApi.Debug
+public import EthLib.Consensus.Proofs.BeaconApi.DebugReachable
 public import EthLib.Consensus.Proofs.BeaconApi.BuilderConfig
 public import EthLib.Consensus.Proofs.BeaconApi.Encoding
 public import EthLib.Consensus.Proofs.BeaconApi.Events
@@ -26,10 +29,14 @@ public import EthLib.Consensus.Proofs.BeaconApi.RandaoKept
 public import EthLib.Consensus.Proofs.BeaconApi.Registries
 public import EthLib.Consensus.Proofs.BeaconApi.Responses
 public import EthLib.Consensus.Proofs.BeaconApi.Rewards
+public import EthLib.Consensus.Proofs.BeaconApi.StateForkReachable
 public import EthLib.Consensus.Proofs.BeaconApi.StateQueries
 public import EthLib.Consensus.Proofs.BeaconApi.Submit
+public import EthLib.Consensus.Proofs.BeaconApi.SyncCommitteesReachable
 public import EthLib.Consensus.Proofs.BeaconApi.Validators
 public import EthLib.Consensus.Proofs.BeaconApi.ValidatorData
+public import EthLib.Consensus.Proofs.BeaconApi.ValidatorDataReachable
+public import EthLib.Consensus.Proofs.BeaconApi.ValidatorsReachable
 public import EthLib.Consensus.Proofs.BuilderApi
 public import EthLib.Consensus.Proofs.BuilderApi.AuthData
 public import EthLib.Consensus.Proofs.BuilderApi.Bid
@@ -56,6 +63,7 @@ public import EthLib.Consensus.Proofs.DirectSafety.Includable
 public import EthLib.Consensus.Proofs.DirectSafety.IntervalBounds
 public import EthLib.Consensus.Proofs.DirectSafety.IntervalFunding
 public import EthLib.Consensus.Proofs.DirectSafety.Safety
+public import EthLib.Consensus.Proofs.DirectSafety.SignedForgery
 public import EthLib.Consensus.Proofs.DirectSafety.Signatures
 public import EthLib.Consensus.Proofs.DirectSafety.SourceSafety
 public import EthLib.Consensus.Proofs.KeymanagerApi.BuilderConfig
@@ -64,6 +72,7 @@ public import EthLib.Consensus.Proofs.KeymanagerApi.Keyed
 public import EthLib.Consensus.Proofs.KeymanagerApi.LocalKeys
 public import EthLib.Consensus.Proofs.KeymanagerApi.Move
 public import EthLib.Consensus.Proofs.KeymanagerApi.RemoteKeys
+public import EthLib.Consensus.Proofs.KeymanagerApi.Run
 public import EthLib.Consensus.Proofs.KeymanagerApi.Settings
 public import EthLib.Consensus.Proofs.KeymanagerApi.Types
 public import EthLib.Consensus.Proofs.KeymanagerApi.VoluntaryExit
@@ -121,6 +130,8 @@ public import EthLib.Consensus.Proofs.ForkChoice.HeadTotality
 public import EthLib.Consensus.Proofs.ForkChoice.HonestConfirmations
 public import EthLib.Consensus.Proofs.ForkChoice.HonestDuties
 public import EthLib.Consensus.Proofs.ForkChoice.HonestEquivocators
+public import EthLib.Consensus.Proofs.ForkChoice.HonestProposal
+public import EthLib.Consensus.Proofs.ForkChoice.HonestProposalHead
 public import EthLib.Consensus.Proofs.ForkChoice.JustifiedVotes
 public import EthLib.Consensus.Proofs.ForkChoice.Network
 public import EthLib.Consensus.Proofs.ForkChoice.Optimistic
@@ -128,6 +139,7 @@ public import EthLib.Consensus.Proofs.ForkChoice.OptimisticSync
 public import EthLib.Consensus.Proofs.ForkChoice.PayloadGhost
 public import EthLib.Consensus.Proofs.ForkChoice.PayloadReveal
 public import EthLib.Consensus.Proofs.ForkChoice.PayloadVotes
+public import EthLib.Consensus.Proofs.ForkChoice.ProposerBoost
 public import EthLib.Consensus.Proofs.ForkChoice.ProposerHead
 public import EthLib.Consensus.Proofs.ForkChoice.Reachable
 public import EthLib.Consensus.Proofs.ForkChoice.RealizedJustification
@@ -197,11 +209,13 @@ public import EthLib.Consensus.Proofs.Models.ForkChoice.HonestSupport
 public import EthLib.Consensus.Proofs.Models.ForkChoice.LmdGhost
 public import EthLib.Consensus.Proofs.Models.ForkChoice.PayloadTree
 public import EthLib.Consensus.Proofs.ReqResp.Bounds
+public import EthLib.Consensus.Proofs.ReqResp.Chunk
 public import EthLib.Consensus.Proofs.ReqResp.Messages
 public import EthLib.Consensus.Proofs.ReqResp.ResponseBounds
 public import EthLib.Consensus.Proofs.ReqResp.Validity
 public import EthLib.Consensus.Proofs.Shuffle
 public import EthLib.Consensus.Proofs.SlashingProtection
+public import EthLib.Consensus.Proofs.SlashingProtectionCollision
 public import EthLib.Consensus.Proofs.ShufflePermutation
 public import EthLib.Consensus.Proofs.SignatureChecks
 public import EthLib.Consensus.Proofs.Signing
@@ -212,6 +226,7 @@ public import EthLib.Consensus.Proofs.Time
 public import EthLib.Consensus.Proofs.Transition.ActivationExitOrder
 public import EthLib.Consensus.Proofs.Transition.ActivationReserve
 public import EthLib.Consensus.Proofs.Transition.ActiveKept
+public import EthLib.Consensus.Proofs.Transition.AssignedProposers
 public import EthLib.Consensus.Proofs.Transition.AttestationAccepted
 public import EthLib.Consensus.Proofs.Transition.AttesterSlashingAccepted
 public import EthLib.Consensus.Proofs.Transition.BalanceCappedBlock
@@ -305,6 +320,7 @@ public import EthLib.Consensus.Proofs.Transition.RetiredValidator
 public import EthLib.Consensus.Proofs.Transition.RewardDeltas
 public import EthLib.Consensus.Proofs.Transition.RootLinks
 public import EthLib.Consensus.Proofs.Transition.RunKept
+public import EthLib.Consensus.Proofs.Transition.Schedule
 public import EthLib.Consensus.Proofs.Transition.SlashedExit
 public import EthLib.Consensus.Proofs.Transition.SlashedFlags
 public import EthLib.Consensus.Proofs.Transition.SlashedPersistence

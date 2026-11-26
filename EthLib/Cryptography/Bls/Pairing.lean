@@ -33,29 +33,44 @@ variable {F : Type} [BaseField F]
 The loop keeps the point `T` on the twist, in Jacobian coordinates over `Fp2`.
 
 So it divides nothing.
-
-The untwist sends `(x, y)` to `(x w^(-2), y w^(-3))`.
-
-A line through untwisted points, at `P = (xp, yp)`, is `(yp - y w^(-3)) - λ w^(-1) (xp - x w^(-2))`.
-
-Here `λ` is the slope on the twist.
-
-The loop multiplies each line by `w^3` and by a denominator in `Fp2`.
-
-The line becomes `(λ x - y) - λ xp w^2 + yp w^3`, with three coefficients in `Fp2`.
-
-The factor is `c w^3`, with `c` in `Fp2`.
-
-The final exponentiation sends it to 1 when `c` is not zero.
 -/
 
+-- The untwist sends `(x, y)` to `(x w^(-2), y w^(-3))`.
+--
+-- A line through untwisted points, at `P = (xp, yp)`, is this:
+--
+-- `(yp - y w^(-3)) - λ w^(-1) (xp - x w^(-2))`.
+--
+-- Here `λ` is the slope on the twist.
+--
+-- The loop multiplies each line by `w^3` and by a denominator in `Fp2`.
+--
+-- The line becomes `(λ x - y) - λ xp w^2 + yp w^3`, with three coefficients in `Fp2`.
+--
+-- The factor is `c w^3`, with `c` in `Fp2`.
+--
+-- The final exponentiation sends it to 1 when `c` is not zero.
 /-- The element `c0 + c2 w^2 + c3 w^3` of `Fp12`. -/
 def lineValue (c0 c2 c3 : Fp2 F) : Fp12 F :=
   ⟨⟨c0, c2, Fp2.zero⟩, ⟨Fp2.zero, c3, Fp2.zero⟩⟩
 
+/-- The product of `f` with the line value of `c0`, `c2` and `c3`.
+
+The line has three nonzero coefficients of six, so the product takes 13 products in `Fp2`.
+
+The full product takes 18. -/
+def Fp12.mulLine (f : Fp12 F) (c0 c2 c3 : Fp2 F) : Fp12 F :=
+  -- The line is `l0 + l1 w`, with `l0 = c0 + c2 v` and `l1 = c3 v`.
+  let t0 := f.c0.mulBy01 c0 c2
+  let t1 := f.c1.mulBy1 c3
+  -- The product of `Fp12`: `f0 l0 + v f1 l1`, and `(f0 + f1)(l0 + l1) - f0 l0 - f1 l1`.
+  ⟨t0 + t1.mulByV, (f.c0 + f.c1).mulBy01 c0 (c2 + c3) - t0 - t1⟩
+
 /-- Doubling step: `(T, f) ↦ (2T, f^2 l)`, with `l` the tangent at `T`, at `(xp, yp)`.
 
-The line is the draft's line times `c w^3`, as above, with `c = -2 Y Z^3` for `T = (X, Y, Z)`. -/
+The line is the draft's line times `c w^3`, as derived above the line value.
+
+Here `c = -2 Y Z^3` for `T = (X, Y, Z)`. -/
 def millerDouble (T : G2 F) (xp yp : F) (f : Fp12 F) : G2 F × Fp12 F :=
   let two := Fp2.ofFp (BaseField.ofNat 2)
   let three := Fp2.ofFp (BaseField.ofNat 3)
@@ -70,11 +85,13 @@ def millerDouble (T : G2 F) (xp yp : F) (f : Fp12 F) : G2 F × Fp12 F :=
   let c2 := -(three * xx * zz * Fp2.ofFp xp)
   let c3 := two * T.y * zz * T.z * Fp2.ofFp yp
   -- A.2: `f := f^2 * g` and `T := T + T`, with `g` the tangent line at `T`, evaluated at `P`.
-  (T.double, f * f * lineValue c0 c2 c3)
+  (T.double, f.square.mulLine c0 c2 c3)
 
 /-- Addition step: `(T, f) ↦ (T + Q, f l)`, with `l` the line through `T` and `Q = (xq, yq)`.
 
-The line is the draft's line times `c w^3`, as above, with `c = -D` for the `D` below.
+The line is the draft's line times `c w^3`, as derived above the line value.
+
+Here `c = -D` for the `D` below.
 
 The loop never adds `T = ±Q` on points of order `r`, so the draft's other cases never arise. -/
 def millerAdd (T : G2 F) (xq yq : Fp2 F) (xp yp : F) (f : Fp12 F) : G2 F × Fp12 F :=
@@ -91,7 +108,7 @@ def millerAdd (T : G2 F) (xq yq : Fp2 F) (xp yp : F) (f : Fp12 F) : G2 F × Fp12
   let c2 := -(n * Fp2.ofFp xp)
   let c3 := d * Fp2.ofFp yp
   -- A.2: `f := f * g` and `T := T + Q`, with `g` the line through `T` and `Q`, evaluated at `P`.
-  (G2.add T ⟨xq, yq, Fp2.one⟩, f * lineValue c0 c2 c3)
+  (G2.add T ⟨xq, yq, Fp2.one⟩, f.mulLine c0 c2 c3)
 
 /-- Walk bits `n - 1` down to `0` of `s` from `(T, f)`.
 

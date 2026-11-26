@@ -47,7 +47,7 @@ commit = "0ed12552077c9927ba2599ee632e76b2caf021d7"
 directories = ["tests/consensus/beacon_api"]
 
 [repositories."ethereum/builder-specs"]
-commit = "ea92eff73ad77c33d3b59a2033ffa02dfae5ee05"
+commit = "0911550c65b1e4a326fe7fbd7d0ca52ff0b6a4b7"
 directories = ["tests/consensus/builder_api"]
 
 [repositories."flashbots/relay-specs"]
@@ -55,7 +55,7 @@ commit = "a4e0a50d9d46bfe881fd74cc7e0db366371f4eed"
 directories = ["tests/consensus/relay_api"]
 
 [repositories."ethereum/keymanager-APIs"]
-commit = "3e7c64e2118f819a51de7093ea2b2f03bb2f8f6e"
+commit = "2d8a02843cbf91f7ebc6274bf68a89b908019130"
 directories = ["tests/consensus/keymanager_api"]
 
 [repositories."ethereum/remote-signing-api"]
@@ -89,7 +89,7 @@ commit = "7406111ac4ae539ea0db8b7ea2dc76730cd957f4"
 
 # The e2store, era1 and era formats, which the history file tests follow.
 [repositories."eth-clients/e2store-format-specs"]
-commit = "31cf6b577123bf1703eb3713f0b242f65fea806a"
+commit = "923b1522f8970e9ebe939057d2a573aaf71b7f22"
 
 [repositories."ethereum/devp2p"]
 commit = "277ceb399c15df86efb17d51eb58200c26879784"
@@ -104,7 +104,7 @@ commit = "e1fd7a77bb0ca87fb4726fb1fd4f424f30a04db9"
 directories = ["bindings/python/tests/secp256k1/tiny_secp256k1"]
 
 [repositories."ethereum/EIPs"]
-commit = "46976b2a9bf99f727fb87dc8c809e3a3cdc6b445"
+commit = "b055feec322fbc37e9d77a393a50b3ff56b31c92"
 directories = [
   "bindings/python/tests/consensus/deposit_tree",
   "bindings/python/tests/precompile/eips",
@@ -136,11 +136,11 @@ commit = "1f581b8ccdc4c63acf5f2c5c1b155c690c32a8eb"
 directories = ["tests/execution/legacytests"]
 
 [repositories."ethereum/ethereum-org-website"]
-commit = "0899bcb4dcb12040ccf46bea0053a422812bf913"
+commit = "3979915ac0eaa74eb0ae9c9eb6605868ae603bac"
 directories = ["bindings/python/tests/ethash/spec"]
 
 [repositories."ethereum/execution-apis"]
-commit = "3284ee80c3da3e516c53782dde75157cccf1ebdc"
+commit = "166e334c73d96ffce916ea84e97addbcd8b3727a"
 directories = ["bindings/python/tests/rpc/fixtures", "tests/engine"]
 
 [repositories."ethereum/yellowpaper"]
@@ -164,6 +164,7 @@ commit = "8cad4805e9cb5aa5e8e74d30e3f5029a7f133372"
 
 [repositories."eth-clients/sepolia"]
 commit = "7b1b9d9549787b6bbf538f943304c4cf84f7e39e"
+directories = ["tests/execution/sepolia"]
 
 [repositories."ethereum/ssz-specs"]
 commit = "7bce07ff7d51b1a3c66ff4e2bd3233ac248ede70"
@@ -187,7 +188,7 @@ commit = "dd184f1ce89c81808503bb719b5fcb13844d08f3"
 commit = "9a1fbe8edadebea223f47102f1913b8026c23a1c"
 
 [repositories."libp2p/specs"]
-commit = "4facaf9876da1eb7d6e066982010c81495ebb965"
+commit = "1a084b699d9d424ca7027edf350cf4184cd6f5bd"
 
 # The gossip RPC tests build their frames from the protobuf encoding guide at this commit.
 [repositories."protocolbuffers/protocolbuffers.github.io"]
@@ -293,6 +294,7 @@ sha256 = "f8e44a31ebf0a6d0734dcb301b0716e2c77f3ae18ed0cab0870fbcc2ca55616f"
 
 # The pinned vector directories whose cases come from no repository, with their source.
 [other]
+"tests/execution/sepolia" = "The Sepolia header with the TERMINAL_BLOCK_HASH of config.yaml, read from the chain"
 "tests/cryptography/keystore" = "Unicode Character Database 16.0.0, UnicodeData.txt and NormalizationTest.txt"
 "tests/cryptography/hash_to_curve" = "RFC 9380, Appendices J.10.1, K.1 and K.2"
 "tests/cryptography/keccak" = "KeccakKAT-3.zip of the Keccak team, and the digest of abc"

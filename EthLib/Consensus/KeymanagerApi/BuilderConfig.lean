@@ -17,8 +17,8 @@ The operator may leave out fields, and the [schema] says how each one resolves.
 
 A get gives the resolved configuration, so a set of that answer fixes every value.
 
-[the source]: https://github.com/ethereum/keymanager-APIs/blob/3e7c64e2118f819a51de7093ea2b2f03bb2f8f6e/apis/builder_config.yaml
-[schema]: https://github.com/ethereum/keymanager-APIs/blob/3e7c64e2118f819a51de7093ea2b2f03bb2f8f6e/types/builder_entry.yaml
+[the source]: https://github.com/ethereum/keymanager-APIs/blob/2d8a02843cbf91f7ebc6274bf68a89b908019130/apis/builder_config.yaml
+[schema]: https://github.com/ethereum/keymanager-APIs/blob/2d8a02843cbf91f7ebc6274bf68a89b908019130/types/builder_entry.yaml
 -/
 
 @[expose] public section
@@ -149,7 +149,7 @@ def readAuthData (path : String) (document : Json) : Except KeymanagerError Byte
   match Serialization.Ssz.ofHex text with
   | .ok bytes =>
     -- So 1 to 4096 bytes; a zero-length value is invalid.
-    if 1 ≤ bytes.size ∧ bytes.size ≤ MAX_BUILDER_AUTH_DATA_SIZE then .ok ⟨bytes⟩
+    if 1 ≤ bytes.size ∧ bytes.size ≤ MAX_BUILDER_AUTH_DATA_SIZE then .ok bytes
     else .error (.field path)
   | .error _ => .error (.field path)
 
@@ -214,7 +214,12 @@ def BuilderConfigSetting.refusal (config : BuilderConfigSetting) : Option String
   | .error _ => some "an entry has no authentication data and its URL gives none"
   | .ok pairs =>
     -- The source: no two entries share both their URL, as the exact string, and their data.
-    if pairs.Nodup then none else some "two entries share their URL and authentication data"
+    --
+    -- A pair has no order, so each one is scanned as the bytes of its URL, then its data.
+    --
+    -- The bytes give back the pair, so the scan finds the same repeats.
+    if (firstRepeated (pairs.map fun (url, data) => [url.toByteArray, data])).isNone then none
+    else some "two entries share their URL and authentication data"
 
 /-- The builder configuration of a client, from an object of the keymanager form.
 
@@ -234,7 +239,7 @@ def readClientBuilderConfig (document : Json) : Except KeymanagerError ClientBui
 
 /-- Authentication data as the API writes it, in lowercase hex. -/
 def authDataJson (data : ByteArray) : Json :=
-  .str (Serialization.Ssz.toHex data.data)
+  .str (Serialization.Ssz.toHex data)
 
 /-- The JSON of a resolved entry, with every field. -/
 def resolvedBuilderEntryJson (entry : ResolvedBuilderEntry) : Json :=

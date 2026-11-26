@@ -7,8 +7,6 @@ public import EthLib.Execution.Proofs.Evm.Call.SlotSurplus
 
 A frame keeps the surplus of another when it keeps its error and its surplus does not drop.
 
-That relation is a preorder.
-
 A pop, a push, an access, a record of a read and a charge keep the surplus.
 
 So does each instruction that reads and writes only the stack, and KECCAK256.
@@ -28,7 +26,9 @@ open EthLib.Base (Address Bytes32 Fork U256 toAddressMasked)
 
 variable {fork : Fork}
 
-/-- The frame `b` keeps the error of the frame `a`, and a surplus at least that of `a`. -/
+/-- The frame `b` keeps the error of the frame `a`, and a surplus at least that of `a`.
+
+That relation is a preorder. -/
 def SurplusKept (a b : Evm fork StateGasMeter) : Prop :=
   b.error = a.error ∧ slotSurplus a ≤ slotSurplus b
 

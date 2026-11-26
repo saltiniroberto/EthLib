@@ -5,28 +5,16 @@ public import EthLib.Consensus.Accessors
 public import Mathlib.Data.Finset.Card
 public import Mathlib.Data.Finset.Prod
 
-import EthLib.Base.Proofs.LittleEndian
+import EthLib.Base.Proofs.ByteOrder
 
 /-!
 # Proofs: acceptance and inputs of balance-weighted draws
 
 It counts the values one draw accepts, as a function of the balance.
 
-From Electra it also counts the pairs of bytes, read little-endian, that a draw accepts.
-
 It also shows that the checked draw makes the same comparison on natural numbers.
 
-This holds when the balance is at most the largest, and the largest times the scale fits in 64 bits.
-
 It states counts, not probabilities.
-
-Two draw inputs with block numbers below `2^64` are equal only for equal seeds and blocks.
-
-The draw inputs have 40 bytes, so they differ from the shuffle inputs of 33 or 37 bytes.
-
-The seed of each slot also hashes 40 bytes in the same layout, so its inputs are not separated here.
-
-Different draws in one hash block read disjoint bytes of its hash.
 -/
 
 @[expose] public section
@@ -186,12 +174,15 @@ theorem drawAccepts_eq_of_pectra (preset : Preset) (fork : Base.Fork)
   simpa only [valueNat, scaleNat] using
     checked_draw_comparison _ e _ (2 ^ 16 - 1) leftFits' rightFits'
 
-/-! ## Hash inputs and byte positions -/
+/-! ## Hash inputs and byte positions
+
+The seed of each slot also hashes 40 bytes in the same layout, so its inputs are not separated here.
+-/
 
 /-- A draw input has 32 seed bytes and eight bytes for its block number. -/
 @[simp] theorem size_drawInput (seed : Bytes32) (block : Nat) :
     (drawInput seed block).size = 40 := by
-  change (seed.toArray ++ (uintToBytes 8 block).toArray).size = 40
+  change (seed.toArray ++ (ByteOrder.toLE 8 block).toArray).size = 40
   simp
 
 /-- A shuffle pivot input has 32 seed bytes and one byte for its round. -/
@@ -203,7 +194,7 @@ theorem drawAccepts_eq_of_pectra (preset : Preset) (fork : Base.Fork)
 /-- A shuffle bucket input has the 33 bytes of its round and four bytes for its bucket. -/
 @[simp] theorem Shuffle.size_bucketInput (seed : Bytes32) (round bucket : Nat) :
     (Shuffle.bucketInput seed round bucket).size = 37 := by
-  change (seed.toArray.push (UInt8.ofNat round) ++ (uintToBytes 4 bucket).toArray).size = 37
+  change (seed.toArray.push (UInt8.ofNat round) ++ (ByteOrder.toLE 4 bucket).toArray).size = 37
   simp
 
 /-- Two draw inputs are equal exactly when their seeds and their block numbers are equal.
@@ -216,7 +207,7 @@ theorem drawInput_eq_iff {seed other : Bytes32} {block block' : Nat}
   · intro same
     obtain ⟨seeds, bytes⟩ := Array.append_inj (ByteArray.mk.inj same) (by simp)
     exact ⟨Vector.toArray_inj.mp seeds,
-      uintToBytes_inj leftFits rightFits (Vector.toArray_inj.mp bytes)⟩
+      ByteOrder.toLE_inj leftFits rightFits (Vector.toArray_inj.mp bytes)⟩
   · rintro ⟨rfl, rfl⟩
     rfl
 

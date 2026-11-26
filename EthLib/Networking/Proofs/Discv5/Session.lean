@@ -1,19 +1,14 @@
 module
 
-public import EthLib.Base.Proofs.BigEndian
+public import EthLib.Base.Proofs.ByteOrder
 public import EthLib.Networking.Discv5.Session
 public import EthLib.Networking.Proofs.Discv5.Packet
+import EthLib.Base.Proofs.CodeInjective
 
 /-!
 # `Networking.Proofs.Discv5.Session`
 
 The WHOAREYOU challenge and the ordinary message packet read back.
-
-- A WHOAREYOU packet has 63 bytes, the smallest packet.
-- Node A reads the challenge of node B back, with the challenge data that node B keeps.
-- Node B reads an ordinary message packet of node A back, under its key.
-- An ordinary message packet that opens under a key is the sealing of its plaintext under that key.
-- Two errors with one code come from one constructor.
 
 The theorems say nothing about the freshness of a nonce, an ID nonce or an `enr-seq`.
 
@@ -32,7 +27,7 @@ open EthLib.Cryptography
 
 /-- Node A reads node B's WHOAREYOU packet back, with the challenge data that node B keeps.
 
-A WHOAREYOU packet has exactly 63 bytes, within the size limits of a packet. -/
+A WHOAREYOU packet has exactly 63 bytes, the smallest size that the limits of a packet allow. -/
 theorem readWhoareyou_makeWhoareyou {nodeIdA : NodeId} {maskingIv : Vector UInt8 16}
     {nonce : Vector UInt8 12} {idNonce : Vector UInt8 16} {enrSeq : UInt64}
     {bytes challengeData : ByteArray}
@@ -57,8 +52,7 @@ theorem readWhoareyou_makeWhoareyou {nodeIdA : NodeId} {maskingIv : Vector UInt8
         have hlen := Header.length_encode hh
         have hsize := Packet.size_messageAd_add hb ha
         subst hp
-        simp only [Authdata.encode, List.length_append, Vector.length_toList,
-          Base.natToBytes_length] at hlen
+        simp only [Authdata.encode, List.length_append, Vector.length_toList] at hlen
         have hadSize := ha
         simp only [Packet.messageAd, hh, bind, Except.bind, pure, Except.pure,
           Except.ok.injEq] at hadSize
@@ -134,8 +128,6 @@ theorem sealMessage_of_openMessage {keyOf : NodeId → Option (Aes.Key .aes128)}
 /-- Two errors with one code come from one constructor. -/
 theorem _root_.EthLib.Networking.Discv5.SessionError.code_injective
     (e₁ e₂ : SessionError) (h : e₁.code = e₂.code) : e₁.ctorIdx = e₂.ctorIdx := by
-  -- Two distinct constructors have two distinct literal codes, which `decide` separates.
-  cases e₁ <;> cases e₂ <;>
-    first | rfl | (simp only [SessionError.code] at h; exact absurd h (by decide))
+  code_injective SessionError.code
 
 end EthLib.Networking.Proofs.Discv5.Session

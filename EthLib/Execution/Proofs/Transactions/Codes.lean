@@ -12,14 +12,6 @@ A block holds its codes when the code of each of its accounts is in it.
 
 A transaction then keeps the code of each account available, from its block to its end.
 
-Its authorizations store each delegation under the hash that the account receives.
-
-Its message keeps the codes.
-
-The purchase of gas raises a nonce and takes a fee, and the refunds change only balances.
-
-Deletions leave the empty code.
-
 Every lookup of code then succeeds, so such a transaction never aborts for a missing code.
 
 The same holds for a call that runs on a block outside any transaction.
@@ -84,7 +76,9 @@ variable {fork : Fork} {Meter : Type} [GasMeter Meter]
 
 /-! ## The authorizations -/
 
-/-- One authorization keeps every code. -/
+/-- One authorization keeps every code.
+
+It stores each delegation under the hash that the account receives. -/
 private theorem allCodes_applyAuthorization {chainId : Nat} {done done' : Delegations Meter}
     {auth : Authorization} (h : applyAuthorization fork chainId done auth = .ok done')
     (available : AllCodes done.state) : AllCodes done'.state :=
@@ -217,7 +211,9 @@ private theorem allCodes_creditEther {tx tx' : TransactionState} {address : Addr
     rfl
   · cases h
 
-/-- Settling gas keeps every code. -/
+/-- Settling gas keeps every code.
+
+It credits ether, and it may delete an empty beneficiary. -/
 private theorem allCodes_settleGas {env : BlockEnvironment fork}
     {state state' : TransactionState} {sender : Address} {tx : Transaction}
     {gasLeft refundCounter used : Nat} (available : AllCodes state)
@@ -250,7 +246,7 @@ private theorem allCodes_foldl_destroy :
     · exact available.destroyAccount address
     · exact available
 
-/-- The deletions at the end of a transaction keep every code. -/
+/-- The deletions at the end of a transaction keep every code, since they leave the empty code. -/
 private theorem allCodes_deleteAccounts {state state' : TransactionState} {output : CallOutput}
     (available : AllCodes state) (h : deleteAccounts fork state output = .ok state') :
     AllCodes state' := by
@@ -297,10 +293,6 @@ private theorem allCodes_runTransaction [LawfulGasMeter Meter] {env : BlockEnvir
 
 /-! ## No missing code -/
 
-/-- The result is not a failure for a missing code. -/
-private def NoMiss {α : Type} (r : Except EvmError α) : Prop :=
-  ∀ c, r ≠ .error (.state (.missingCode c))
-
 /-- The result is not a failure for a missing code, whatever state comes with the error. -/
 private def NoMissRead {α : Type} (r : Except (EvmError × TransactionState) α) : Prop :=
   ∀ c read, r ≠ .error (.state (.missingCode c), read)
@@ -309,7 +301,7 @@ private def NoMissRead {α : Type} (r : Except (EvmError × TransactionState) α
 private theorem noMiss_chargeAuthorization [LawfulGasMeter Meter] {done : Delegations Meter}
     {authority : Address} {auth : Authorization} (available : HasPreCodes done.state) :
     NoMiss (chargeAuthorization done authority auth) := by
-  intro c h
+  rintro _ h c rfl
   obtain ⟨code, hcode⟩ := available authority
   unfold chargeAuthorization at h
   simp only [hcode] at h
@@ -325,11 +317,11 @@ private theorem noMiss_chargeAuthorization [LawfulGasMeter Meter] {done : Delega
 private theorem noMiss_payAuthorization [LawfulGasMeter Meter] {done : Delegations Meter}
     {authority : Address} {auth : Authorization} (available : AllCodes done.state) :
     NoMiss (payAuthorization fork done authority auth) := by
-  intro c h
+  rintro _ h c rfl
   unfold payAuthorization at h
   split at h
   · rcases Base.bind_eq_error h with h | ⟨a, -, h⟩
-    · exact noMiss_chargeAuthorization available.2 c h
+    · exact noMiss_chargeAuthorization available.2 _ h c rfl
     · cases h
   · cases h
 
@@ -358,7 +350,7 @@ private theorem noMissRead_applyAuthorization [LawfulGasMeter Meter] {chainId : 
         · rcases Base.bind_eq_error h with h | ⟨d, -, h⟩
           · obtain ⟨e, he, hee⟩ := Base.mapError_eq_error h
             cases hee
-            refine noMiss_payAuthorization ?_ c he
+            refine noMiss_payAuthorization ?_ _ he c rfl
             exact v
           · rcases Base.bind_eq_error h with h | ⟨⟨s, r⟩, -, h⟩
             · obtain ⟨e, he, hee⟩ := Base.mapError_eq_error h
@@ -455,7 +447,7 @@ private theorem noMiss_processMessageCall [LawfulGasMeter Meter] {chainId : Nat}
     {message : Message fork} {state : TransactionState} {substate : Substate}
     {auths : List Authorization} {paid : Std.ExtTreeSet Address} (available : AllCodes state) :
     NoMiss (processMessageCall (Meter := Meter) chainId message state substate auths paid) := by
-  intro c h
+  rintro _ h c rfl
   rw [processMessageCall_unfold] at h
   rcases hprep : prepareFirstFrame (Meter := Meter) chainId message state substate auths paid
     with ⟨e, read⟩ | first
@@ -476,45 +468,12 @@ private theorem noMiss_processMessageCall [LawfulGasMeter Meter] {chainId : Nat}
       · exact processMessage_ne_missingCode vfirst.1 c h
       · cases h
 
-/-- A credit of ether never fails for a missing code. -/
-private theorem creditEther_ne_missingCode (tx : TransactionState) (address : Address)
-    (amount : Nat) (c : Hash32) : creditEther fork tx address amount ≠ .error (.missingCode c) := by
-  unfold creditEther
-  split
-  · exact modifyState_ne_missingCode
-      (fun _ _ h => by unfold Account.credit at h; split at h <;> cases h) c
-  · nofun
-
-/-- The deletions at the end of a transaction never fail for a missing code. -/
-private theorem deleteAccounts_ne_missingCode (state : TransactionState) (output : CallOutput)
-    (c : Hash32) : deleteAccounts fork state output ≠ .error (.missingCode c) := by
-  have fold : ∀ (l : List Address) (init : TransactionState),
-      l.foldlM (fun state address =>
-        if fork ≥ .glamsterdam then state.clearAccountPreservingBalance fork address
-        else pure (state.destroyAccount address)) init ≠ .error (.missingCode c) := by
-    intro l
-    induction l with
-    | nil => exact fun _ h => by cases h
-    | cons address rest ih =>
-      intro init h
-      rcases Base.bind_eq_error h with h | ⟨mid, -, h⟩
-      · split at h
-        · exact modifyState_ne_missingCode (fun _ _ h => by cases h) c h
-        · cases h
-      · exact ih mid h
-  intro h
-  unfold deleteAccounts at h
-  rcases Base.bind_eq_error h with h | ⟨deleted, -, h⟩
-  · rw [Std.ExtTreeSet.foldlM_eq_foldlM_toList] at h
-    exact fold _ _ h
-  · cases h
-
 /-- A run of a transaction never aborts for a missing code, when its block holds every code. -/
 private theorem noMiss_runTransaction [LawfulGasMeter Meter] {env : BlockEnvironment fork}
     {block : BlockState} {included : Included} {tx : Transaction}
     (available : HasCodes (TransactionState.ofBlock block)) :
     NoMiss (runTransaction Meter env block included tx) := by
-  intro c h
+  rintro _ h c rfl
   rw [runTransaction_unfold] at h
   rcases Base.bind_eq_error h with h | ⟨target, -, h⟩
   · unfold messageTarget at h
@@ -541,24 +500,16 @@ private theorem noMiss_runTransaction [LawfulGasMeter Meter] {env : BlockEnviron
       cases h
     · cases h
   rcases Base.bind_eq_error h with h | ⟨output, hOutput, h⟩
-  · exact noMiss_processMessageCall vb c h
+  · exact noMiss_processMessageCall vb _ h c rfl
   rcases Base.bind_eq_error h with h | ⟨⟨settled, used⟩, -, h⟩
   · obtain ⟨e, he, hee⟩ := Base.mapError_eq_error h
     cases hee
-    unfold settleGas at he
-    rw [paidBaseFee_empty] at he
-    rcases Base.bind_eq_error he with he | ⟨mid, -, he⟩
-    · exact creditEther_ne_missingCode _ _ _ c he
-    rcases Base.bind_eq_error he with he | ⟨paid, -, he⟩
-    · unfold payBeneficiary at he
-      split at he
-      · cases he
-      · exact creditEther_ne_missingCode _ _ _ c he
-    · cases he
+    obtain ⟨_, he⟩ := error_settleGas he
+    cases he
   rcases Base.bind_eq_error h with h | ⟨deleted, -, h⟩
   · obtain ⟨e, he, hee⟩ := Base.mapError_eq_error h
     cases hee
-    exact deleteAccounts_ne_missingCode _ _ c he
+    exact deleteAccounts_ne_error _ _ _ he
   · cases h
 
 /-- A call on a block that holds every code keeps the code of each account available. -/
@@ -578,7 +529,7 @@ theorem processMessageCall_ne_missingCode [LawfulGasMeter Meter] {chainId : Nat}
     (available : HasCodes (TransactionState.ofBlock block)) (codeHash : Hash32) :
     processMessageCall (Meter := Meter) chainId message (.ofBlock block) substate auths paid ≠
       .error (.state (.missingCode codeHash)) :=
-  noMiss_processMessageCall (allCodes_ofBlock available) codeHash
+  fun h => noMiss_processMessageCall (allCodes_ofBlock available) _ h codeHash rfl
 
 end
 
@@ -608,8 +559,8 @@ theorem processTransaction_ne_missingCode {fork : Fork} {env : BlockEnvironment 
   split
   · nofun
   split
-  · exact noMiss_runTransaction available codeHash
-  · exact noMiss_runTransaction available codeHash
+  · exact fun h => noMiss_runTransaction available _ h codeHash rfl
+  · exact fun h => noMiss_runTransaction available _ h codeHash rfl
 
 /-- A failed check fails with its own error. -/
 private theorem failIf_eq_error {condition : Bool} {error error' : InclusionError}

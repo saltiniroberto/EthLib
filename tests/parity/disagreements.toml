@@ -4,6 +4,7 @@
 # A case listed here must fail, and every other runnable case must pass.
 # So a fixed disagreement fails until its entry is removed.
 # The archive cases of bindings/python/tests/consensus/test_fork_choice.py read this file too.
+# So do the gossip cases of test_gossip_validation.py and test_beacon_api_publish.py there.
 #
 # Each entry gives the suite, the case, the reason, and the source that supports the reason.
 # It also gives a class, the command that reproduces it, and its state upstream.
@@ -459,7 +460,7 @@ upstream = "As of 2026-11-11, consensus-specs #5670 (cc68498a, merged 2026-10-28
 suite = "execution-spec-tests"
 case = "tests/reorg/test_forkchoice_behaviour.py::test_out_of_order_payload_delivery[fork_Amsterdam-blockchain_test_engine_reorg]"
 reason = "EthLib answers ACCEPTED for a payload off the canonical chain, which the source allows and the case does not list"
-source = "execution-apis 3284ee8, src/engine/paris.md, engine_newPayloadV1, specification item 5 and the ACCEPTED response (https://github.com/ethereum/execution-apis/blob/3284ee80c3da3e516c53782dde75157cccf1ebdc/src/engine/paris.md#engine_newpayloadv1)"
+source = "execution-apis 166e334, src/engine/paris.md, engine_newPayloadV1, specification item 5 and the ACCEPTED response (https://github.com/ethereum/execution-apis/blob/166e334c73d96ffce916ea84e97addbcd8b3727a/src/engine/paris.md#engine_newpayloadv1)"
 class = "fixture-defect"
 reproduce = 'pytest -m archive "bindings/python/tests/parity/test_execution.py::test_case[tests/reorg/test_forkchoice_behaviour.py::test_out_of_order_payload_delivery[fork_Amsterdam-blockchain_test_engine_reorg]]"'
 upstream = "As of 2026-11-21, ethereum/execution-specs#4048 is open. It asks to add ACCEPTED to the outcomes that the case allows for the resent payload"
@@ -468,7 +469,7 @@ upstream = "As of 2026-11-21, ethereum/execution-specs#4048 is open. It asks to 
 suite = "execution-spec-tests"
 case = "tests/reorg/test_forkchoice_behaviour.py::test_out_of_order_payload_delivery[fork_Cancun-blockchain_test_engine_reorg]"
 reason = "EthLib answers ACCEPTED for a payload off the canonical chain, which the source allows and the case does not list"
-source = "execution-apis 3284ee8, src/engine/paris.md, engine_newPayloadV1, specification item 5 and the ACCEPTED response (https://github.com/ethereum/execution-apis/blob/3284ee80c3da3e516c53782dde75157cccf1ebdc/src/engine/paris.md#engine_newpayloadv1)"
+source = "execution-apis 166e334, src/engine/paris.md, engine_newPayloadV1, specification item 5 and the ACCEPTED response (https://github.com/ethereum/execution-apis/blob/166e334c73d96ffce916ea84e97addbcd8b3727a/src/engine/paris.md#engine_newpayloadv1)"
 class = "fixture-defect"
 reproduce = 'pytest -m archive "bindings/python/tests/parity/test_execution.py::test_case[tests/reorg/test_forkchoice_behaviour.py::test_out_of_order_payload_delivery[fork_Cancun-blockchain_test_engine_reorg]]"'
 upstream = "As of 2026-11-21, ethereum/execution-specs#4048 is open. It asks to add ACCEPTED to the outcomes that the case allows for the resent payload"
@@ -477,7 +478,7 @@ upstream = "As of 2026-11-21, ethereum/execution-specs#4048 is open. It asks to 
 suite = "execution-spec-tests"
 case = "tests/reorg/test_forkchoice_behaviour.py::test_out_of_order_payload_delivery[fork_Osaka-blockchain_test_engine_reorg]"
 reason = "EthLib answers ACCEPTED for a payload off the canonical chain, which the source allows and the case does not list"
-source = "execution-apis 3284ee8, src/engine/paris.md, engine_newPayloadV1, specification item 5 and the ACCEPTED response (https://github.com/ethereum/execution-apis/blob/3284ee80c3da3e516c53782dde75157cccf1ebdc/src/engine/paris.md#engine_newpayloadv1)"
+source = "execution-apis 166e334, src/engine/paris.md, engine_newPayloadV1, specification item 5 and the ACCEPTED response (https://github.com/ethereum/execution-apis/blob/166e334c73d96ffce916ea84e97addbcd8b3727a/src/engine/paris.md#engine_newpayloadv1)"
 class = "fixture-defect"
 reproduce = 'pytest -m archive "bindings/python/tests/parity/test_execution.py::test_case[tests/reorg/test_forkchoice_behaviour.py::test_out_of_order_payload_delivery[fork_Osaka-blockchain_test_engine_reorg]]"'
 upstream = "As of 2026-11-21, ethereum/execution-specs#4048 is open. It asks to add ACCEPTED to the outcomes that the case allows for the resent payload"
@@ -486,7 +487,7 @@ upstream = "As of 2026-11-21, ethereum/execution-specs#4048 is open. It asks to 
 suite = "execution-spec-tests"
 case = "tests/reorg/test_forkchoice_behaviour.py::test_out_of_order_payload_delivery[fork_Prague-blockchain_test_engine_reorg]"
 reason = "EthLib answers ACCEPTED for a payload off the canonical chain, which the source allows and the case does not list"
-source = "execution-apis 3284ee8, src/engine/paris.md, engine_newPayloadV1, specification item 5 and the ACCEPTED response (https://github.com/ethereum/execution-apis/blob/3284ee80c3da3e516c53782dde75157cccf1ebdc/src/engine/paris.md#engine_newpayloadv1)"
+source = "execution-apis 166e334, src/engine/paris.md, engine_newPayloadV1, specification item 5 and the ACCEPTED response (https://github.com/ethereum/execution-apis/blob/166e334c73d96ffce916ea84e97addbcd8b3727a/src/engine/paris.md#engine_newpayloadv1)"
 class = "fixture-defect"
 reproduce = 'pytest -m archive "bindings/python/tests/parity/test_execution.py::test_case[tests/reorg/test_forkchoice_behaviour.py::test_out_of_order_payload_delivery[fork_Prague-blockchain_test_engine_reorg]]"'
 upstream = "As of 2026-11-21, ethereum/execution-specs#4048 is open. It asks to add ACCEPTED to the outcomes that the case allows for the resent payload"
@@ -495,7 +496,221 @@ upstream = "As of 2026-11-21, ethereum/execution-specs#4048 is open. It asks to 
 suite = "execution-spec-tests"
 case = "tests/reorg/test_forkchoice_behaviour.py::test_out_of_order_payload_delivery[fork_Shanghai-blockchain_test_engine_reorg]"
 reason = "EthLib answers ACCEPTED for a payload off the canonical chain, which the source allows and the case does not list"
-source = "execution-apis 3284ee8, src/engine/paris.md, engine_newPayloadV1, specification item 5 and the ACCEPTED response (https://github.com/ethereum/execution-apis/blob/3284ee80c3da3e516c53782dde75157cccf1ebdc/src/engine/paris.md#engine_newpayloadv1)"
+source = "execution-apis 166e334, src/engine/paris.md, engine_newPayloadV1, specification item 5 and the ACCEPTED response (https://github.com/ethereum/execution-apis/blob/166e334c73d96ffce916ea84e97addbcd8b3727a/src/engine/paris.md#engine_newpayloadv1)"
 class = "fixture-defect"
 reproduce = 'pytest -m archive "bindings/python/tests/parity/test_execution.py::test_case[tests/reorg/test_forkchoice_behaviour.py::test_out_of_order_payload_delivery[fork_Shanghai-blockchain_test_engine_reorg]]"'
 upstream = "As of 2026-11-21, ethereum/execution-specs#4048 is open. It asks to add ACCEPTED to the outcomes that the case allows for the resent payload"
+
+# The envelope cases of v1.7.0-beta.4 that fill a payload with the most withdrawals.
+# The generator replaces the withdrawals of a valid payload, so they no longer match the state.
+# The later rule of consensus-specs rejects an envelope whose withdrawals differ from the expected ones.
+# EthLib follows that rule, so it rejects these envelopes.
+# A later release that keeps the expected withdrawals replaces these cases.
+
+[[disagreement]]
+suite = "consensus-spec-tests"
+case = "tests/minimal/gloas/networking/gossip_execution_payload_envelope/pyspec_tests/gossip_execution_payload_envelope__valid_max_withdrawals"
+reason = "The case replaces the withdrawals of the payload, and EthLib rejects an envelope whose withdrawals are not those the state expects"
+source = "consensus-specs 44be32373afdb87496f3f68c1668f7e7d72aa662 (#5821, merged 2026-11-12), specs/gloas/p2p-interface.md, validate_execution_payload_envelope_gossip, adds the reject check on the withdrawals root, and changes this case in test_gossip_execution_payload_envelope.py. The pinned v1.7.0-beta.4 archive predates that commit"
+class = "sources-disagree"
+reproduce = 'pytest -m archive "bindings/python/tests/parity/test_consensus.py::test_case[tests/minimal/gloas/networking/gossip_execution_payload_envelope/pyspec_tests/gossip_execution_payload_envelope__valid_max_withdrawals]"'
+upstream = "As of 2026-11-25, consensus-specs #5821 (merged 2026-11-12) changes the case, and no release contains it: the latest release, v1.7.0-beta.4, predates it"
+
+[[disagreement]]
+suite = "consensus-spec-tests"
+case = "tests/minimal/heze/networking/gossip_execution_payload_envelope/pyspec_tests/gossip_execution_payload_envelope__valid_max_withdrawals"
+reason = "The case replaces the withdrawals of the payload, and EthLib rejects an envelope whose withdrawals are not those the state expects"
+source = "consensus-specs 44be32373afdb87496f3f68c1668f7e7d72aa662 (#5821, merged 2026-11-12), specs/gloas/p2p-interface.md, validate_execution_payload_envelope_gossip, adds the reject check on the withdrawals root, and changes this case in test_gossip_execution_payload_envelope.py. The pinned v1.7.0-beta.4 archive predates that commit"
+class = "sources-disagree"
+reproduce = 'pytest -m archive "bindings/python/tests/parity/test_consensus.py::test_case[tests/minimal/heze/networking/gossip_execution_payload_envelope/pyspec_tests/gossip_execution_payload_envelope__valid_max_withdrawals]"'
+upstream = "As of 2026-11-25, consensus-specs #5821 (merged 2026-11-12) changes the case, and no release contains it: the latest release, v1.7.0-beta.4, predates it"
+
+[[disagreement]]
+suite = "consensus-spec-tests"
+case = "tests/mainnet/gloas/networking/gossip_execution_payload_envelope/pyspec_tests/gossip_execution_payload_envelope__valid_max_withdrawals"
+reason = "The case replaces the withdrawals of the payload, and EthLib rejects an envelope whose withdrawals are not those the state expects"
+source = "consensus-specs 44be32373afdb87496f3f68c1668f7e7d72aa662 (#5821, merged 2026-11-12), specs/gloas/p2p-interface.md, validate_execution_payload_envelope_gossip, adds the reject check on the withdrawals root, and changes this case in test_gossip_execution_payload_envelope.py. The pinned v1.7.0-beta.4 archive predates that commit"
+class = "sources-disagree"
+reproduce = 'pytest -m archive "bindings/python/tests/parity/test_consensus.py::test_case[tests/mainnet/gloas/networking/gossip_execution_payload_envelope/pyspec_tests/gossip_execution_payload_envelope__valid_max_withdrawals]"'
+upstream = "As of 2026-11-25, consensus-specs #5821 (merged 2026-11-12) changes the case, and no release contains it: the latest release, v1.7.0-beta.4, predates it"
+
+[[disagreement]]
+suite = "consensus-spec-tests"
+case = "tests/mainnet/heze/networking/gossip_execution_payload_envelope/pyspec_tests/gossip_execution_payload_envelope__valid_max_withdrawals"
+reason = "The case replaces the withdrawals of the payload, and EthLib rejects an envelope whose withdrawals are not those the state expects"
+source = "consensus-specs 44be32373afdb87496f3f68c1668f7e7d72aa662 (#5821, merged 2026-11-12), specs/gloas/p2p-interface.md, validate_execution_payload_envelope_gossip, adds the reject check on the withdrawals root, and changes this case in test_gossip_execution_payload_envelope.py. The pinned v1.7.0-beta.4 archive predates that commit"
+class = "sources-disagree"
+reproduce = 'pytest -m archive "bindings/python/tests/parity/test_consensus.py::test_case[tests/mainnet/heze/networking/gossip_execution_payload_envelope/pyspec_tests/gossip_execution_payload_envelope__valid_max_withdrawals]"'
+upstream = "As of 2026-11-25, consensus-specs #5821 (merged 2026-11-12) changes the case, and no release contains it: the latest release, v1.7.0-beta.4, predates it"
+# The fork cases of v1.7.0-beta.4 that route a deposit by the key of a validator at the fork to Gloas.
+# That release keeps a deposit for the key of a validator, or of a pending validator, in the queue first.
+# The later rule of consensus-specs routes a deposit by its withdrawal credentials first.
+# EthLib follows that rule, so these cases end with other builders and another queue.
+# A later release with that rule replaces these cases.
+
+[[disagreement]]
+suite = "consensus-spec-tests"
+case = "tests/minimal/gloas/fork/fork/pyspec_tests/fork_builder_deposit_followed_by_non_builder_credentials"
+reason = "The case was generated with the onboarding that routes a deposit by the key of a validator first, and EthLib routes it by its withdrawal credentials first"
+source = "EIP-8282 section Motivation: the validator and builder registries are keyed independently. consensus-specs 8b374fa81b0918b84fe0063a56b4a482e1fa2c6f (#5736, merged 2026-10-26), specs/gloas/fork.md, onboard_builders_from_pending_deposits, routes by credentials first, and changes this case in test_gloas_fork_onboard_builders.py. The pinned v1.7.0-beta.4 archive predates that commit"
+class = "sources-disagree"
+reproduce = 'pytest -m archive "bindings/python/tests/parity/test_consensus.py::test_case[tests/minimal/gloas/fork/fork/pyspec_tests/fork_builder_deposit_followed_by_non_builder_credentials]"'
+upstream = "As of 2026-11-25, consensus-specs #5736 (merged 2026-10-26) changes the case, and no release contains it: the latest release, v1.7.0-beta.4, predates it. EIP-7732 still states the earlier routing, and ethereum/EIPs#12627, open, aligns it"
+
+[[disagreement]]
+suite = "consensus-spec-tests"
+case = "tests/minimal/gloas/fork/fork/pyspec_tests/fork_invalid_then_valid_validator_then_builder_deposit"
+reason = "The case was generated with the onboarding that routes a deposit by the key of a validator first, and EthLib routes it by its withdrawal credentials first"
+source = "EIP-8282 section Motivation: the validator and builder registries are keyed independently. consensus-specs 8b374fa81b0918b84fe0063a56b4a482e1fa2c6f (#5736, merged 2026-10-26), specs/gloas/fork.md, onboard_builders_from_pending_deposits, routes by credentials first, and changes this case in test_gloas_fork_onboard_builders.py. The pinned v1.7.0-beta.4 archive predates that commit"
+class = "sources-disagree"
+reproduce = 'pytest -m archive "bindings/python/tests/parity/test_consensus.py::test_case[tests/minimal/gloas/fork/fork/pyspec_tests/fork_invalid_then_valid_validator_then_builder_deposit]"'
+upstream = "As of 2026-11-25, consensus-specs #5736 (merged 2026-10-26) changes the case, and no release contains it: the latest release, v1.7.0-beta.4, predates it. EIP-7732 still states the earlier routing, and ethereum/EIPs#12627, open, aligns it"
+
+[[disagreement]]
+suite = "consensus-spec-tests"
+case = "tests/minimal/gloas/fork/fork/pyspec_tests/fork_mixed_validity_validator_deposits_surrounding_builder_deposits"
+reason = "The case was generated with the onboarding that routes a deposit by the key of a validator first, and EthLib routes it by its withdrawal credentials first"
+source = "EIP-8282 section Motivation: the validator and builder registries are keyed independently. consensus-specs 8b374fa81b0918b84fe0063a56b4a482e1fa2c6f (#5736, merged 2026-10-26), specs/gloas/fork.md, onboard_builders_from_pending_deposits, routes by credentials first, and changes this case in test_gloas_fork_onboard_builders.py. The pinned v1.7.0-beta.4 archive predates that commit"
+class = "sources-disagree"
+reproduce = 'pytest -m archive "bindings/python/tests/parity/test_consensus.py::test_case[tests/minimal/gloas/fork/fork/pyspec_tests/fork_mixed_validity_validator_deposits_surrounding_builder_deposits]"'
+upstream = "As of 2026-11-25, consensus-specs #5736 (merged 2026-10-26) changes the case, and no release contains it: the latest release, v1.7.0-beta.4, predates it. EIP-7732 still states the earlier routing, and ethereum/EIPs#12627, open, aligns it"
+
+[[disagreement]]
+suite = "consensus-spec-tests"
+case = "tests/minimal/gloas/fork/fork/pyspec_tests/fork_valid_then_invalid_validator_then_builder_deposit"
+reason = "The case was generated with the onboarding that routes a deposit by the key of a validator first, and EthLib routes it by its withdrawal credentials first"
+source = "EIP-8282 section Motivation: the validator and builder registries are keyed independently. consensus-specs 8b374fa81b0918b84fe0063a56b4a482e1fa2c6f (#5736, merged 2026-10-26), specs/gloas/fork.md, onboard_builders_from_pending_deposits, routes by credentials first, and changes this case in test_gloas_fork_onboard_builders.py. The pinned v1.7.0-beta.4 archive predates that commit"
+class = "sources-disagree"
+reproduce = 'pytest -m archive "bindings/python/tests/parity/test_consensus.py::test_case[tests/minimal/gloas/fork/fork/pyspec_tests/fork_valid_then_invalid_validator_then_builder_deposit]"'
+upstream = "As of 2026-11-25, consensus-specs #5736 (merged 2026-10-26) changes the case, and no release contains it: the latest release, v1.7.0-beta.4, predates it. EIP-7732 still states the earlier routing, and ethereum/EIPs#12627, open, aligns it"
+
+[[disagreement]]
+suite = "consensus-spec-tests"
+case = "tests/minimal/gloas/fork/fork/pyspec_tests/fork_validator_deposit_followed_by_builder_credentials"
+reason = "The case was generated with the onboarding that routes a deposit by the key of a validator first, and EthLib routes it by its withdrawal credentials first"
+source = "EIP-8282 section Motivation: the validator and builder registries are keyed independently. consensus-specs 8b374fa81b0918b84fe0063a56b4a482e1fa2c6f (#5736, merged 2026-10-26), specs/gloas/fork.md, onboard_builders_from_pending_deposits, routes by credentials first, and changes this case in test_gloas_fork_onboard_builders.py. The pinned v1.7.0-beta.4 archive predates that commit"
+class = "sources-disagree"
+reproduce = 'pytest -m archive "bindings/python/tests/parity/test_consensus.py::test_case[tests/minimal/gloas/fork/fork/pyspec_tests/fork_validator_deposit_followed_by_builder_credentials]"'
+upstream = "As of 2026-11-25, consensus-specs #5736 (merged 2026-10-26) changes the case, and no release contains it: the latest release, v1.7.0-beta.4, predates it. EIP-7732 still states the earlier routing, and ethereum/EIPs#12627, open, aligns it"
+
+[[disagreement]]
+suite = "consensus-spec-tests"
+case = "tests/mainnet/gloas/fork/fork/pyspec_tests/fork_builder_deposit_followed_by_non_builder_credentials"
+reason = "The case was generated with the onboarding that routes a deposit by the key of a validator first, and EthLib routes it by its withdrawal credentials first"
+source = "EIP-8282 section Motivation: the validator and builder registries are keyed independently. consensus-specs 8b374fa81b0918b84fe0063a56b4a482e1fa2c6f (#5736, merged 2026-10-26), specs/gloas/fork.md, onboard_builders_from_pending_deposits, routes by credentials first, and changes this case in test_gloas_fork_onboard_builders.py. The pinned v1.7.0-beta.4 archive predates that commit"
+class = "sources-disagree"
+reproduce = 'pytest -m archive "bindings/python/tests/parity/test_consensus.py::test_case[tests/mainnet/gloas/fork/fork/pyspec_tests/fork_builder_deposit_followed_by_non_builder_credentials]"'
+upstream = "As of 2026-11-25, consensus-specs #5736 (merged 2026-10-26) changes the case, and no release contains it: the latest release, v1.7.0-beta.4, predates it. EIP-7732 still states the earlier routing, and ethereum/EIPs#12627, open, aligns it"
+
+[[disagreement]]
+suite = "consensus-spec-tests"
+case = "tests/mainnet/gloas/fork/fork/pyspec_tests/fork_invalid_then_valid_validator_then_builder_deposit"
+reason = "The case was generated with the onboarding that routes a deposit by the key of a validator first, and EthLib routes it by its withdrawal credentials first"
+source = "EIP-8282 section Motivation: the validator and builder registries are keyed independently. consensus-specs 8b374fa81b0918b84fe0063a56b4a482e1fa2c6f (#5736, merged 2026-10-26), specs/gloas/fork.md, onboard_builders_from_pending_deposits, routes by credentials first, and changes this case in test_gloas_fork_onboard_builders.py. The pinned v1.7.0-beta.4 archive predates that commit"
+class = "sources-disagree"
+reproduce = 'pytest -m archive "bindings/python/tests/parity/test_consensus.py::test_case[tests/mainnet/gloas/fork/fork/pyspec_tests/fork_invalid_then_valid_validator_then_builder_deposit]"'
+upstream = "As of 2026-11-25, consensus-specs #5736 (merged 2026-10-26) changes the case, and no release contains it: the latest release, v1.7.0-beta.4, predates it. EIP-7732 still states the earlier routing, and ethereum/EIPs#12627, open, aligns it"
+
+[[disagreement]]
+suite = "consensus-spec-tests"
+case = "tests/mainnet/gloas/fork/fork/pyspec_tests/fork_mixed_validity_validator_deposits_surrounding_builder_deposits"
+reason = "The case was generated with the onboarding that routes a deposit by the key of a validator first, and EthLib routes it by its withdrawal credentials first"
+source = "EIP-8282 section Motivation: the validator and builder registries are keyed independently. consensus-specs 8b374fa81b0918b84fe0063a56b4a482e1fa2c6f (#5736, merged 2026-10-26), specs/gloas/fork.md, onboard_builders_from_pending_deposits, routes by credentials first, and changes this case in test_gloas_fork_onboard_builders.py. The pinned v1.7.0-beta.4 archive predates that commit"
+class = "sources-disagree"
+reproduce = 'pytest -m archive "bindings/python/tests/parity/test_consensus.py::test_case[tests/mainnet/gloas/fork/fork/pyspec_tests/fork_mixed_validity_validator_deposits_surrounding_builder_deposits]"'
+upstream = "As of 2026-11-25, consensus-specs #5736 (merged 2026-10-26) changes the case, and no release contains it: the latest release, v1.7.0-beta.4, predates it. EIP-7732 still states the earlier routing, and ethereum/EIPs#12627, open, aligns it"
+
+[[disagreement]]
+suite = "consensus-spec-tests"
+case = "tests/mainnet/gloas/fork/fork/pyspec_tests/fork_valid_then_invalid_validator_then_builder_deposit"
+reason = "The case was generated with the onboarding that routes a deposit by the key of a validator first, and EthLib routes it by its withdrawal credentials first"
+source = "EIP-8282 section Motivation: the validator and builder registries are keyed independently. consensus-specs 8b374fa81b0918b84fe0063a56b4a482e1fa2c6f (#5736, merged 2026-10-26), specs/gloas/fork.md, onboard_builders_from_pending_deposits, routes by credentials first, and changes this case in test_gloas_fork_onboard_builders.py. The pinned v1.7.0-beta.4 archive predates that commit"
+class = "sources-disagree"
+reproduce = 'pytest -m archive "bindings/python/tests/parity/test_consensus.py::test_case[tests/mainnet/gloas/fork/fork/pyspec_tests/fork_valid_then_invalid_validator_then_builder_deposit]"'
+upstream = "As of 2026-11-25, consensus-specs #5736 (merged 2026-10-26) changes the case, and no release contains it: the latest release, v1.7.0-beta.4, predates it. EIP-7732 still states the earlier routing, and ethereum/EIPs#12627, open, aligns it"
+
+[[disagreement]]
+suite = "consensus-spec-tests"
+case = "tests/mainnet/gloas/fork/fork/pyspec_tests/fork_validator_deposit_followed_by_builder_credentials"
+reason = "The case was generated with the onboarding that routes a deposit by the key of a validator first, and EthLib routes it by its withdrawal credentials first"
+source = "EIP-8282 section Motivation: the validator and builder registries are keyed independently. consensus-specs 8b374fa81b0918b84fe0063a56b4a482e1fa2c6f (#5736, merged 2026-10-26), specs/gloas/fork.md, onboard_builders_from_pending_deposits, routes by credentials first, and changes this case in test_gloas_fork_onboard_builders.py. The pinned v1.7.0-beta.4 archive predates that commit"
+class = "sources-disagree"
+reproduce = 'pytest -m archive "bindings/python/tests/parity/test_consensus.py::test_case[tests/mainnet/gloas/fork/fork/pyspec_tests/fork_validator_deposit_followed_by_builder_credentials]"'
+upstream = "As of 2026-11-25, consensus-specs #5736 (merged 2026-10-26) changes the case, and no release contains it: the latest release, v1.7.0-beta.4, predates it. EIP-7732 still states the earlier routing, and ethereum/EIPs#12627, open, aligns it"
+
+# The bid cases of v1.7.0-beta.4 that rest on one forwarded bid per builder, slot and parent.
+# The later rule of consensus-specs forwards up to a limit of bids that the balance of the builder sets.
+# EthLib follows that rule, so a second bid of a builder passes, and a poor builder reaches its limit first.
+# A later release with that rule replaces these cases.
+
+[[disagreement]]
+suite = "consensus-spec-tests"
+case = "tests/minimal/gloas/networking/gossip_execution_payload_bid/pyspec_tests/gossip_execution_payload_bid__ignore_duplicate_from_builder"
+reason = "The case expects a second bid of a builder for a slot and parent to be ignored, and EthLib forwards it while the builder is under its bid limit"
+source = "consensus-specs 1a48161515966f9c843672fa500861845ddc75d8 (#5805, merged 2026-11-11), specs/gloas/p2p-interface.md, get_builder_bid_limit and validate_execution_payload_bid_gossip, replaces the first-bid check with the bid limit, and changes this case in test_gossip_execution_payload_bid.py. The pinned v1.7.0-beta.4 archive predates that commit"
+class = "sources-disagree"
+reproduce = 'pytest -m archive "bindings/python/tests/parity/test_consensus.py::test_case[tests/minimal/gloas/networking/gossip_execution_payload_bid/pyspec_tests/gossip_execution_payload_bid__ignore_duplicate_from_builder]"'
+upstream = "As of 2026-11-25, consensus-specs #5805 (merged 2026-11-11) changes the case, and no release contains it: the latest release, v1.7.0-beta.4, predates it"
+
+[[disagreement]]
+suite = "consensus-spec-tests"
+case = "tests/minimal/gloas/networking/gossip_execution_payload_bid/pyspec_tests/gossip_execution_payload_bid__ignore_builder_cannot_cover"
+reason = "The case leaves the builder with less than one ether it does not owe, and EthLib ignores the bid at the bid limit, before the check that the builder can cover it"
+source = "consensus-specs 1a48161515966f9c843672fa500861845ddc75d8 (#5805, merged 2026-11-11), specs/gloas/p2p-interface.md, get_builder_bid_limit and validate_execution_payload_bid_gossip, replaces the first-bid check with the bid limit, and changes this case in test_gossip_execution_payload_bid.py. The pinned v1.7.0-beta.4 archive predates that commit"
+class = "sources-disagree"
+reproduce = 'pytest -m archive "bindings/python/tests/parity/test_consensus.py::test_case[tests/minimal/gloas/networking/gossip_execution_payload_bid/pyspec_tests/gossip_execution_payload_bid__ignore_builder_cannot_cover]"'
+upstream = "As of 2026-11-25, consensus-specs #5805 (merged 2026-11-11) changes the case, and no release contains it: the latest release, v1.7.0-beta.4, predates it"
+
+[[disagreement]]
+suite = "consensus-spec-tests"
+case = "tests/minimal/heze/networking/gossip_execution_payload_bid/pyspec_tests/gossip_execution_payload_bid__ignore_duplicate_from_builder"
+reason = "The case expects a second bid of a builder for a slot and parent to be ignored, and EthLib forwards it while the builder is under its bid limit"
+source = "consensus-specs 1a48161515966f9c843672fa500861845ddc75d8 (#5805, merged 2026-11-11), specs/gloas/p2p-interface.md, get_builder_bid_limit and validate_execution_payload_bid_gossip, replaces the first-bid check with the bid limit, and changes this case in test_gossip_execution_payload_bid.py. The pinned v1.7.0-beta.4 archive predates that commit"
+class = "sources-disagree"
+reproduce = 'pytest -m archive "bindings/python/tests/parity/test_consensus.py::test_case[tests/minimal/heze/networking/gossip_execution_payload_bid/pyspec_tests/gossip_execution_payload_bid__ignore_duplicate_from_builder]"'
+upstream = "As of 2026-11-25, consensus-specs #5805 (merged 2026-11-11) changes the case, and no release contains it: the latest release, v1.7.0-beta.4, predates it"
+
+[[disagreement]]
+suite = "consensus-spec-tests"
+case = "tests/minimal/heze/networking/gossip_execution_payload_bid/pyspec_tests/gossip_execution_payload_bid__ignore_builder_cannot_cover"
+reason = "The case leaves the builder with less than one ether it does not owe, and EthLib ignores the bid at the bid limit, before the check that the builder can cover it"
+source = "consensus-specs 1a48161515966f9c843672fa500861845ddc75d8 (#5805, merged 2026-11-11), specs/gloas/p2p-interface.md, get_builder_bid_limit and validate_execution_payload_bid_gossip, replaces the first-bid check with the bid limit, and changes this case in test_gossip_execution_payload_bid.py. The pinned v1.7.0-beta.4 archive predates that commit"
+class = "sources-disagree"
+reproduce = 'pytest -m archive "bindings/python/tests/parity/test_consensus.py::test_case[tests/minimal/heze/networking/gossip_execution_payload_bid/pyspec_tests/gossip_execution_payload_bid__ignore_builder_cannot_cover]"'
+upstream = "As of 2026-11-25, consensus-specs #5805 (merged 2026-11-11) changes the case, and no release contains it: the latest release, v1.7.0-beta.4, predates it"
+
+[[disagreement]]
+suite = "consensus-spec-tests"
+case = "tests/mainnet/gloas/networking/gossip_execution_payload_bid/pyspec_tests/gossip_execution_payload_bid__ignore_duplicate_from_builder"
+reason = "The case expects a second bid of a builder for a slot and parent to be ignored, and EthLib forwards it while the builder is under its bid limit"
+source = "consensus-specs 1a48161515966f9c843672fa500861845ddc75d8 (#5805, merged 2026-11-11), specs/gloas/p2p-interface.md, get_builder_bid_limit and validate_execution_payload_bid_gossip, replaces the first-bid check with the bid limit, and changes this case in test_gossip_execution_payload_bid.py. The pinned v1.7.0-beta.4 archive predates that commit"
+class = "sources-disagree"
+reproduce = 'pytest -m archive "bindings/python/tests/parity/test_consensus.py::test_case[tests/mainnet/gloas/networking/gossip_execution_payload_bid/pyspec_tests/gossip_execution_payload_bid__ignore_duplicate_from_builder]"'
+upstream = "As of 2026-11-25, consensus-specs #5805 (merged 2026-11-11) changes the case, and no release contains it: the latest release, v1.7.0-beta.4, predates it"
+
+[[disagreement]]
+suite = "consensus-spec-tests"
+case = "tests/mainnet/gloas/networking/gossip_execution_payload_bid/pyspec_tests/gossip_execution_payload_bid__ignore_builder_cannot_cover"
+reason = "The case leaves the builder with less than one ether it does not owe, and EthLib ignores the bid at the bid limit, before the check that the builder can cover it"
+source = "consensus-specs 1a48161515966f9c843672fa500861845ddc75d8 (#5805, merged 2026-11-11), specs/gloas/p2p-interface.md, get_builder_bid_limit and validate_execution_payload_bid_gossip, replaces the first-bid check with the bid limit, and changes this case in test_gossip_execution_payload_bid.py. The pinned v1.7.0-beta.4 archive predates that commit"
+class = "sources-disagree"
+reproduce = 'pytest -m archive "bindings/python/tests/parity/test_consensus.py::test_case[tests/mainnet/gloas/networking/gossip_execution_payload_bid/pyspec_tests/gossip_execution_payload_bid__ignore_builder_cannot_cover]"'
+upstream = "As of 2026-11-25, consensus-specs #5805 (merged 2026-11-11) changes the case, and no release contains it: the latest release, v1.7.0-beta.4, predates it"
+
+[[disagreement]]
+suite = "consensus-spec-tests"
+case = "tests/mainnet/heze/networking/gossip_execution_payload_bid/pyspec_tests/gossip_execution_payload_bid__ignore_duplicate_from_builder"
+reason = "The case expects a second bid of a builder for a slot and parent to be ignored, and EthLib forwards it while the builder is under its bid limit"
+source = "consensus-specs 1a48161515966f9c843672fa500861845ddc75d8 (#5805, merged 2026-11-11), specs/gloas/p2p-interface.md, get_builder_bid_limit and validate_execution_payload_bid_gossip, replaces the first-bid check with the bid limit, and changes this case in test_gossip_execution_payload_bid.py. The pinned v1.7.0-beta.4 archive predates that commit"
+class = "sources-disagree"
+reproduce = 'pytest -m archive "bindings/python/tests/parity/test_consensus.py::test_case[tests/mainnet/heze/networking/gossip_execution_payload_bid/pyspec_tests/gossip_execution_payload_bid__ignore_duplicate_from_builder]"'
+upstream = "As of 2026-11-25, consensus-specs #5805 (merged 2026-11-11) changes the case, and no release contains it: the latest release, v1.7.0-beta.4, predates it"
+
+[[disagreement]]
+suite = "consensus-spec-tests"
+case = "tests/mainnet/heze/networking/gossip_execution_payload_bid/pyspec_tests/gossip_execution_payload_bid__ignore_builder_cannot_cover"
+reason = "The case leaves the builder with less than one ether it does not owe, and EthLib ignores the bid at the bid limit, before the check that the builder can cover it"
+source = "consensus-specs 1a48161515966f9c843672fa500861845ddc75d8 (#5805, merged 2026-11-11), specs/gloas/p2p-interface.md, get_builder_bid_limit and validate_execution_payload_bid_gossip, replaces the first-bid check with the bid limit, and changes this case in test_gossip_execution_payload_bid.py. The pinned v1.7.0-beta.4 archive predates that commit"
+class = "sources-disagree"
+reproduce = 'pytest -m archive "bindings/python/tests/parity/test_consensus.py::test_case[tests/mainnet/heze/networking/gossip_execution_payload_bid/pyspec_tests/gossip_execution_payload_bid__ignore_builder_cannot_cover]"'
+upstream = "As of 2026-11-25, consensus-specs #5805 (merged 2026-11-11) changes the case, and no release contains it: the latest release, v1.7.0-beta.4, predates it"

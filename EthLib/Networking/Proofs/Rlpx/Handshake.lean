@@ -13,14 +13,6 @@ import EthLib.Base.Proofs.Bytes
 An honest initiator and an honest recipient derive the same secrets.
 
 Each reading step accepts only public keys that lie on the curve and are not `O`.
-
-The key agreement checks this again, but a reader rejects a key off the curve before it runs.
-
-A reader of `auth` or `ack` ignores the list items after the fields it knows, as EIP-8 asks.
-
-Each side's egress MAC state is the other side's ingress MAC state.
-
-Two errors with one code come from one constructor.
 -/
 
 @[expose] public section
@@ -43,10 +35,10 @@ theorem decodePublicKey_encodePublicKey {p : Point} (hp : p.isOnCurve = true)
   | affine x y =>
     have h := decode_encodeUncompressed hp hinf
     simp only [decodePublicKey, encodePublicKey, Except.mapError]
-    simp only [encodeUncompressed] at h
-    have he : (⟨#[0x04] ++ (x.toBytes ++ y.toBytes).toArray⟩ : ByteArray) =
-        ⟨(0x04 :: x.toBytes ++ y.toBytes).toArray⟩ := by
-      simp
+    have he : (⟨#[0x04] ++ (x.toBytes ++ y.toBytes).data⟩ : ByteArray) =
+        (affine x y).encodeUncompressed := by
+      apply ByteArray.ext
+      simp [encodeUncompressed, Sec1.encode]
     rw [he, h]
 
 /-- 64 bytes decode to a point exactly when it lies on the curve, is not `O` and encodes to them. -/
@@ -70,10 +62,12 @@ theorem decodePublicKey_eq_ok_iff {bytes : Vector UInt8 64} {p : Point} :
         · have hsize := congrArg ByteArray.size hcomp
           rw [size_encodeCompressed] at hsize
           simp [ByteArray.size] at hsize
-        · have hlist := congrArg (fun b : ByteArray => b.data.toList) hunc
-          simp only [encodeUncompressed, Array.toList_append] at hlist
-          have htail : bytes.toList = x.toBytes ++ y.toBytes := List.cons.inj hlist |>.2
-          exact Vector.toList_inj.mp (by simpa [encodePublicKey] using htail.symm)
+        · have hdata := congrArg ByteArray.data hunc
+          simp only [encodeUncompressed, Sec1.encode, Bool.false_eq_true, ↓reduceIte,
+            ByteArray.data_append, Array.append_assoc, Array.append_right_inj] at hdata
+          apply Vector.toArray_inj.mp
+          simp only [encodePublicKey, Fp.toBytes, ByteArray.data_append]
+          exact hdata.symm
   · rintro ⟨hon, hinf, rfl⟩
     exact decodePublicKey_encodePublicKey hon hinf
 
@@ -136,12 +130,18 @@ theorem openPacket_sealPacket {key r : Fn} {iv : Aes.Block} {body padding packet
       rw [ByteArray.size_append] at hlen
       generalize hn : body.size + padding.size + Ecies.OVERHEAD = n at hsize hc hlen
       -- The two bytes of the size read back as the size.
-      have hread : n / 256 % 256 * 256 + n % 256 = n := by omega
-      have hrest : c.data.toList.length = n := hlen
+      have hread : Base.ByteOrder.ofBE (Base.ByteOrder.toBE 2 n).toList = n :=
+        Base.ByteOrder.ofBE_toBE_of_lt (by omega)
       have hopen : openPacket key (sizeBytes n ++ c) =
           (Ecies.decrypt key (sizeBytes n) c).mapError .ecies := by
-        simp only [openPacket, sizeBytes, ByteArray.data_append, Array.toList_append]
-        simp [hread, hrest]
+        have hl := Base.ByteOrder.length_toList_toBE 2 n
+        unfold openPacket sizeBytes
+        simp only [ByteArray.data_append, Array.toList_append, Vector.toList_toArray]
+        generalize Base.ByteOrder.toBE 2 n = v at hread hl ⊢
+        obtain ⟨l⟩ := v
+        simp only [Vector.toList_mk] at hread hl ⊢
+        rcases l with _ | ⟨hi, _ | ⟨lo, _ | _⟩⟩ <;> simp at hl hread ⊢
+        simp [hread, hlen]
       rw [hopen, Ecies.decrypt_encrypt hc]
       rfl
 
@@ -340,7 +340,9 @@ theorem finish_respond {initiator recipient : Keys} {sealingI sealingR : Sealing
     Except.pure, hnonce]
   rfl
 
-/-- Reading `auth` returns the initiator's static and ephemeral keys, both on the curve, not `O`. -/
+/-- Reading `auth` returns the initiator's static and ephemeral keys, both on the curve, not `O`.
+
+The key agreement checks this again, but a reader rejects a key off the curve before it runs. -/
 theorem readAuth_valid {staticKey : Fn} {packet : ByteArray}
     {auth : AuthMessage} {remoteStatic remoteEphemeral : Point}
     (h : readAuth staticKey packet = .ok (auth, remoteStatic, remoteEphemeral)) :

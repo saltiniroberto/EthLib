@@ -7,14 +7,9 @@ public import EthLib.Networking.Proofs.Discv5.Identity
 
 The logarithmic distance of discv5 is an ultrametric.
 
-- A distance is below `2^k` exactly when the logarithmic distance is at most `k`.
-- The distances from `a` to `b` and from `b` to `c` XOR to the distance from `a` to `c`.
-- The logarithmic distance from `a` to `c` is at most the larger of the two through `b`.
-- When the one from `a` to `b` is smaller, the one from `a` to `c` is the one from `b` to `c`.
+Section [Node Table][node-table] of `discv5-theory.md` groups the nodes of a table by this distance.
 
-"Node Table" of `discv5-theory.md` groups the nodes of a table by their logarithmic distance:
-
-<https://github.com/ethereum/devp2p/blob/277ceb399c15df86efb17d51eb58200c26879784/discv5/discv5-theory.md#node-table>
+[node-table]: https://github.com/ethereum/devp2p/blob/277ceb399c15df86efb17d51eb58200c26879784/discv5/discv5-theory.md#node-table
 -/
 
 @[expose] public section
@@ -41,7 +36,7 @@ theorem distance_lt_two_pow_iff {a b : NodeId} {k : Nat} :
 theorem distance_xor_distance (a b c : NodeId) :
     distance a b ^^^ distance b c = distance a c := by
   -- The value of `b` appears twice, and cancels.
-  simp only [distance, Nat.xor_assoc, ← Nat.xor_assoc (Base.bytesToNat b.toList), Nat.xor_self,
+  simp only [distance, Nat.xor_assoc, ← Nat.xor_assoc (Base.ByteOrder.ofBE b.toList), Nat.xor_self,
     Nat.zero_xor]
 
 /-- The logarithmic distance is an ultrametric.

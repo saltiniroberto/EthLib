@@ -46,7 +46,7 @@ variable {preset : Preset} {fork : Fork}
 /-- The error of a block whose bootstrap the node cannot serve, with code 404. -/
 def noBootstrap (root : Root) : ErrorMessage :=
   -- The source: code 404; the message is EthLib's.
-  { code := 404, message := s!"No bootstrap for block {toHex root.toArray}" }
+  { code := 404, message := s!"No bootstrap for block {toHex ⟨root.toArray⟩}" }
 
 /-- The bootstrap of a block of the store, from the block and its post state. -/
 def bootstrapFor (config : Config) (store : Store preset fork) (root : Root) :
@@ -196,7 +196,7 @@ def encodeUpdateChunk (config : Config) (genesisValidatorsRoot : Root)
   -- Its length must fit in 64 bits.
   unless rest.size < 2 ^ 64 do throw (.tooLong rest.size)
   -- The source: the byte length of the response chunk, as a little-endian Uint64, comes first.
-  return ⟨(uintToBytes 8 rest.size).toArray⟩ ++ rest
+  return ⟨(ByteOrder.toLE 8 rest.size).toArray⟩ ++ rest
 
 /-- The SSZ body of the updates answer: the chunks of the updates, one after another. -/
 def encodeUpdateChunks (config : Config) (genesisValidatorsRoot : Root)
@@ -212,7 +212,7 @@ def decodeUpdateChunksFrom (preset : Preset) (config : Config) (genesisValidator
   if _done : data.size ≤ start then .ok []
   else if header : start + 8 ≤ data.size then
     -- The source: the byte length of the chunk, a little-endian Uint64.
-    let length := bytesToUint (Vector.ofFn fun (i : Fin 8) => data[start + i]'(by omega))
+    let length := ByteOrder.ofLE (Vector.ofFn fun (i : Fin 8) => data[start + i]'(by omega))
     -- A chunk holds at least its 4-byte context.
     if short : length < 4 then .error (.shortChunk length)
     else if inside : start + 8 + length ≤ data.size then do

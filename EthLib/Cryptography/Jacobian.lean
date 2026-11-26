@@ -7,29 +7,22 @@ public import EthLib.Cryptography.Inverse
 
 A point `(x, y)` of the curve `y^2 = x^3 + a x + b` has the Jacobian forms `(X, Y, Z)`.
 
-They satisfy `x = X / Z^2` and `y = Y / Z^3`, for any nonzero `Z`.
-
-A form with `Z = 0` is the point at infinity.
-
-Addition and doubling then need no inverse.
-
-Only the conversion back to `(x, y)` inverts, once.
-
-The formulas are written once, for any representation of the field.
-
-A curve can then run them on Montgomery limbs.
-
 The formulas are those of Cohen, Miyaji and Ono (1998), formulas (5) and (6).
 
-The Explicit-Formulas Database lists them as add-1998-cmo-2 and dbl-1998-cmo-2:
-<https://hyperelliptic.org/EFD/g1p/auto-shortw-jacobian.html>.
+The [Explicit-Formulas Database][efd] lists them as add-1998-cmo-2 and dbl-1998-cmo-2.
+
+[efd]: https://hyperelliptic.org/EFD/g1p/auto-shortw-jacobian.html
 -/
 
 @[expose] public section
 
 namespace EthLib.Cryptography
 
-/-- A point in Jacobian coordinates over the integers mod `m`. -/
+/-- A point in Jacobian coordinates over the integers mod `m`.
+
+It stands for `x = X / Z^2` and `y = Y / Z^3`, for any nonzero `Z`.
+
+A form with `Z = 0` is the point at infinity. -/
 structure Jacobian (m : Nat) where
   /-- `X`, which is `x Z^2`. -/
   x : Fin m
@@ -59,6 +52,9 @@ abbrev ofCoords {m : Nat} (p : Coords (Fin m)) : Jacobian m :=
 
 namespace Coords
 
+-- The formulas are written once, for any representation of the field.
+--
+-- A curve can then run them on Montgomery limbs.
 variable {F : Type} [OfNat F 0] [OfNat F 1]
   [Add F] [Sub F] [Mul F] [DecidableEq F]
 
@@ -71,7 +67,9 @@ variable {F : Type} [OfNat F 0] [OfNat F 1]
 
 /-- The point `(x, y)` of a form, or nothing at infinity.
 
-This is the only inverse. -/
+It inverts once.
+
+Addition and doubling need no inverse. -/
 def toAffine (inverse : F → F) (p : Coords F) : Option (F × F) :=
   if p.z = 0 then none
   else
@@ -160,19 +158,34 @@ It stops once no bit of `k` is left, so a small scalar costs only its own bits. 
     let rest := mulBits a fuel (k / 2) (double a p)
     if k % 2 = 1 then add a p rest else rest
 
-/-- `k P + l Q`, for `k, l < 2^fuel`, with one chain of doublings for both, high bits first.
+/-- One chain of doublings for two products, high bits first, from bit `s` of each scalar.
+
+When `kb` and `lb` read the bits of `k` and `l`, with `k, l < 2^(s + fuel)`, it is the sum below.
+
+That sum is `(k / 2^s) P + (l / 2^s) Q`.
 
 `pq` is `P + Q`, which each pair of bits that are both `1` adds at once.
 
 It recurses on `fuel`, so the kernel can run it. -/
-@[specialize] def mulAddAux (a : F) (p q pq : Coords F) : Nat → Nat → Nat → Coords F
-  | 0, _, _ => infinity
-  | fuel + 1, k, l =>
-    -- `k P + l Q = 2 ((k / 2) P + (l / 2) Q) + (k mod 2) P + (l mod 2) Q`.
-    let acc := double a (mulAddAux a p q pq fuel (k / 2) (l / 2))
-    if k % 2 = 1 then
-      if l % 2 = 1 then add a acc pq else add a acc p
-    else if l % 2 = 1 then add a acc q else acc
+@[specialize] def mulAddBits (a : F) (p q pq : Coords F) (kb lb : Nat → Bool) :
+    Nat → Nat → Coords F
+  | 0, _ => infinity
+  | fuel + 1, s =>
+    -- `k P + l Q = 2 ((k / 2) P + (l / 2) Q) + (k mod 2) P + (l mod 2) Q`, at bit `s`.
+    --
+    -- The chain reads bit `s` instead of halving the scalars.
+    --
+    -- A scalar in fixed words then needs no new big integer at each step.
+    let acc := double a (mulAddBits a p q pq kb lb fuel (s + 1))
+    if kb s then
+      if lb s then add a acc pq else add a acc p
+    else if lb s then add a acc q else acc
+
+/-- `k P + l Q`, for `k, l < 2^fuel`, with one chain of doublings for both, high bits first.
+
+`pq` is `P + Q`, which each pair of bits that are both `1` adds at once. -/
+@[specialize] def mulAddAux (a : F) (p q pq : Coords F) (fuel k l : Nat) : Coords F :=
+  mulAddBits a p q pq k.testBit l.testBit fuel 0
 
 /-- `k P + l Q`, for `k, l < 2^fuel`, by simultaneous multiple point multiplication.
 
@@ -180,11 +193,10 @@ The two products share their doublings: `fuel` doublings in total, instead of `2
 
 The method is Algorithm 3.48, in §3.3.3 of "Guide to Elliptic Curve Cryptography".
 
-Its windows here have one bit.
-
 That book is by Hankerson, Menezes and Vanstone (Springer, 2004). -/
 @[specialize] def mulAdd (a : F) (fuel k : Nat) (p : Coords F) (l : Nat)
     (q : Coords F) : Coords F :=
+  -- The windows of the method have one bit here.
   mulAddAux a p q (add a p q) fuel k l
 
 end Coords

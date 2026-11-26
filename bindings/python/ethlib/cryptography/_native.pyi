@@ -80,6 +80,26 @@ def bls_decode_g2(point: bytes) -> bytes:
     """A compressed `G2` point, decoded, checked in the subgroup, and compressed again."""
     ...
 
+def bls_key_validate(pubkey: bytes) -> bool:
+    """Whether 48 bytes are a valid public key, by key validation of the BLS draft, §2.5."""
+    ...
+
+def bls_sk_to_pk(secret_key: bytes) -> bytes:
+    """The public key of a secret key of 32 big-endian bytes, by `SkToPk` of the BLS draft, §2.4."""
+    ...
+
+def bls_bytes48_to_g1(point: bytes) -> bytes:
+    """A compressed `G1` point, decoded without the subgroup check, and compressed again."""
+    ...
+
+def bls_g1_add(lhs: bytes, rhs: bytes) -> bytes:
+    """The sum of two compressed `G1` points of the curve, compressed, with no subgroup check."""
+    ...
+
+def bls_g1_neg(point: bytes) -> bytes:
+    """The negation of a compressed `G1` point of the curve, compressed, with no subgroup check."""
+    ...
+
 def bls_expand_message_xmd(message: bytes, dst: bytes, length: int) -> bytes:
     """The message expansion of [RFC 9380 §5.3.1][xmd], with SHA-256 as `H`."""
     ...
@@ -153,7 +173,7 @@ def xmss_verify(public_key: bytes, message: bytes, signature: bytes) -> bool:
     ...
 
 def xmss_signature_index(signature: bytes) -> int:
-    """The leaf index a 2404-byte signature carries."""
+    """The leaf index that a 2404-byte signature claims, read without verifying the signature."""
     ...
 
 def sphincs_key_gen(seed: bytes) -> bytes:
@@ -501,7 +521,7 @@ def discv5_derive_keys(ephemeral_key: bytes, dest_pubkey: bytes, node_id_a: byte
     ...
 
 def discv5_id_sign(static_key: bytes, challenge_data: bytes, ephemeral_pubkey: bytes, node_id_b: bytes) -> bytes:
-    """The ID signature of node A: the 64 bytes `r || s` of an ECDSA signature of the hash."""
+    """The ID signature of node A: the 64 bytes `r || s` of an ECDSA signature of the SHA-256 hash."""
     ...
 
 def discv5_id_verify(public_key: bytes, challenge_data: bytes, ephemeral_pubkey: bytes, node_id_b: bytes, signature: bytes) -> bool:
@@ -864,7 +884,7 @@ def consensus_builder_request_auth_failures(name: str, fork: str, config: dict[s
     """From Gloas: the failed checks of a request for a bid, by name, in order."""
     ...
 
-def consensus_builder_preferences_failures(name: str, fork: str, config: dict[str, Any] | None, agreed: bytes, current_slot: int, pubkey: bytes, version_header: str | None, data: bytes) -> list[str]:
+def consensus_builder_preferences_failures(name: str, fork: str, config: dict[str, Any] | None, agreed: bytes, current_slot: int, state: bytes | None, pubkey: bytes, version_header: str | None, data: bytes) -> list[str]:
     """From Gloas: the failed checks of a request that submits preferences, by name, in order."""
     ...
 
@@ -874,6 +894,10 @@ def consensus_default_auth_data(url: str) -> bytes:
 
 def consensus_relay_submission_bid(name: str, fork: str, data: bytes, pubkey: bytes) -> bytes:
     """The SSZ bytes of the bid that a relay serves from a submission, under a key."""
+    ...
+
+def consensus_relay_verify_bid_value(name: str, fork: str, payload: bytes, fee_recipient: bytes, bid_value: int, balance_difference: int) -> bool:
+    """From Deneb to Fulu: whether the value of a bid is the payment of its builder."""
     ...
 
 def consensus_relay_validators(name: str, fork: str, state: bytes, registry: list[bytes]) -> list[dict[str, Any]]:
@@ -1356,6 +1380,10 @@ def consensus_reqresp_response_bounds(name: str, chunk_fork: str, protocol: str)
     """The smallest and the largest length of the payload of a successful response chunk, as a pair."""
     ...
 
+def consensus_reqresp_decode_chunk(name: str, config: dict[str, Any] | None, genesis_validators_root: bytes, fork: str, protocol: str, data: bytes) -> tuple[str, int, bytes, bytes]:
+    """One response chunk at the bounds of its fork, with that fork, the code, context and payload."""
+    ...
+
 def consensus_reqresp_response_valid(name: str, fork: str, protocol: str, request: bytes, items: list[tuple[int | bytes, ...]], committee: list[int], genesis_validators_root: bytes | None) -> bool:
     """Whether a response is valid for its request, as a Boolean."""
     ...
@@ -1384,11 +1412,11 @@ def reqresp_max_compressed_len(n: int) -> int:
     """The most compressed bytes a reader accepts after a declared length `n`: `32 + n + n / 6`."""
     ...
 
-def reqresp_decode_payload(type_min: int, type_bound: int, data: bytes) -> bytes:
-    """The SSZ bytes of a payload, given the smallest and the largest encoding of its SSZ type."""
+def reqresp_decode_payload(max_payload_size: int, type_min: int, type_bound: int, data: bytes) -> bytes:
+    """The SSZ bytes of a payload, given the payload cap and the encoding bounds of its SSZ type."""
     ...
 
-def reqresp_decode_response_chunk(context_bytes: int, type_min: int, type_bound: int, data: bytes) -> tuple[int, bytes, bytes]:
+def reqresp_decode_response_chunk(max_payload_size: int, context_bytes: int, type_min: int, type_bound: int, data: bytes) -> tuple[int, bytes, bytes]:
     """One response chunk, given the number of context bytes that the method sends."""
     ...
 
@@ -1721,7 +1749,7 @@ def snappy_encode_frames(data: bytes) -> bytes:
     ...
 
 def snappy_masked_crc(data: bytes) -> int:
-    """The masked CRC-32C that a data chunk stores (§3)."""
+    """The masked CRC-32C that a data chunk stores (§3), at its start."""
     ...
 
 def varint_encode(value: int) -> bytes:
@@ -1924,12 +1952,12 @@ def gossip_message_id(fork: str, topic: bytes, data: bytes) -> bytes:
     """The message ID of a message on a topic of a fork: the first 20 bytes of a SHA-256 digest."""
     ...
 
-def gossip_decode_payload(type_bound: int, data: bytes) -> bytes:
-    """The SSZ bytes of the data of a gossip message, given the size bound of its SSZ type."""
+def gossip_decode_payload(max_payload_size: int, type_bound: int, data: bytes) -> bytes:
+    """The SSZ bytes of the data of a gossip message, given the payload cap and the size bound of its type."""
     ...
 
-def gossip_rpc_decode(data: bytes) -> dict[str, Any]:
-    """The RPC that the bytes encode, under the `StrictNoSign` policy."""
+def gossip_rpc_decode(max_payload_size: int, data: bytes) -> dict[str, Any]:
+    """The RPC that the bytes encode, under the `StrictNoSign` policy and the size limit of the cap."""
     ...
 
 def gossip_rpc_encode(rpc: dict[str, Any]) -> bytes:
@@ -2090,6 +2118,14 @@ def mainnet_active_fork(number: int, timestamp: int) -> str | None:
 
 def hoodi_active_fork(number: int, timestamp: int) -> str | None:
     """The name of the active fork of Hoodi at a block, or `None` when none is active."""
+    ...
+
+def sepolia_active_fork(number: int, timestamp: int) -> str | None:
+    """The name of the active fork of Sepolia at a block, or `None` when none is active."""
+    ...
+
+def chain_config(name: str) -> dict[str, Any]:
+    """The configuration of a chain that EthLib holds, as a `dict`."""
     ...
 
 def active_fork(config: dict[str, Any], number: int, timestamp: int) -> str | None:

@@ -21,13 +21,7 @@ At Fulu the body has the thirteen fields of Electra, and at Gloas the thirteen f
 
 At Heze the body has eleven of the thirteen places of Gloas, and two gaps.
 
-Each field that Heze keeps sits at the place it has at Gloas.
-
 The vectors whose length comes from the preset need that length to be positive.
-
-The genesis block holds the state root, and the defaults of every other field.
-
-A block has the root of its header, whose last field is the root of the body of the block.
 -/
 
 @[expose] public section
@@ -171,7 +165,7 @@ theorem BeaconBlock.hashTreeRoot_header {block : BeaconBlock preset fork} {bodyR
     hashTreeRoot (BeaconBlockHeader.mk block.slot block.proposerIndex block.parentRoot
       block.stateRoot bodyRoot) = hashTreeRoot block := by
   -- The body and its root have the same untyped root.
-  have bodyOk : SszType.root block.body = .ok bodyRoot.toArray := by
+  have bodyOk : SszType.root block.body = .ok ⟨bodyRoot.toArray⟩ := by
     revert rooted
     unfold SszType.hashTreeRoot
     cases SszType.root block.body with
@@ -180,7 +174,7 @@ theorem BeaconBlock.hashTreeRoot_header {block : BeaconBlock preset fork} {bodyR
       simp only [bind, Except.bind]
       intro chunked
       rw [toChunk_ok_iff.mp chunked]
-  have rootOk : SszType.root bodyRoot = .ok bodyRoot.toArray := by
+  have rootOk : SszType.root bodyRoot = .ok ⟨bodyRoot.toArray⟩ := by
     rw [LawfulSszType.root_eq]
     exact SszType.hashTreeRoot_ok_iff.mp (SszType.hashTreeRoot_bytes32 bodyRoot)
   -- Both containers summarize the same five roots.
@@ -231,7 +225,7 @@ instance : LawfulSszType (BeaconBlockBody preset fork) :=
           altair, bellatrix, capella, deneb, electra, gloas, heze, not_lt_of_switch,
           lt_of_not_switch],
      by simp [BeaconBlockBody.names],
-     firstDuplicate_of_nodup _ BeaconBlockBody.names_nodup⟩
+     BeaconBlockBody.names_nodup⟩
     (fun _ => rfl) (fun _ => rfl)
 
 instance : LawfulSszType (BeaconBlock preset fork) :=

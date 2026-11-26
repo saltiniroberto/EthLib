@@ -12,6 +12,7 @@ What a codeword is, and what it guarantees.
 
 - Its 58 digits sum to the target `T = 106`.
 - Its digits determine the digest: no two digests share a codeword.
+- A digest is a codeword exactly when it spells the digits in base 4 and they sum to the target.
 - Two distinct codewords are incomparable: each has a digit below the other's.
 -/
 
@@ -25,11 +26,10 @@ variable {d d' : Digest} {x y : Vector (Fin CHAIN_LENGTH) V}
 
 /-! ## Unfolding a codeword -/
 
-/-- Two bits of a lane, at offset `k < 64`, are its integer's base-4 digit at that bit. -/
-private theorem toNat_shiftRight_and_three (x : UInt64) (k : Nat) (hk : k < 64) :
-    ((x >>> k.toUInt64) &&& 3).toNat = x.toNat / 2 ^ k % 4 := by
-  rw [UInt64.toNat_and, UInt64.toNat_shiftRight, show (3 : UInt64).toNat = 2 ^ 2 - 1 from rfl,
-    Nat.and_two_pow_sub_one_eq_mod, Nat.shiftRight_eq_div_pow]
+/-- A lane shifted by `k < 64` bits, modulo 4, is its integer's base-4 digit at bit `k`. -/
+private theorem toNat_shiftRight_mod_four (x : UInt64) (k : Nat) (hk : k < 64) :
+    ((x >>> k.toUInt64) % 4).toNat = x.toNat / 2 ^ k % 4 := by
+  rw [UInt64.toNat_mod, UInt64.toNat_shiftRight, Nat.shiftRight_eq_div_pow]
   congr 3
   simp only [Nat.toUInt64_eq, UInt64.toNat_ofNat', Nat.reducePow]
   omega
@@ -62,8 +62,10 @@ theorem digit_val (d : Digest) (i : Fin DIGITS) :
   simp only [DIGITS] at hi
   simp only [Internal.digit, Hash.Keccak.Lanes2.toNat, digit_lanes _ _ _ d.lo.toNat_lt]
   split
-  · next h => rw [toNat_shiftRight_and_three _ _ (by omega), Nat.pow_mul]
-  · next h => rw [toNat_shiftRight_and_three _ _ (by omega), Nat.pow_mul]
+  · next h => rw [toNat_shiftRight_mod_four _ _ (by omega), Nat.pow_mul, Nat.mod_eq_of_lt h]
+  · next h =>
+    rw [toNat_shiftRight_mod_four _ _ (by omega), Nat.pow_mul,
+      Nat.mod_eq_sub_mod (Nat.le_of_not_lt h), Nat.mod_eq_of_lt (show i.val - 32 < 32 by omega)]
 
 /-- Digit `i` of a digest's vector of digits, as a number. -/
 @[simp] theorem digits_getElem_val (d : Digest) (i : Nat) (hi : i < DIGITS) :
@@ -76,8 +78,8 @@ theorem digits_eq_digits4 : Internal.digits = fun d => Wots.digits4 d.bytes := b
   refine Vector.ext fun i hi => Fin.ext ?_
   have h := Vector.getElem_ofFn (i := i) (by simpa only [DIGITS] using hi)
     (f := fun k : Fin 64 =>
-      (⟨bytesToUint d.bytes / 4 ^ k.val % 4, Nat.mod_lt _ (by decide)⟩ : Fin 4))
-  rw [digits_getElem_val, ← Hash.Keccak.Lanes2.bytesToUint_bytes]
+      (⟨Base.ByteOrder.ofLE d.bytes / 4 ^ k.val % 4, Nat.mod_lt _ (by decide)⟩ : Fin 4))
+  rw [digits_getElem_val, ← Hash.Keccak.Lanes2.ofLE_bytes]
   exact (congrArg Fin.val h).symm
 
 /-- The codeword test is the form that builds all 64 digits, then tests the tail and the sum. -/
@@ -101,6 +103,8 @@ theorem codeword?_eq_digits (d : Digest) :
 A codeword holds the digest's first 58 digits.
 
 Its other 6 digits are zero, and it sums to `T`.
+
+The equivalence below gives the converse, from the integer and the sum alone.
 -/
 theorem codeword?_eq_some (h : codeword? d = some x) :
     (∀ i : Fin V, (x[i] : Nat) = d.toNat / 4 ^ i.val % 4) ∧
@@ -180,6 +184,55 @@ theorem eq_of_codeword (h : codeword? d = some x) (h' : codeword? d' = some x) :
   -- Both digests spell the same number, and two lanes are their number.
   have := (toNat_of_codeword h).trans (toNat_of_codeword h').symm
   exact Hash.Keccak.Lanes2.toNat_injective this
+
+/-! ## Every string of digits is a digest's
+
+A digest is its 64 digits, so every 58 digits with the target sum are a codeword's. -/
+
+/-- There are `2^128` digests of 16 bytes. -/
+theorem card_digest : Fintype.card Digest = 2 ^ 128 :=
+  Hash.Keccak.card_lanes2
+
+/-- Every string of 64 digits is the digits of exactly one digest. -/
+theorem digits_bijective : Function.Bijective (Internal.digits) := by
+  -- The digits are those of the digest's bytes, and the bytes determine the digest.
+  have hinj : Function.Injective Internal.digits := by
+    rw [digits_eq_digits4]
+    exact fun a b h => Hash.Keccak.Lanes2.bytes_injective (Wots.digits4_bijective.1 h)
+  refine (Fintype.bijective_iff_injective_and_card _).mpr ⟨hinj, ?_⟩
+  rw [card_digest, Fintype.card_congr (arrayVectorEquivFin _ _), Fintype.card_fun, Fintype.card_fin,
+    Fintype.card_fin]
+  norm_num [DIGITS, CHAIN_LENGTH]
+
+/-- Every 58 digits that sum to `T` are the codeword of a digest.
+
+That digest's other 6 digits are zero. -/
+theorem exists_codeword (hx : ∑ i : Fin V, (x[i] : Nat) = TARGET_SUM) :
+    ∃ d, codeword? d = some x := by
+  -- Pad the 58 digits with 6 zero digits, and take the digest of those 64 digits.
+  obtain ⟨d, hd⟩ := digits_bijective.2
+    (Vector.ofFn fun i : Fin DIGITS => if h : i.val < V then x[i.val] else ⟨0, by decide⟩)
+  refine ⟨d, ?_⟩
+  simp only [codeword?_eq_digits, hd]
+  simp only [List.all_eq_true, beq_iff_eq, Bool.and_eq_true]
+  simp
+  refine ⟨fun z hz => ?_, by rw [digitSum_eq_sum]; exact hx⟩
+  obtain ⟨k, hk, rfl⟩ := List.getElem_of_mem hz
+  simp [List.getElem_drop]
+
+/-- A digest is the codeword `x` exactly when `LE^-1(D) = sum_{i < 58} x_i 4^i` and `x` sums to `T`.
+
+The 6 zero digits are part of the first condition, since that sum is below `4^58`.
+
+The integer determines the digits only because each is below 4, so a circuit range-checks them. -/
+theorem codeword?_eq_some_iff :
+    codeword? d = some x ↔
+      d.toNat = ∑ i : Fin V, (x[i] : Nat) * 4 ^ i.val ∧ ∑ i : Fin V, (x[i] : Nat) = TARGET_SUM := by
+  refine ⟨fun h => ⟨toNat_of_codeword h, sum_of_codeword h⟩, fun ⟨hd, hs⟩ => ?_⟩
+  -- Some digest is the codeword `x`, and it spells the same integer as `d`.
+  obtain ⟨d', hd'⟩ := exists_codeword hs
+  -- Two lanes are their integer, so that digest is `d`.
+  rwa [Hash.Keccak.Lanes2.toNat_injective ((toNat_of_codeword hd').trans hd.symm)] at hd'
 
 /-! ## Incomparability
 

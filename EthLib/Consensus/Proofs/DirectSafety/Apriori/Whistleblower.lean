@@ -251,8 +251,7 @@ private theorem slashing_credits_le_newly_slashed {config : Config} {checks : Si
     {g x y : ForkedBeaconState preset} (shared : Run config checks g x)
     (tail : Run config checks x y) (genesis : Genesis (config := config) (checks := checks) g)
     (regime : .pectra ≤ x.fork ∨ y.fork < .pectra) (early : y.fork < .glamsterdam)
-    (activation : preset.MAX_EFFECTIVE_BALANCE ≤ preset.MIN_ACTIVATION_BALANCE)
-    (compounding : preset.MIN_ACTIVATION_BALANCE ≤ preset.MAX_EFFECTIVE_BALANCE_ELECTRA)
+    (caps : CapOrder preset)
     (high : Nat) (endEpoch : (getCurrentEpoch y.state).toNat ≤ high + 1)
     {events : List (BalanceEvent preset)} (replayed : tail.balanceEvents high = .ok events) :
     (events.map fun e => if e.source = .slashings then e.creditLimit else 0).sum ≤
@@ -266,7 +265,7 @@ private theorem slashing_credits_le_newly_slashed {config : Config} {checks : Si
   let keys := (Finset.range y.state.validators.data.size).filter fun i =>
     !(x.state.validators.data[i]?.map (·.slashed)).getD false &&
       (y.state.validators.data[i]?.map (·.slashed)).getD false
-  apply le_trans (slashing_credits_le shared tail genesis early compounding high endEpoch keys
+  apply le_trans (slashing_credits_le shared tail genesis early caps.compounding high endEpoch keys
     (fun _ => (if .pectra ≤ x.fork then preset.MAX_EFFECTIVE_BALANCE_ELECTRA.toNat
         else preset.MAX_EFFECTIVE_BALANCE.toNat) /
       (if .pectra ≤ x.fork then preset.WHISTLEBLOWER_REWARD_QUOTIENT_ELECTRA.toNat
@@ -313,8 +312,8 @@ private theorem slashing_credits_le_newly_slashed {config : Config} {checks : Si
     cases found : a.state.validators.data[i]? with
     | none => simp [effectiveAt, found]
     | some v =>
-      have bounded := (shared.append pre).effectiveBalance_capped genesis activation compounding
-        aEarly v (Array.mem_of_getElem? found)
+      have bounded := (shared.append pre).effectiveBalance_capped genesis caps
+        v (Array.mem_of_getElem? found)
       have largest : withdrawalMaxEffectiveBalance preset a.fork v ≤
           (if .pectra ≤ x.fork then preset.MAX_EFFECTIVE_BALANCE_ELECTRA
             else preset.MAX_EFFECTIVE_BALANCE) := by
@@ -323,7 +322,7 @@ private theorem slashing_credits_le_newly_slashed {config : Config} {checks : Si
         · simp only [sameRegime.mpr electra, electra, ↓reduceIte]
           split
           · exact UInt64.le_refl _
-          · exact compounding
+          · exact caps.compounding
         · simp [electra, mt sameRegime.mp electra]
       simpa [effectiveAt, found, apply_ite UInt64.toNat] using UInt64.le_iff_toNat_le.mp
         (UInt64.le_trans bounded largest)
@@ -347,7 +346,7 @@ private theorem slashing_credits_le_allowance {g x y : ForkedBeaconState preset}
         (unassignedPreStake x) (fundingCarry x) (exitedSlashableCount x)
         (driftHorizon x high) (preElectraEpochs config x high) := by
   have charged := slashing_credits_le_newly_slashed shared tail genesis regime early
-    caps.activation caps.compounding high endEpoch replayed
+    caps high endEpoch replayed
   have classified := newly_slashed_count_le shared genesis tail caps aligned early finite
   have index : (getCurrentEpoch y.state).toNat - (getCurrentEpoch x.state).toNat ≤
       driftHorizon x high + 1 := by unfold driftHorizon; omega
@@ -541,7 +540,7 @@ private theorem step_weight {g u v : ForkedBeaconState preset}
 
 This holds when it is in the base after the step, or slashed after it. -/
 private theorem pooled_of_step {u v : ForkedBeaconState preset}
-    (step : Step config checks u v) (caps : CapOrder preset) (early : v.fork < .glamsterdam)
+    (step : Step config checks u v) (caps : CapOrder preset)
     (holds : Invariant u.state) (i : Nat) (w : Validator)
     (found : u.state.validators.data[i]? = some w) (unslashed : w.slashed = false)
     (later : pooled v i = true ∨ (v.state.validators.data[i]?.map (·.slashed)).getD false = true) :
@@ -549,8 +548,7 @@ private theorem pooled_of_step {u v : ForkedBeaconState preset}
   simp only [pooled, found, Option.map_some, Option.getD_some, unslashed, Bool.not_false,
     Bool.true_and, decide_eq_true_eq]
   by_contra withdrawn
-  have kept := (EthLib.Consensus.Internal.CapStep.run (Run.nil.snoc step) caps.activation
-    caps.compounding early).1
+  have kept := (EthLib.Consensus.Internal.CapStep.run (Run.nil.snoc step) caps).1
   obtain ⟨z, read, _⟩ := kept.monotone i w found
   have exited : w.exitEpoch ≤ getCurrentEpoch u.state :=
     UInt64.le_trans (holds.exitsOrdered w (Array.mem_of_getElem? found))
@@ -611,7 +609,7 @@ private theorem step_base_split {g u v : ForkedBeaconState preset}
           | true =>
             obtain ⟨z, read, marked⟩ := step.slashedPersistence i _ found flag
             simp [pooled, read, marked] at member
-        have before := pooled_of_step step caps early holds i _ found unslashed (.inl member)
+        have before := pooled_of_step step caps holds i _ found unslashed (.inl member)
         simpa [kept, before, member, present] using bound
       · rename_i absent
         simpa [absent] using bound
@@ -672,7 +670,7 @@ private theorem step_slashing_le {g u v : ForkedBeaconState preset}
           simp [present]
         have flag : u.state.validators.data[i].slashed = false := by
           simpa [found] using newly.1
-        have before := pooled_of_step step caps early holds i _ found flag (.inr newly.2)
+        have before := pooled_of_step step caps holds i _ found flag (.inr newly.2)
         have after : pooled v i = false := by
           cases read : v.state.validators.data[i]? with
           | none => simp [read] at newly
@@ -815,14 +813,9 @@ private theorem block_credits_le {g : ForkedBeaconState preset} {fork : Fork}
 
 They also keep the epoch, and keep each withdrawable epoch that is after the epoch. -/
 private theorem prefix_withdrawable {fork : Fork}
-    {s cached justified scored rewarded registered slashed reset : BeaconState preset fork}
+    {s cached reset : BeaconState preset fork}
     (electra : .pectra ≤ fork) (cachedOk : processSlot s = .ok cached)
-    (justifiedOk : EpochStage.Edge config checks .justification cached justified)
-    (scoredOk : EpochStage.Edge config checks .inactivity justified scored)
-    (rewardedOk : processRewardsAndPenalties config scored = .ok rewarded)
-    (registeredOk : processRegistryUpdates config rewarded = .ok registered)
-    (slashedOk : processSlashings registered = .ok slashed)
-    (resetOk : EpochStage.Edge config checks .eth1Reset slashed reset) :
+    (epoch : EpochPrefix config checks cached reset) :
     reset.validators.data.size = s.validators.data.size ∧
       getCurrentEpoch reset = getCurrentEpoch s ∧
       ∀ (i : Nat) (v : Validator), s.validators.data[i]? = some v →
@@ -830,43 +823,43 @@ private theorem prefix_withdrawable {fork : Fork}
           ∃ w, reset.validators.data[i]? = some w ∧
             getCurrentEpoch reset < w.withdrawableEpoch := by
   obtain ⟨_, _, _, _, rfl⟩ := processSlot_ok cachedOk
-  have one := justifiedOk.records ⟨nofun, nofun, nofun, nofun, nofun, nofun⟩
-  have two := scoredOk.records ⟨nofun, nofun, nofun, nofun, nofun, nofun⟩
+  have one := epoch.justifiedOk.records ⟨nofun, nofun, nofun, nofun, nofun, nofun⟩
+  have two := epoch.scoredOk.records ⟨nofun, nofun, nofun, nofun, nofun, nofun⟩
   have three := EpochStage.Edge.validators_eq (stage := .rewards) (config := config)
-    (checks := checks) rewardedOk ⟨nofun, nofun, nofun⟩
-  have threeSlot := (frame_processRewardsAndPenalties rewardedOk).slot
-  have fourSlot := (frame_processRegistryUpdates registeredOk).slot
-  have fourSize := (sameSizes_processRegistryUpdates registeredOk).1
+    (checks := checks) epoch.rewardedOk ⟨nofun, nofun, nofun⟩
+  have threeSlot := (frame_processRewardsAndPenalties epoch.rewardedOk).slot
+  have fourSlot := (frame_processRegistryUpdates epoch.registeredOk).slot
+  have fourSize := (sameSizes_processRegistryUpdates epoch.registeredOk).1
   have five := EpochStage.Edge.validators_eq (stage := .slashings) (config := config)
-    (checks := checks) slashedOk ⟨nofun, nofun, nofun⟩
-  have fiveSlot := (frame_processSlashings slashedOk).slot
-  have six := resetOk.records ⟨nofun, nofun, nofun, nofun, nofun, nofun⟩
-  have epoch : getCurrentEpoch reset = getCurrentEpoch s := by
+    (checks := checks) epoch.slashedOk ⟨nofun, nofun, nofun⟩
+  have fiveSlot := (frame_processSlashings epoch.slashedOk).slot
+  have six := epoch.resetOk.records ⟨nofun, nofun, nofun, nofun, nofun, nofun⟩
+  have sameEpoch : getCurrentEpoch reset = getCurrentEpoch s := by
     simp only [getCurrentEpoch, six.2.2.2.2, fiveSlot, fourSlot, threeSlot, two.2.2.2.2,
       one.2.2.2.2]
-  have rewardedEpoch : getCurrentEpoch rewarded = getCurrentEpoch s := by
+  have rewardedEpoch : getCurrentEpoch epoch.rewarded = getCurrentEpoch s := by
     simp only [getCurrentEpoch, threeSlot, two.2.2.2.2, one.2.2.2.2]
-  refine ⟨?_, epoch, fun i v found late => ?_⟩
+  refine ⟨?_, sameEpoch, fun i v found late => ?_⟩
   · rw [six.1, five, fourSize, three, two.1, one.1]
-  · have atRewarded : rewarded.validators.data[i]? = some v := by
+  · have atRewarded : epoch.rewarded.validators.data[i]? = some v := by
       rw [three, two.1, one.1]; exact found
-    have atReset (w : Validator) (read : registered.validators.data[i]? = some w) :
+    have atReset (w : Validator) (read : epoch.registered.validators.data[i]? = some w) :
         reset.validators.data[i]? = some w := by
       rw [six.1, five]; exact read
-    rw [epoch]
+    rw [sameEpoch]
     by_cases assigned : v.exitEpoch = FAR_FUTURE_EPOCH
     · obtain ⟨w, read, same | after⟩ := processRegistryUpdates_withdrawableEpoch_of_unassigned
-        electra registeredOk i v atRewarded assigned
+        electra epoch.registeredOk i v atRewarded assigned
       · exact ⟨w, atReset w read, same ▸ late⟩
       · exact ⟨w, atReset w read, rewardedEpoch ▸ after⟩
     · obtain ⟨w, read, same⟩ := processRegistryUpdates_withdrawableEpoch_of_assigned
-        electra registeredOk i v atRewarded assigned
+        electra epoch.registeredOk i v atRewarded assigned
       exact ⟨w, atReset w read, same ▸ late⟩
 
 /-- A key of the slashable base after a step, present before it, was in the base before it. -/
 private theorem pooled_before {g u v : ForkedBeaconState preset}
     (shared : Run config checks g u) (genesis : Genesis (config := config) (checks := checks) g)
-    (step : Step config checks u v) (caps : CapOrder preset) (early : v.fork < .glamsterdam)
+    (step : Step config checks u v) (caps : CapOrder preset)
     (i : Nat) (present : i < u.state.validators.data.size) (member : pooled v i = true) :
     pooled u i = true := by
   have found : u.state.validators.data[i]? = some u.state.validators.data[i] := by
@@ -877,7 +870,7 @@ private theorem pooled_before {g u v : ForkedBeaconState preset}
     | true =>
       obtain ⟨z, read, marked⟩ := step.slashedPersistence i _ found flag
       simp [pooled, read, marked] at member
-  exact pooled_of_step step caps early (run_justified_separated shared genesis).1 i _ found
+  exact pooled_of_step step caps (run_justified_separated shared genesis).1 i _ found
     unslashed (.inl member)
 
 /-- From Electra, the pending deposits credit the slashable base at most their funding credit.
@@ -890,23 +883,15 @@ private theorem deposit_le_funding {g u v : ForkedBeaconState preset}
     (step : Step config checks u v) (caps : CapOrder preset) (electra : .pectra ≤ u.fork)
     (early : v.fork < .glamsterdam)
     {events : List (BalanceEvent preset)} (replayed : step.balanceEvents = .ok events)
-    {cached justified scored rewarded registered slashed reset deposited :
-      BeaconState preset u.fork}
-    (cachedOk : processSlot u.state = .ok cached)
-    (justifiedOk : EpochStage.Edge config checks .justification cached justified)
-    (scoredOk : EpochStage.Edge config checks .inactivity justified scored)
-    (rewardedOk : processRewardsAndPenalties config scored = .ok rewarded)
-    (registeredOk : processRegistryUpdates config rewarded = .ok registered)
-    (slashedOk : processSlashings registered = .ok slashed)
-    (resetOk : EpochStage.Edge config checks .eth1Reset slashed reset)
+    {cached reset deposited : BeaconState preset u.fork}
+    (cachedOk : processSlot u.state = .ok cached) (epoch : EpochPrefix config checks cached reset)
     (member : (⟨.deposits, ⟨u.fork, reset⟩, ⟨u.fork, deposited⟩,
       consumedDeposits reset deposited electra, 0⟩ : BalanceEvent preset) ∈ events) :
     (∑ i ∈ Finset.range v.state.validators.data.size, if pooled v i then
         actualBalanceAt ⟨u.fork, deposited⟩ i - actualBalanceAt ⟨u.fork, reset⟩ i else 0) ≤
       funding_deposit_credit (⟨.deposits, ⟨u.fork, reset⟩, ⟨u.fork, deposited⟩,
         consumedDeposits reset deposited electra, 0⟩ : BalanceEvent preset) := by
-  obtain ⟨size, epoch, kept⟩ := prefix_withdrawable electra cachedOk justifiedOk scoredOk
-    rewardedOk registeredOk slashedOk resetOk
+  obtain ⟨size, sameEpoch, kept⟩ := prefix_withdrawable electra cachedOk epoch
   obtain ⟨-, -, -, -, matched, -, -⟩ := replay_event_provenance shared (Run.nil.snoc step)
     genesis early _ (Nat.le_succ _) events (single_balanceEvents step replayed) _ member
   simp only [funding_deposit_credit, electra, and_self, ↓reduceIte]
@@ -925,7 +910,7 @@ private theorem deposit_le_funding {g u v : ForkedBeaconState preset}
           decide (w.withdrawableEpoch.toNat ≤ (getCurrentEpoch reset).toNat)).getD false =
             false := by
         by_cases present : i < u.state.validators.data.size
-        · have before := pooled_before shared genesis step caps early i present member
+        · have before := pooled_before shared genesis step caps i present member
           have found : u.state.validators.data[i]? = some u.state.validators.data[i] := by
             simp [present]
           simp only [pooled, found, Option.map_some, Option.getD_some, Bool.and_eq_true,
@@ -949,13 +934,7 @@ private theorem deposit_le_funding {g u v : ForkedBeaconState preset}
 
 /-- From Electra, the pending consolidations of an epoch move at most a weight.
 
-That weight is the weight of their sources at the start of the slot.
-
-The sources that move a positive amount leave the slashable base in the slot.
-
-Skipped slashed sources move nothing, and are not in the base at the start of the slot.
-
-A source that is a target earlier in the same pass moves at most its prior effective balance. -/
+That weight is the weight of their sources at the start of the slot. -/
 private theorem pass_le_freed {g u v : ForkedBeaconState preset}
     (shared : Run config checks g u) (genesis : Genesis (config := config) (checks := checks) g)
     (step : Step config checks u v)
@@ -976,11 +955,16 @@ private theorem pass_le_freed {g u v : ForkedBeaconState preset}
     (final : v.state.validators.data = updated.validators.data)
     (nextEpoch : (getCurrentEpoch v.state).toNat = (getCurrentEpoch u.state).toNat + 1) :
     consumedConsolidations deposited middle electra ≤
+      -- The sources that move a positive amount leave the slashable base in the slot.
+      --
+      -- Skipped slashed sources move nothing, and are not in the base at the start of the slot.
+      --
+      -- A source that was a target earlier in this pass moves at most its prior effective balance.
       ∑ i ∈ Finset.range u.state.validators.data.size,
         if pooled u i && !pooled v i then weight u i else 0 := by
   have uEarly := Nat.lt_of_le_of_lt step.chainStep.fork_le early
-  have invariant := Run.pendingConsolidation_invariant shared genesis uEarly electra delay
-  have ordered := ((Run.pendingConsolidationsOrdered shared genesis uEarly delay).2 electra).2
+  have invariant := Run.pendingConsolidation_invariant shared genesis electra delay
+  have ordered := ((Run.pendingConsolidationsOrdered shared genesis delay).2 electra).2
   have sites := step.balanceEvents_sites early (run_justified_separated shared genesis).1
     compounding replayed
   obtain ⟨-, -, -, -, -, -, -, -, -, -, -, slashedInto, -⟩ := sites _ member
@@ -1132,9 +1116,11 @@ private theorem slot_credits_le {g u v : ForkedBeaconState preset}
     · refine (List.sum_le_sum fun e member => ordinary e member
         (by rw [crossing e member]; decide) (by rw [crossing e member]; decide)).trans ?_
       omega
-  obtain ⟨justified, scored, rewarded, registered, slashed, reset, deposited, rewardEvents, limit,
-    -, justifiedOk, scoredOk, rewardedOk, registeredOk, slashedOk, resetOk, depositedOk,
-    consolidatedOk, rewardReplay, shapeEq⟩ := funding_epoch_site beforeOk replay
+  obtain ⟨reset, deposited, ⟨⟨justified, scored, rewarded, registered, slashed, justifiedOk,
+    scoredOk, rewardedOk, registeredOk, slashedOk, resetOk⟩, rewardEvents, limit, rewardReplay, _⟩,
+    depositedOk, consolidatedOk, shapeEq⟩ := funding_epoch_site beforeOk replay
+  have stages : EpochPrefix config checks cached reset :=
+    ⟨_, _, _, _, _, justifiedOk, scoredOk, rewardedOk, registeredOk, slashedOk, resetOk⟩
   simp only [electra, ↓reduceDIte] at shapeEq
   subst shapeEq
   simp only [EpochStage.Edge, electra, ↓reduceDIte] at depositedOk consolidatedOk
@@ -1159,10 +1145,9 @@ private theorem slot_credits_le {g u v : ForkedBeaconState preset}
           consumedConsolidations deposited middle electra,
           consumedConsolidations deposited middle electra⟩] ++ crossings := by simp
   have deposit := deposit_le_funding shared genesis step caps electra early replayed cachedOk
-    justifiedOk scoredOk rewardedOk registeredOk slashedOk resetOk depMember
+    stages depMember
   -- The pass reads the queue, the effective balances and the epoch at the start of the slot.
-  obtain ⟨_, epochReset, _⟩ := prefix_withdrawable electra cachedOk justifiedOk scoredOk
-    rewardedOk registeredOk slashedOk resetOk
+  obtain ⟨_, epochReset, _⟩ := prefix_withdrawable electra cachedOk stages
   have cachedSame : cached.validators = u.state.validators ∧
       cached.pendingConsolidations = u.state.pendingConsolidations := by
     obtain ⟨_, _, _, _, rfl⟩ := processSlot_ok cachedOk
@@ -1422,7 +1407,7 @@ private theorem scheduled_reserve_le_pre {g x : ForkedBeaconState preset}
       simp only [isActiveValidator, Bool.and_eq_false_iff, decide_eq_false_iff_not]
       exact Or.inl (UInt64.not_le.mpr chosen.1)
     have reserve := UInt64.le_iff_toNat_le.mp
-      (shared.scheduled_activation_reserve genesis caps.activation caps.compounding aligned
+      (shared.scheduled_activation_reserve genesis caps aligned
         early i v found chosen.1 chosen.2)
     simpa only [selected, ↓reduceIte, inactive, Bool.not_false, live, decide_true,
       Bool.true_and, effectiveAt, actualBalanceAt, found, Option.map_some, Option.getD_some] using

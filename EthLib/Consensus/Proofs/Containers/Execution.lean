@@ -2,6 +2,7 @@ module
 
 public import EthLib.Consensus.Containers.Execution
 public import EthLib.Consensus.Containers.PowBlock
+public import EthLib.Consensus.Proofs.Types
 public import EthLib.Serialization.Proofs.Ssz.Typed.Basic
 public import EthLib.Serialization.Proofs.Ssz.Typed.Collections
 public import EthLib.Serialization.Proofs.Ssz.Typed.ForkKind
@@ -18,17 +19,7 @@ At every fork, the payload is a lawful SSZ container, so its bytes decode back t
 
 Its SSZ type holds the fields that exist at that fork, in their order.
 
-Before Gloas it is a container, with the field types of Fulu, so Gloas changes nothing before it.
-
-From Gloas it is a progressive container, whose lists have no limit.
-
 So its bytes and its root are those of that plain list of fields.
-
-Before Gloas, the header of a payload has the root of the payload.
-
-Each list gives way to its own root, which leaves the root unchanged.
-
-A withdrawal and a block of proof of work are lawful containers too.
 -/
 
 @[expose] public section
@@ -37,6 +28,7 @@ namespace EthLib.Consensus
 
 open Base Serialization.Ssz SszType
 
+-- A withdrawal and a block of proof of work are lawful SSZ containers.
 instance : LawfulSszType Withdrawal :=
   .container (by decide) (fun _ => rfl) (fun _ => rfl)
 
@@ -78,13 +70,17 @@ def fieldValues (payload : ExecutionPayload preset fork) : List Value :=
   (if present : .glamsterdam ≤ fork then
     [toValue (payload.blockAccessList present), toValue (payload.slotNumber present)] else [])
 
-/-- The SSZ type of a payload at a fork: the container of its fields, progressive from Gloas. -/
+/-- The SSZ type of a payload at a fork: the container of its fields, progressive from Gloas.
+
+From Gloas its lists have no limit. -/
 def fieldsDesc (preset : Preset) (fork : Fork) : Desc :=
   if .glamsterdam ≤ fork then
     .progressiveContainer activeFields (names fork) (fieldDescs preset fork)
   else .container (names fork) (fieldDescs preset fork)
 
-/-- Before Gloas, the SSZ type of a payload is the container of the fields of that fork. -/
+/-- Before Gloas, the SSZ type of a payload is the container of the fields of that fork.
+
+Its field types are those of Fulu, so Gloas changes nothing before it. -/
 theorem fieldsDesc_of_lt (before : fork < .glamsterdam) :
     fieldsDesc preset fork = .container (names fork) (fieldDescs preset fork) := by
   simp [fieldsDesc, not_switch_of_lt before]
@@ -131,7 +127,7 @@ instance [NeZero preset.BYTES_PER_LOGS_BLOOM.toNat] :
         by_cases gloas : Fork.glamsterdam ≤ fork <;>
         simp [names, sinceNames, SszFields.descs, capella, deneb, gloas],
      by simp [names],
-     firstDuplicate_of_nodup _ names_nodup⟩
+     names_nodup⟩
     (fun _ => rfl) (fun _ => rfl)
 
 /--
@@ -153,9 +149,8 @@ The logs bloom must have a byte, as for the payload's laws.
 -/
 theorem serialize_eq [NeZero preset.BYTES_PER_LOGS_BLOOM.toNat]
     (payload : ExecutionPayload preset fork) :
-    SszType.serialize payload = (do
-      return ⟨← Serialization.Ssz.serialize (fieldsDesc preset fork)
-        (.seq (fieldValues payload))⟩) := by
+    SszType.serialize payload =
+      Serialization.Ssz.serialize (fieldsDesc preset fork) (.seq (fieldValues payload)) := by
   rw [SszType.serialize_eq, desc_eq, toValue_eq]
 
 /-- At every fork, the bytes of a payload decode back to it. -/
@@ -190,7 +185,7 @@ instance [NeZero preset.BYTES_PER_LOGS_BLOOM.toNat] :
       by_cases capella : Fork.shapella ≤ fork <;> by_cases deneb : Fork.dencun ≤ fork <;>
         simp [names, sinceNames, SszFields.descs, capella, deneb],
      by simp [names],
-     firstDuplicate_of_nodup _ names_nodup⟩
+     names_nodup⟩
     (fun _ => rfl) (fun _ => rfl)
 
 end ExecutionPayloadHeader
@@ -271,7 +266,7 @@ theorem ExecutionPayload.hashTreeRoot_header {preset : Preset} {fork : Fork}
         (desc_transactions_of_lt before).symm) (by simp [ExecutionPayload.fieldValues]) tx
     have two := hashTreeRoot_summary (names := ExecutionPayload.names fork) (position := 14)
       (fields := (ExecutionPayload.fieldDescs preset fork).set 13 (.byteVector bytesPerChunk))
-      (values := (ExecutionPayload.fieldValues payload).set 13 (.bytes txRoot.toArray))
+      (values := (ExecutionPayload.fieldValues payload).set 13 (.bytes ⟨txRoot.toArray⟩))
       (by by_cases deneb : Fork.dencun ≤ fork <;>
         simp [ExecutionPayload.fieldDescs, ExecutionPayload.fieldValues, capella, deneb,
           gloas])

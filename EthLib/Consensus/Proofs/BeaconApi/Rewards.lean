@@ -2,6 +2,7 @@ module
 
 public import EthLib.Consensus.BeaconApi.Rewards
 public import EthLib.Consensus.Proofs.BeaconApi.Registries
+public import EthLib.Consensus.Proofs.ForkChoice.BlockStates
 public import EthLib.Consensus.Proofs.Transition.BlockRewards
 public import EthLib.Consensus.Proofs.Transition.EpochRewards
 public import EthLib.Consensus.Proofs.Transition.Invariants
@@ -14,43 +15,9 @@ import EthLib.Consensus.Proofs.Transition.ValidatorKeys
 /-!
 # Proofs: the rewards answers of the Beacon API
 
-The attestation rewards name each requested validator once, in order of index.
+This file proves what the attestation, sync committee and block rewards of the Beacon API answer.
 
-Each part is the reward minus the penalty of the deltas of its kind.
-
-Before Altair the inclusion part is the attester's own part of the inclusion deltas.
-
-The parts add up to what the epoch transition applies to the balance, with the proposer shares.
-
-When the penalties do not exhaust the balance, the balance moves by exactly that sum.
-
-The answer reads the state that the rewards step of the epoch transition reads.
-
-Each ideal entry is read at a validator of the registry with the effective balance of the entry.
-
-Before Altair, its parts follow the formulas of the phase 0 deltas, with an inclusion delay of 1.
-
-An eligible validator whose votes matched, included one slot after its vote, earns those parts.
-
-The sync committee rewards name each requested member once, in order of index.
-
-Each is the sum, over the seats of the member, of the participant reward of the transition.
-
-That reward counts for a seat that signed, and against a seat that did not.
-
-When the balance covers each seat of the member, it moves by that sum.
-
-The proposer also earns a share of the reward of each seat that signed.
-
-The block rewards start from the state that the operations of the block read.
-
-Their total is the sum of their parts, and from Altair the sync part is the share of the step.
-
-The operations and the sync aggregate raise the proposer's balance by exactly that total.
-
-That needs a block that does not slash the proposer, pay it a deposit or switch its credentials.
-
-It also needs a proposer without a seat in the sync committee.
+It also proves how each part moves a balance.
 -/
 
 @[expose] public section
@@ -106,7 +73,10 @@ private theorem sum_netDelta (i : Nat) :
     simp only [netDelta, Int.natCast_add]
     omega
 
-/-! ## The validators of the answer -/
+/-! ## The validators of the answer
+
+The attestation rewards name each requested validator once, in order of index.
+-/
 
 /-- The answer names the validators that the request selects, once each and in that order. -/
 theorem attestationRewards_indices {config : Config} {ids : List ValidatorId}
@@ -131,7 +101,12 @@ private theorem mem_selectValidators_of_answered {config : Config} {ids : List V
   rw [← attestationRewards_indices answered]
   exact List.mem_map_of_mem member
 
-/-! ## Each part -/
+/-! ## Each part
+
+Each part is the reward minus the penalty of the deltas of its kind.
+
+Before Altair the inclusion part is the attester's own part of the inclusion deltas.
+-/
 
 /-- From Altair, each part of the rewards of a validator is the net delta of its kind.
 
@@ -193,15 +168,6 @@ theorem attestationRewards_parts_of_lt_altair {config : Config} (before : fork <
   have noReward := getInactivityPenaltyDeltas_rewards penalized index.toNat
   refine ⟨rfl, rfl, rfl, rfl, ?_⟩
   simp [netDelta, noReward]
-
-/-- The sum of pointwise sums is the sum of the two sums. -/
-private theorem sum_map_add_nat {α : Type} (items : List α) (f g : α → Nat) :
-    (items.map fun item => f item + g item).sum = (items.map f).sum + (items.map g).sum := by
-  induction items with
-  | nil => simp
-  | cons item rest ih =>
-    simp only [List.map_cons, List.sum_cons, ih]
-    omega
 
 /-- A fold whose steps each add an amount to the entries adds the sum of those amounts. -/
 private theorem foldlM_getD_sum {α : Type} {step : Array Gwei → ValidatorIndex →
@@ -280,7 +246,7 @@ theorem attesterInclusionRewards_split (before : fork < .altair)
   refine ⟨attestations, signers, attesters, total, attestationsOk, signersOk, attestersOk,
     totalOk, shares, named, facts, fun j => ⟨?_, ?_⟩⟩
   · rw [own j, replicate_getD_zero, UInt64.toNat_zero, Nat.zero_add]
-  · rw [sums j, own j, replicate_getD_zero, UInt64.toNat_zero, Nat.zero_add, sum_map_add_nat,
+  · rw [sums j, own j, replicate_getD_zero, UInt64.toNat_zero, Nat.zero_add, List.sum_map_add,
       Nat.add_comm]
 
 /-- Before Altair, the inclusion part of a validator is at most its inclusion deltas. -/
@@ -306,7 +272,14 @@ theorem attestationRewards_inclusionDelay_le_of_lt_altair {config : Config}
   rw [inclusionPart, Option.getD_some, split]
   exact Nat.le_add_right _ _
 
-/-! ## Ideal rewards -/
+/-! ## Ideal rewards
+
+Each ideal entry is read at a validator of the registry with the effective balance of the entry.
+
+Before Altair, its parts follow the formulas of the phase 0 deltas, with an inclusion delay of 1.
+
+An eligible validator whose votes matched, included one slot after its vote, earns those parts.
+-/
 
 /-- The ideal rewards list distinct effective balances, in increasing order. -/
 theorem idealAttestationRewards_sorted {ideal : List IdealAttestationRewards}
@@ -629,21 +602,20 @@ theorem attestationRewards_ideal_of_altair {config : Config} (altair : .altair �
 
 /-- Before Altair, the attester part of the inclusion rewards of each validator.
 
-The matching source attestations are those of the previous epoch.
+An unslashed signer's part is its base reward less the proposer share.
 
-An unslashed signer of them has an earliest inclusion.
-
-Its part is its base reward less the proposer share, divided by the delay of that inclusion.
-
-Any other validator has no part. -/
+That difference is divided by the delay of its earliest inclusion, rounding down. -/
 private theorem attesterInclusionRewards_getD (before : fork < .altair) {parts : Array Gwei}
     (own : attesterInclusionRewards state before = .ok parts) :
     ∃ attestations signers attesters total,
+      -- The matching source attestations are those of the previous epoch.
       getMatchingSourceAttestations state before (getPreviousEpoch state) = .ok attestations ∧
       attestations.toList.mapM (getPendingAttestingIndices state) = .ok signers ∧
       unslashedAmong state signers = .ok attesters ∧
       getTotalActiveBalance state = .ok total ∧
+      -- A validator that is not an unslashed signer has no part.
       ∀ index : ValidatorIndex, (index ∉ attesters → parts.getD index.toNat 0 = 0) ∧
+        -- An unslashed signer of them has an earliest inclusion.
         (index ∈ attesters → ∃ earliest base,
           (earliestInclusions state.validators.data.size
             (attestations.zip signers.toArray)).getD index.toNat none = some earliest ∧
@@ -779,37 +751,34 @@ private theorem idealInactivityPenalty_eq_netDelta {config : Config} (before : f
     rw [timely set, replicate_getD_zero, UInt64.toNat_zero, Nat.zero_add] at *
     simp only [netDelta, noReward, UInt64.toNat_zero, Int.natCast_zero, Int.zero_sub, value]
 
-/-- Before Altair, the ideal rewards read at a validator, from its base reward.
-
-The balance is only copied into the entry.
-
-Each vote earns the reward of a validator whose vote matched.
-
-In a leak that is the base reward of the validator.
-
-Otherwise it is the base reward times the increments of the unslashed balance that matched.
-
-That product is divided by the active increments, rounding down.
-
-The inclusion earns the base reward less the proposer share.
-
-In a leak the validator pays four base rewards less the proposer share, and otherwise nothing. -/
+/-- Before Altair, the ideal rewards read at a validator, from its base reward. -/
 theorem idealRewardsOf_parts_of_lt_altair (before : fork < .altair) {balance : Gwei}
     {index : ValidatorIndex} {rates : IdealAttestationRewards}
     (computed : idealRewardsOf state balance index = .ok rates) :
     ∃ total base leak, getTotalActiveBalance state = .ok total ∧
       getBaseReward state total index = .ok base ∧ isInInactivityLeak state = .ok leak ∧
+      -- The balance is only copied into the entry.
       rates.effectiveBalance = balance ∧
+      -- Each vote earns the reward of a validator whose vote matched.
       (∀ vote ∈ [(getMatchingSourceAttestations state before, rates.source),
           (getMatchingTargetAttestations state before, rates.target),
           (getMatchingHeadAttestations state before, rates.head)],
         ∃ attestations matched, vote.1 (getPreviousEpoch state) = .ok attestations ∧
           getAttestingBalance state attestations = .ok matched ∧
+          -- In a leak that is the base reward of the validator.
+          --
+          -- Otherwise it is the base reward times the increments of the matched unslashed balance.
+          --
+          -- That product is divided by the active increments, rounding down.
           vote.2 = ((if leak then base.toNat else
             base.toNat * (matched.toNat / preset.EFFECTIVE_BALANCE_INCREMENT.toNat) /
               (total.toNat / preset.EFFECTIVE_BALANCE_INCREMENT.toNat) : Nat) : Int)) ∧
+      -- The inclusion earns the base reward less the proposer share.
       rates.inclusionDelay.map UInt64.toNat =
         some (base.toNat - base.toNat / preset.PROPOSER_REWARD_QUOTIENT.toNat) ∧
+      -- In a leak the validator pays four base rewards less the proposer share.
+      --
+      -- Otherwise it pays nothing.
       rates.inactivity = -((if leak then BASE_REWARDS_PER_EPOCH.toNat * base.toNat -
         base.toNat / preset.PROPOSER_REWARD_QUOTIENT.toNat else 0 : Nat) : Int) := by
   have notAltair : ¬ .altair ≤ fork := Nat.not_le_of_lt before
@@ -988,7 +957,10 @@ theorem attestationRewards_ideal_of_lt_altair {config : Config} (before : fork <
       firstRead same (fun attestations attesters attested signed =>
         matched _ (by simp) attestations attesters attested signed) penaltyIdeal
 
-/-! ## Sums -/
+/-! ## Sums
+
+The parts add up to what the epoch transition applies to the balance, with the proposer shares.
+-/
 
 /-- Before Altair, four parts of a validator and its inclusion deltas add up to its net deltas.
 
@@ -1053,7 +1025,10 @@ theorem attestationRewards_sum_of_altair {config : Config} (altair : .altair ≤
     List.sum_nil, List.getD_cons_zero, List.getD_cons_succ]
   omega
 
-/-! ## Balances -/
+/-! ## Balances
+
+When the penalties do not exhaust the balance, the balance moves by exactly the sum of the parts.
+-/
 
 /-- Before Altair, the rewards and penalties step moves a balance by its parts and inclusion deltas.
 
@@ -1129,7 +1104,10 @@ theorem attestationRewards_balance_of_altair {config : Config} (altair : .altair
   have sum := sum_netDelta entry.validatorIndex.toNat (flags ++ [inactivity])
   omega
 
-/-! ## The state and the response -/
+/-! ## The state and the response
+
+The answer reads the state that the rewards step of the epoch transition reads.
+-/
 
 /-- Adding an amount to some deltas succeeds only for an index inside them. -/
 private theorem lt_size_of_addDelta {deltas result : Array Gwei} {index : ValidatorIndex}
@@ -1263,7 +1241,202 @@ theorem attestationRewardsResponse_ok {config : Config} {epoch : Epoch}
     exact ⟨unknown.1, unknown.2.1, unknown.2.2, rewarded, ideal, entries, rewardedOk, idealOk,
       entriesOk, fit.1, fit.2, rfl⟩
 
-/-! ## Sync committee rewards -/
+/-- The answer gets the error of an amount out of range, code 500, exactly when:
+
+- the state is at the last slot of an epoch past the first, for the epoch before,
+- the ideal and the total rewards compute on the state that the rewards step reads,
+- and an amount of one of them does not fit the signed 64-bit range. -/
+theorem attestationRewardsResponse_eq_rewardOutOfRange_iff {config : Config} {epoch : Epoch}
+    {ids : List ValidatorId} :
+    attestationRewardsResponse config state epoch ids = .error rewardOutOfRange ↔
+      getCurrentEpoch state ≠ GENESIS_EPOCH ∧ getPreviousEpoch state = epoch ∧
+        (state.slot.toNat + 1) % preset.SLOTS_PER_EPOCH.toNat = 0 ∧
+        ∃ rewarded ideal entries, stateBeforeRewards config state = .ok rewarded ∧
+          idealAttestationRewards rewarded = .ok ideal ∧
+          attestationRewards config rewarded ids = .ok entries ∧
+          (ideal.all (·.fits) = false ∨ entries.all (·.fits) = false) := by
+  unfold attestationRewardsResponse
+  by_cases unknown : getCurrentEpoch state = GENESIS_EPOCH ∨ getPreviousEpoch state ≠ epoch ∨
+      (state.slot.toNat + 1) % preset.SLOTS_PER_EPOCH.toNat ≠ 0
+  · -- Such a state gets the error of an epoch not known, with code 404.
+    simp only [unknown, ↓reduceIte]
+    refine iff_of_false ?_ ?_
+    · simp [throw, throwThe, MonadExceptOf.throw, bind, Except.bind, epochNotKnown,
+        rewardOutOfRange, internalError]
+    · rintro ⟨genesis, previous, last, -⟩
+      rcases unknown with same | other | other
+      · exact genesis same
+      · exact other previous
+      · exact other last
+  · simp only [unknown, ↓reduceIte]
+    simp only [not_or, not_not] at unknown
+    obtain ⟨genesis, previous, last⟩ := unknown
+    simp only [ne_eq, genesis, not_false_eq_true, previous, last, true_and]
+    -- A failed computation gets the error that names no attestation rewards.
+    cases rewardedOk : stateBeforeRewards config state with
+    | error fault =>
+      simp [Except.mapError, bind, Except.bind, rewardOutOfRange, internalError, toString]
+    | ok rewarded =>
+    cases idealOk : idealAttestationRewards rewarded with
+    | error fault =>
+      simp [idealOk, Except.mapError, bind, Except.bind, rewardOutOfRange, internalError,
+        toString]
+    | ok ideal =>
+    cases entriesOk : attestationRewards config rewarded ids with
+    | error fault =>
+      simp [idealOk, entriesOk, Except.mapError, bind, Except.bind, rewardOutOfRange,
+        internalError, toString]
+    | ok entries =>
+    -- Both lists compute, so the answer is the check of the range, or the JSON after it.
+    simp only [idealOk, entriesOk, Except.mapError, bind, Except.bind, Except.ok.injEq,
+      exists_and_left, exists_eq_left']
+    cases ideal.all (·.fits) <;> cases entries.all (·.fits) <;> simp [ensure, pure, Except.pure]
+
+/-- For a state from Altair, each computed part of a vote lies strictly between `-2^58` and `2^58`.
+
+The parts of a vote are those of the head, the target and the source. -/
+theorem attestationRewards_flags_lt_of_altair {config : Config} (altair : .altair ≤ fork)
+    {ids : List ValidatorId} {entries : List AttestationRewards}
+    (answered : attestationRewards config state ids = .ok entries)
+    {entry : AttestationRewards} (member : entry ∈ entries) :
+    -2 ^ 58 < entry.head ∧ entry.head < 2 ^ 58 ∧ -2 ^ 58 < entry.target ∧
+      entry.target < 2 ^ 58 ∧ -2 ^ 58 < entry.source ∧ entry.source < 2 ^ 58 := by
+  have parts := answered
+  simp only [attestationRewards, altair, ↓reduceDIte, bind_ok_iff, pure, Except.pure,
+    Except.ok.injEq] at parts
+  obtain ⟨_, penalized, flags, flagged, -⟩ := parts
+  obtain ⟨sourced, targeted, headed, -, -⟩ :=
+    attestationRewards_parts_of_altair altair answered flagged penalized member
+  -- Each part is the net delta of the deltas of a flag, or of none past the end of the list.
+  have bound (k : Nat) :
+      -2 ^ 58 < netDelta (flags.getD k (#[], #[])) entry.validatorIndex.toNat ∧
+        netDelta (flags.getD k (#[], #[])) entry.validatorIndex.toNat < 2 ^ 58 := by
+    rw [List.getD_eq_getElem?_getD]
+    cases found : flags[k]? with
+    | none =>
+      simp only [Option.getD_none, netDelta, Array.getD_eq_getD_getElem?, Array.getElem?_empty,
+        UInt64.toNat_zero]
+      omega
+    | some deltas =>
+      obtain ⟨flagIndex, -, computed⟩ := mapM_ok_mem flagged deltas (List.mem_of_getElem? found)
+      obtain ⟨rewards, penalties⟩ := deltas
+      have := getFlagIndexDeltas_getD_lt computed entry.validatorIndex.toNat
+      simp only [Option.getD_some, netDelta]
+      omega
+  rw [headed, targeted, sourced]
+  exact ⟨(bound 2).1, (bound 2).2, (bound 1).1, (bound 1).2, (bound 0).1, (bound 0).2⟩
+
+/-- For a state from Altair, each computed inactivity part lies from minus a bound to zero.
+
+That bound is `floor((2^64 - 1) / (B * Q))`, for score bias `B` and penalty quotient `Q`. -/
+theorem attestationRewards_inactivity_le_of_altair {config : Config} (altair : .altair ≤ fork)
+    {ids : List ValidatorId} {entries : List AttestationRewards}
+    (answered : attestationRewards config state ids = .ok entries)
+    {entry : AttestationRewards} (member : entry ∈ entries) :
+    -(((2 ^ 64 - 1) / (config.INACTIVITY_SCORE_BIAS.toNat *
+        (parameters preset fork).INACTIVITY_PENALTY_QUOTIENT.toNat) : Nat) : Int) ≤
+      entry.inactivity ∧ entry.inactivity ≤ 0 := by
+  have parts := answered
+  simp only [attestationRewards, altair, ↓reduceDIte, bind_ok_iff, pure, Except.pure,
+    Except.ok.injEq] at parts
+  obtain ⟨_, penalized, _, flagged, -⟩ := parts
+  obtain ⟨-, -, -, -, inactive⟩ :=
+    attestationRewards_parts_of_altair altair answered flagged penalized member
+  -- The inactivity deltas hold no reward, so the part is minus a bounded penalty.
+  have bound := getInactivityPenaltyDeltas_getD_le_of_altair altair penalized
+    entry.validatorIndex.toNat
+  have noReward := getInactivityPenaltyDeltas_rewards penalized entry.validatorIndex.toNat
+  rw [inactive]
+  simp only [netDelta, noReward, UInt64.toNat_zero]
+  omega
+
+/-- From Altair, the ideal reward of a flag is below `2^58`. -/
+private theorem idealFlagReward_lt {altair : .altair ≤ fork}
+    {flagIndex : Fin PARTICIPATION_FLAG_WEIGHTS.length} {index : ValidatorIndex} {reward : Gwei}
+    (computed : idealFlagReward state altair flagIndex index = .ok reward) :
+    reward.toNat < 2 ^ 58 := by
+  simp only [idealFlagReward, bind_ok_iff, liftAccessor_ok, pure, Except.pure,
+    Except.ok.injEq] at computed
+  obtain ⟨_, -, _, -, _, -, ⟨rewards, _⟩, stepped, rfl⟩ := computed
+  -- One step of the flag deltas from zero entries adds less than `2^58`.
+  have bound := (addFlagDelta_getD_self_lt stepped).1
+  simp only [replicate_getD_zero, UInt64.toNat_zero, Nat.zero_add] at bound
+  exact bound
+
+/-- For a state from Altair, each computed ideal part of a vote lies from zero to below `2^58`.
+
+Each ideal inactivity part is zero. -/
+theorem idealAttestationRewards_lt_of_altair (altair : .altair ≤ fork)
+    {ideal : List IdealAttestationRewards} (idealed : idealAttestationRewards state = .ok ideal)
+    {rates : IdealAttestationRewards} (member : rates ∈ ideal) :
+    0 ≤ rates.head ∧ rates.head < 2 ^ 58 ∧ 0 ≤ rates.target ∧ rates.target < 2 ^ 58 ∧
+      0 ≤ rates.source ∧ rates.source < 2 ^ 58 ∧ rates.inactivity = 0 := by
+  obtain ⟨_, _, _, -, -, computed⟩ := idealAttestationRewards_mem idealed member
+  simp only [idealRewardsOf, altair, ↓reduceDIte, bind_ok_iff, pure, Except.pure,
+    Except.ok.injEq] at computed
+  obtain ⟨_, ⟨head, headOk, rfl⟩, _, ⟨target, targetOk, rfl⟩, _, ⟨source, sourceOk, rfl⟩,
+    rfl⟩ := computed
+  have headLt := idealFlagReward_lt headOk
+  have targetLt := idealFlagReward_lt targetOk
+  have sourceLt := idealFlagReward_lt sourceOk
+  dsimp only
+  omega
+
+/-- For a state from Altair, the answer never gets the error of an amount out of range, code 500.
+
+It assumes that the inactivity penalty quotient of the fork is at least 2. -/
+theorem attestationRewardsResponse_ne_rewardOutOfRange_of_altair (altair : .altair ≤ fork)
+    (quotient : 2 ≤ (parameters preset fork).INACTIVITY_PENALTY_QUOTIENT.toNat)
+    (config : Config) (epoch : Epoch) (ids : List ValidatorId) :
+    attestationRewardsResponse config state epoch ids ≠ .error rewardOutOfRange := by
+  intro refused
+  obtain ⟨-, -, -, rewarded, ideal, entries, -, idealed, answered, unfit⟩ :=
+    attestationRewardsResponse_eq_rewardOutOfRange_iff.mp refused
+  -- With a zero score bias the bound is zero, and any other bias divides by at least the quotient.
+  have cap : (2 ^ 64 - 1) / (config.INACTIVITY_SCORE_BIAS.toNat *
+      (parameters preset fork).INACTIVITY_PENALTY_QUOTIENT.toNat) < 2 ^ 63 := by
+    rcases Nat.eq_zero_or_pos config.INACTIVITY_SCORE_BIAS.toNat with zero | positive
+    · rw [zero, Nat.zero_mul, Nat.div_zero]
+      exact Nat.two_pow_pos 63
+    · have atMost : (2 ^ 64 - 1) / (config.INACTIVITY_SCORE_BIAS.toNat *
+          (parameters preset fork).INACTIVITY_PENALTY_QUOTIENT.toNat) ≤ (2 ^ 64 - 1) / 2 :=
+        Nat.div_le_div_left (Nat.le_trans quotient (Nat.le_mul_of_pos_left _ positive))
+          (by decide)
+      omega
+  -- Each amount of both lists fits, so the check of the range passes.
+  have idealFit : ideal.all (·.fits) = true := List.all_eq_true.mpr fun rates member => by
+    have := idealAttestationRewards_lt_of_altair altair idealed member
+    simp only [IdealAttestationRewards.fits, int64Fits, Bool.and_eq_true, decide_eq_true_eq]
+    omega
+  have totalFit : entries.all (·.fits) = true := List.all_eq_true.mpr fun entry member => by
+    have := attestationRewards_flags_lt_of_altair altair answered member
+    have := attestationRewards_inactivity_le_of_altair altair answered member
+    simp only [AttestationRewards.fits, int64Fits, Bool.and_eq_true, decide_eq_true_eq]
+    omega
+  rw [idealFit, totalFit] at unfit
+  simp at unfit
+
+/-! ## Sync committee rewards
+
+The sync committee rewards name each requested member once, in order of index.
+
+Each is the sum, over the seats of the member, of the participant reward of the transition.
+
+That reward counts for a seat that signed, and against a seat that did not.
+
+When the balance covers each seat of the member, it moves by that sum.
+
+The proposer also earns a share of the reward of each seat that signed.
+-/
+
+/-- A seat in front adds its reward to the net reward of the validator that holds it. -/
+private theorem seatsReward_cons (reward : Gwei) (member index : ValidatorIndex) (signed : Bool)
+    (rest : List (ValidatorIndex × Bool)) :
+    seatsReward reward ((member, signed) :: rest) index =
+      (if member = index then seatReward reward signed else 0) +
+        seatsReward reward rest index := by
+  unfold seatsReward
+  by_cases same : member = index <;> simp [same]
 
 /-- The sync aggregate steps move one balance by the net rewards of the seats it holds.
 
@@ -1286,11 +1459,7 @@ private theorem foldl_seats_balance (reward : Gwei) (proposerReward : Nat)
   | nil => simp [seatsReward]
   | cons seat rest ih =>
     obtain ⟨member, signed⟩ := seat
-    have step : seatsReward reward ((member, signed) :: rest) index =
-        (if member = index then seatReward reward signed else 0) +
-          seatsReward reward rest index := by
-      unfold seatsReward
-      by_cases same : member = index <;> simp [same]
+    have step := seatsReward_cons reward member index signed rest
     have lenStep : (((member, signed) :: rest).filter (·.1 == index)).length =
         (rest.filter (·.1 == index)).length + if member = index then 1 else 0 := by
       by_cases same : member = index <;> simp [same]
@@ -1500,7 +1669,91 @@ theorem syncCommitteeRewardsResponse_of_lt_altair (before : fork < .altair)
   simp [syncCommitteeRewardsResponse, not]
   rfl
 
-/-! ## Block rewards -/
+/-- The sync committee has at most as many seats as the committee size. -/
+private theorem syncRewardSeats_length_le {altair : .altair ≤ fork}
+    {aggregate : SyncAggregate preset} {seats : List (ValidatorIndex × Bool)}
+    (seated : syncRewardSeats state altair aggregate = .ok seats) :
+    seats.length ≤ preset.SYNC_COMMITTEE_SIZE.toNat := by
+  unfold syncRewardSeats at seated
+  simp only [bind_ok_iff, pure, Except.pure, Except.ok.injEq] at seated
+  obtain ⟨members, -, rfl⟩ := seated
+  -- The seats pair the members with the bits of the aggregate, one bit per seat.
+  simp only [Array.length_toList, Array.size_zip, Vector.size_toArray]
+  exact Nat.min_le_right _ _
+
+/-- In absolute value, a net reward is at most the participant reward times the number of seats. -/
+private theorem seatsReward_le (reward : Gwei) (seats : List (ValidatorIndex × Bool))
+    (index : ValidatorIndex) :
+    -((seats.length * reward.toNat : Nat) : Int) ≤ seatsReward reward seats index ∧
+      seatsReward reward seats index ≤ ((seats.length * reward.toNat : Nat) : Int) := by
+  induction seats with
+  | nil => simp [seatsReward]
+  | cons seat rest ih =>
+    obtain ⟨member, signed⟩ := seat
+    rw [seatsReward_cons, List.length_cons, Nat.succ_mul]
+    -- The first seat moves the sum by the participant reward at most.
+    by_cases same : member = index
+    · cases signed
+      · simp only [same, ↓reduceIte, seatReward, Bool.false_eq_true]
+        omega
+      · simp only [same, ↓reduceIte, seatReward]
+        omega
+    · simp only [same, ↓reduceIte]
+      omega
+
+/-- Each computed sync committee reward lies strictly between `-2^58` and `2^58`. -/
+theorem syncCommitteeRewards_reward_lt {altair : .altair ≤ fork}
+    {aggregate : SyncAggregate preset} {ids : List ValidatorId}
+    {entries : List SyncCommitteeReward}
+    (answered : syncCommitteeRewards state altair aggregate ids = .ok entries)
+    {entry : SyncCommitteeReward} (member : entry ∈ entries) :
+    -2 ^ 58 < entry.reward ∧ entry.reward < 2 ^ 58 := by
+  obtain ⟨seats, reward, seatsOk, rewardOk, rewardEq⟩ :=
+    syncCommitteeRewards_reward answered member
+  -- A member holds at most every seat, and each seat moves its reward by the participant reward.
+  have seatsLe := syncRewardSeats_length_le seatsOk
+  have bound := seatsReward_le reward seats entry.validatorIndex
+  have mono : seats.length * reward.toNat ≤ preset.SYNC_COMMITTEE_SIZE.toNat * reward.toNat :=
+    Nat.mul_le_mul_right _ seatsLe
+  -- The committee size times the participant reward is below `2^58`.
+  have rewardLt := syncParticipantReward_mul_lt rewardOk
+  rw [rewardEq]
+  omega
+
+/-- When the sync committee rewards of a state from Altair compute, the answer is their JSON. -/
+theorem syncCommitteeRewardsResponse_of_syncCommitteeRewards {altair : .altair ≤ fork}
+    {aggregate : SyncAggregate preset} {ids : List ValidatorId}
+    {entries : List SyncCommitteeReward}
+    (computed : syncCommitteeRewards state altair aggregate ids = .ok entries) :
+    syncCommitteeRewardsResponse state aggregate ids =
+      .ok { data := .arr (entries.map (·.toJson)).toArray } := by
+  -- Each reward fits 64 bits, so the check of the range passes.
+  have fit : entries.all (·.fits) = true := List.all_eq_true.mpr fun entry member => by
+    have := syncCommitteeRewards_reward_lt computed member
+    simp only [SyncCommitteeReward.fits, int64Fits, decide_eq_true_eq]
+    omega
+  simp [syncCommitteeRewardsResponse, altair, computed, Except.mapError, bind, Except.bind,
+    ensure, fit, pure, Except.pure]
+
+/-- The answer never gets the error of an amount out of range. -/
+theorem syncCommitteeRewardsResponse_ne_rewardOutOfRange (aggregate : SyncAggregate preset)
+    (ids : List ValidatorId) :
+    syncCommitteeRewardsResponse state aggregate ids ≠ .error rewardOutOfRange := by
+  by_cases altair : .altair ≤ fork
+  · cases computed : syncCommitteeRewards state altair aggregate ids with
+    | ok entries => simp [syncCommitteeRewardsResponse_of_syncCommitteeRewards computed]
+    -- A failed computation gets the error that names no sync committee rewards.
+    | error fault =>
+      simp [syncCommitteeRewardsResponse, altair, computed, Except.mapError, bind, Except.bind,
+        rewardOutOfRange, internalError, toString]
+  -- Before Altair the answer is the error with code 400.
+  · rw [syncCommitteeRewardsResponse_of_lt_altair (Nat.lt_of_not_le altair)]
+    simp [invalidSyncRewardsRequest, rewardOutOfRange, internalError]
+
+/-! ## Block rewards
+
+The block rewards start from the state that the operations of the block read.
+-/
 
 /-- The state that the operations of a block read, as the steps before them give it. -/
 theorem stateBeforeOperations_ok_iff {config : Config} {checks : SignatureChecks}
@@ -1677,37 +1930,31 @@ private theorem syncProposerReward_toNat {reward share : Gwei}
   rw [computed.2, scaledOk.2]
   rfl
 
-/-- The operations and the sync aggregate of a block raise the proposer's balance by the total.
-
-The proposer must have a balance.
-
-The block must not slash the proposer.
-
-Before Electra, no deposit of the block may carry its key.
-
-From Electra to Fulu, no consolidation request of the block may come from its key.
-
-From Altair, its key must hold no seat in the sync committee.
-
-The mixes must span more than the seed lookahead plus two epochs, as on mainnet and minimal. -/
+/-- The operations and the sync aggregate of a block raise the proposer's balance by the total. -/
 theorem blockRewards_balance {config : Config} {checks : SignatureChecks}
     {engine : ExecutionEngine preset fork} {block : BeaconBlock preset fork}
     {rewards : BlockRewards} {after : BeaconState preset fork} {validator : Validator}
+    -- The mixes must span more than the seed lookahead plus two epochs, as on mainnet and minimal.
     (apart : preset.MIN_SEED_LOOKAHEAD.toNat + 2 < preset.EPOCHS_PER_HISTORICAL_VECTOR.toNat)
     (applied : processBlock config checks engine state block = .ok after)
     (answered : blockRewards config checks engine state block = .ok rewards)
     (found : state.validators.data[block.proposerIndex.toNat]? = some validator)
+    -- The proposer must have a balance.
     (held : block.proposerIndex.toNat < state.balances.data.size)
+    -- The block must not slash the proposer.
     (unslashedByProposers : ∀ slashing ∈ block.body.proposerSlashings.data,
       slashing.signedHeader1.message.proposerIndex ≠ block.proposerIndex)
     (unslashedByAttesters : ∀ slashing ∈ block.body.attesterSlashings.data,
       block.proposerIndex ∉ slashingIndices slashing)
+    -- Before Electra, no deposit of the block may carry its key.
     (undeposited : ∀ before : fork < .pectra,
       ∀ deposit ∈ (block.body.deposits (Nat.lt_trans before (by decide))).data,
         deposit.data.pubkey ≠ validator.pubkey)
+    -- From Electra to Fulu, no consolidation request of the block may come from its key.
     (unswitched : ∀ electra : .pectra ≤ fork ∧ fork < .glamsterdam,
       ∀ request ∈ (block.body.executionRequests electra).consolidations.data,
         request.sourcePubkey ≠ validator.pubkey)
+    -- From Altair, its key must hold no seat in the sync committee.
     (unseated : ∀ altair : .altair ≤ fork,
       validator.pubkey ∉ (state.currentSyncCommittee altair).value.pubkeys.toList) :
     ∃ start balance final, stateBeforeOperations config checks engine state block = .ok start ∧
@@ -1782,6 +2029,141 @@ theorem blockRewards_balance {config : Config} {checks : SignatureChecks}
     rw [totalOk.2, secondOk.2, firstOk.2, none, riseOne, riseTwo, riseThree]
     simp only [UInt64.toNat_zero]
     omega
+
+/-- A checked sum or product fails only when it overflows. -/
+private theorem error_of_checked {a b : UInt64} {fault : ArithError}
+    (failed : Uint64.addChecked a b = .error fault ∨ Uint64.mulChecked a b = .error fault) :
+    fault = .overflow := by
+  rcases failed with failed | failed <;>
+  · simp only [Uint64.addChecked, Uint64.mulChecked] at failed
+    split at failed <;> simp_all
+
+/-- The three sums of the total fail only when one overflows. -/
+private theorem sums_error {a b c d : UInt64} {fault : ArithError}
+    (failed : (do
+      let first ← Uint64.addChecked a b
+      let second ← Uint64.addChecked first c
+      Uint64.addChecked second d) = .error fault) : fault = .overflow := by
+  rcases bind_eq_error failed with failed | ⟨_, -, failed⟩
+  · exact error_of_checked (.inl failed)
+  rcases bind_eq_error failed with failed | ⟨_, -, failed⟩
+  · exact error_of_checked (.inl failed)
+  · exact error_of_checked (.inl failed)
+
+/-- An arithmetic step that fails only by an overflow fails, lifted, with that overflow. -/
+private theorem lift_error {α : Type} {step : Except ArithError α} {error : TransitionError}
+    (only : ∀ fault, step = .error fault → fault = .overflow)
+    (failed : liftAccessor (liftArith step) = .error error) :
+    error = .accessor (.arith .overflow) := by
+  obtain ⟨_, lifted, rfl⟩ := mapError_eq_error failed
+  obtain ⟨fault, faulted, rfl⟩ := mapError_eq_error lifted
+  rw [only fault faulted]
+
+/-- On a state where the block applies, the block rewards fail only by an overflow.
+
+The steps that the rewards rerun succeed, as the block ran them.
+
+So a failure comes from the product of the sync part or from the sums, past 64 bits. -/
+theorem blockRewards_error_of_processBlock {config : Config} {checks : SignatureChecks}
+    {engine : ExecutionEngine preset fork} {block : BeaconBlock preset fork}
+    {after : BeaconState preset fork} {error : TransitionError}
+    (applied : processBlock config checks engine state block = .ok after)
+    (failed : blockRewards config checks engine state block = .error error) :
+    error = .accessor (.arith .overflow) := by
+  obtain ⟨start, operated, startOk, operatedOk, synced⟩ :=
+    processBlock_stateBeforeOperations applied
+  -- The operations ran the three folds that the rewards rerun.
+  obtain ⟨slashed, caught, attested, slashedOk, caughtOk, attestedOk, -⟩ :=
+    processOperations_folds operatedOk
+  rw [Array.foldlM_toList] at slashedOk caughtOk attestedOk
+  simp only [blockRewards] at failed
+  rw [startOk, ok_bind, slashedOk, ok_bind, caughtOk, ok_bind, attestedOk, ok_bind] at failed
+  -- What is left is the sync part from Altair, then the sums.
+  split at failed
+  · rename_i altair
+    simp only [altair, ↓reduceDIte] at synced
+    -- The sync aggregate step computed the reward of a participant and the share of the proposer.
+    unfold processSyncAggregate at synced
+    simp only [bind_ok_iff] at synced
+    obtain ⟨_, _, _, _, _, _, _, _, _, _, reward, rewardOk, share, shareOk, -⟩ := synced
+    rw [operatedOk, ok_bind, rewardOk, ok_bind, shareOk, ok_bind] at failed
+    rcases bind_eq_error failed with failed | ⟨_, -, failed⟩
+    · exact lift_error (fun _ product => error_of_checked (.inr product)) failed
+    rcases bind_eq_error failed with failed | ⟨_, -, failed⟩
+    · exact lift_error (fun _ sums => sums_error sums) failed
+    · cases failed
+  · rw [pure_bind] at failed
+    rcases bind_eq_error failed with failed | ⟨_, -, failed⟩
+    · exact lift_error (fun _ sums => sums_error sums) failed
+    · cases failed
+
+/-- The block rewards of a block that a store imported fail only by an overflow.
+
+They read the state of the parent, advanced to the slot of the block.
+
+They run with the checks and the engine of the transition that gave the state of the block. -/
+theorem blockRewards_error_of_fromParents {config : Config}
+    {anchorState : BeaconState preset fork} {anchorBlock : BeaconBlock preset fork}
+    {store : Store preset fork} {allowed : SignatureChecks → Prop}
+    (imports : store.BlockStatesFromParents config allowed anchorState anchorBlock) {root : Root}
+    {block : BeaconBlock preset fork} (found : store.blocks[root]? = some block)
+    (imported : block ≠ anchorBlock) :
+    ∃ parentState checks engine advanced state, ∃ signed : SignedBeaconBlock preset fork,
+      allowed checks ∧ signed.message = block ∧ store.blockStates[root]? = some state ∧
+      store.blockStates[block.parentRoot]? = some parentState ∧
+      stateTransition config checks engine parentState signed true = .ok state ∧
+      processSlots config checks parentState block.slot = .ok advanced ∧
+      ∀ error, blockRewards config checks engine advanced block = .error error →
+        error = .accessor (.arith .overflow) := by
+  -- The store took the block by a transition from the state of its parent.
+  obtain ⟨state, stateFound, -, fromParent⟩ := imports found
+  obtain ⟨parentState, checks, engine, signed, permitted, message, parentFound, transition⟩ :=
+    fromParent imported
+  subst message
+  obtain ⟨advanced, advancedOk, -, -, applied, -⟩ := stateTransition_ok transition
+  exact ⟨parentState, checks, engine, advanced, state, signed, permitted, rfl, stateFound,
+    parentFound, transition, advancedOk,
+    fun _ failed => blockRewards_error_of_processBlock applied failed⟩
+
+/-- The block rewards of a block that a reachable store imported fail only by an overflow.
+
+They run with the checks and the engine of the transition that gave the state of the block. -/
+theorem blockRewards_error_of_reachable {config : Config} {anchorState : BeaconState preset fork}
+    {anchorBlock : BeaconBlock preset fork} {store : Store preset fork}
+    (reachable : Store.Reachable config anchorState anchorBlock store) {root : Root}
+    {block : BeaconBlock preset fork} (found : store.blocks[root]? = some block)
+    (imported : block ≠ anchorBlock) :
+    ∃ parentState checks engine advanced state, ∃ signed : SignedBeaconBlock preset fork,
+      signed.message = block ∧ store.blockStates[root]? = some state ∧
+      store.blockStates[block.parentRoot]? = some parentState ∧
+      stateTransition config checks engine parentState signed true = .ok state ∧
+      processSlots config checks parentState block.slot = .ok advanced ∧
+      ∀ error, blockRewards config checks engine advanced block = .error error →
+        error = .accessor (.arith .overflow) := by
+  obtain ⟨parentState, checks, engine, advanced, state, signed, -, rest⟩ :=
+    blockRewards_error_of_fromParents reachable.blockStatesFromParents found imported
+  exact ⟨parentState, checks, engine, advanced, state, signed, rest⟩
+
+/-- The block rewards of a block that a store built with one setting of the checks imported.
+
+They fail only by an overflow, under that setting and the engine of the import. -/
+theorem blockRewards_error_of_forwardReachableWith {config : Config} {checks : SignatureChecks}
+    {anchorState : BeaconState preset fork} {anchorBlock : BeaconBlock preset fork}
+    {store : Store preset fork}
+    (reached : Store.ForwardReachableWith config checks anchorState anchorBlock store)
+    {root : Root} {block : BeaconBlock preset fork} (found : store.blocks[root]? = some block)
+    (imported : block ≠ anchorBlock) :
+    ∃ parentState engine advanced state, ∃ signed : SignedBeaconBlock preset fork,
+      signed.message = block ∧ store.blockStates[root]? = some state ∧
+      store.blockStates[block.parentRoot]? = some parentState ∧
+      stateTransition config checks engine parentState signed true = .ok state ∧
+      processSlots config checks parentState block.slot = .ok advanced ∧
+      ∀ error, blockRewards config checks engine advanced block = .error error →
+        error = .accessor (.arith .overflow) := by
+  obtain ⟨parentState, used, engine, advanced, state, signed, same, rest⟩ :=
+    blockRewards_error_of_fromParents reached.blockStatesFromParents found imported
+  subst same
+  exact ⟨parentState, engine, advanced, state, signed, rest⟩
 
 /-- An answer is the JSON of the block rewards. -/
 theorem blockRewardsResponse_ok {config : Config} {checks : SignatureChecks}

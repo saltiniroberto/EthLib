@@ -1,8 +1,9 @@
 module
 
 public import EthLib.Execution.Blocks.BlockAccessList
-public import EthLib.Base.Proofs.BigEndian
+public import EthLib.Base.Proofs.ByteOrder
 public import EthLib.Serialization.Proofs.Rlp.Codec
+import EthLib.Base.Proofs.CodeInjective
 
 /-!
 # Proofs: block access lists
@@ -158,9 +159,7 @@ namespace BlockAccessList
 /-- Two errors with one code come from one constructor. -/
 theorem Error.code_injective (e₁ e₂ : Error) (h : e₁.code = e₂.code) :
     e₁.ctorIdx = e₂.ctorIdx := by
-  -- Two distinct constructors have two distinct literal codes, which `decide` separates.
-  cases e₁ <;> cases e₂ <;>
-    first | rfl | (simp only [Error.code] at h; exact absurd h (by decide))
+  code_injective Error.code
 
 /-! ## The checks -/
 
@@ -192,11 +191,7 @@ theorem nodup_of_ascending {l : List Nat} (h : ascending l = true) : l.Nodup :=
 /-- Two addresses with one number are equal. -/
 theorem addressKey_injective : Function.Injective addressKey := by
   intro a b h
-  apply Vector.toList_inj.mp
-  have ha := natToBytes_bytesToNat a.toList
-  have hb := natToBytes_bytesToNat b.toList
-  simp only [Vector.length_toList] at ha hb
-  rw [← ha, ← hb]
+  rw [← ByteOrder.toBE_ofBE a, ← ByteOrder.toBE_ofBE b]
   exact congrArg _ h
 
 /-- The address test passes exactly when the numbers of the addresses ascend. -/

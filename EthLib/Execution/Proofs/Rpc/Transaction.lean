@@ -5,6 +5,7 @@ public import EthLib.Execution.Proofs.Rpc.Base
 public import EthLib.Execution.Rpc.TransactionInfo
 public import EthLib.Base.Except
 import EthLib.Base.Proofs.Toolchain.JsonBasic
+import EthLib.Execution.Proofs.Rpc.Json
 public import EthLib.Base.Proofs.Except
 
 /-!
@@ -44,15 +45,6 @@ private theorem byte_quantityJson (what : String) {n : Nat} (h : n < 256) :
     byte what (quantityJson n) = .ok n.toUInt8 := by
   have := byte_byteJson what n.toUInt8
   simpa [byteJson, Nat.mod_eq_of_lt h] using this
-
-/-- The reader of byte strings reads back a byte string that holds its bytes as data. -/
-private theorem bytes_dataJson (what : String) (b : ByteArray) :
-    bytes what (dataJson b.data.toList) = .ok b := by
-  rw [dataJson, bytes_hexString]
-  congr 1
-  apply ByteArray.ext
-  apply Array.toList_inj.mp
-  simp
 
 /-- The reader of a list reads back a list whose items each read back from their writer. -/
 private theorem array_of_items {α : Type} (what : String) (f : Lean.Json → Read α)
@@ -343,8 +335,7 @@ private theorem transactionOfJson_extra (extra : List (String × Lean.Json)) (g 
       byteJson,
       u256Json, accessListJson, uint_quantityJson, uint256_quantityJson, uint64_toDigits,
       bytes_dataJson, byte_quantityJson _ hy, yParity_byte hy,
-      array_of_items _ (bytes32 "blob hash") (fun (k : Bytes32) => dataJson k.toList) _
-      (fun k _ => fixed_dataJson "blob hash" k false),
+      array_versionedHash_listJson,
       address_dataJson,
       array_of_items _ access accessJson _ (fun a _ => access_accessJson a),
       ty3, Nat.reduceLT, ↓reduceIte, Nat.reduceEqDiff]

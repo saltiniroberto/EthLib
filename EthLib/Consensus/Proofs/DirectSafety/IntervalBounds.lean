@@ -19,17 +19,7 @@ import EthLib.Consensus.Proofs.Transition.ValidatorCaps
 
 The departure charges of a run are bounded by a window of queue capacity.
 
-That bound reads a cap on the consolidation churn at each step of the run.
-
-Here the cap is derived: the churn of a step is at most a rate of the active stake where it starts.
-
-The active stake of every state of the run is at most the funded stake of the window.
-
-The funded stake counts the stake at the first state and the funding that the run replays.
-
-A prefix of the run replays a prefix of its events.
-
-So the window of the whole run bounds every state inside it.
+Here the cap on the consolidation churn of each step is derived from the funded stake of the window.
 -/
 
 @[expose] public section
@@ -64,8 +54,7 @@ theorem funding_step_of_run {g a b : ForkedBeaconState preset}
   | slot ok =>
     exact funding_slot before delay holds.balancesMatch holds.exitsOrdered
       (reachable.activationExitOrder genesis)
-      (fun witness => reachable.pendingConsolidation_invariant genesis
-        (Nat.lt_of_le_of_lt (Step.slot ok).chainStep.fork_le before) witness (by omega))
+      (fun witness => reachable.pendingConsolidation_invariant genesis witness (by omega))
       ok added addedOk
   | block engine signed due ok =>
     have processed := (applySignedBlock_ok ok).2.1
@@ -90,7 +79,7 @@ private theorem active_stake_le_window {g x y : ForkedBeaconState preset}
     (events : List (BalanceEvent preset)) (replayed : tail.balanceEvents high = .ok events) :
     Models.stake (effectiveWeight y.state) (activeKeys y.state) ≤
       activeStakeWindow (config := config) x high events := by
-  have ⟨_, _, _, initialized⟩ := genesis
+  have ⟨_, _, _, _, initialized⟩ := genesis
   apply funding_window_of_steps tail early delay
     ((validatorKeys_prefix_and_distinct_of_genesis_chainSteps initialized
       (shared.append tail).chainSteps).2) high endEpoch events replayed
@@ -185,7 +174,7 @@ private theorem registry_upgrade_size {s : ForkedBeaconState preset}
   · obtain ⟨_, upgraded, rfl⟩ := ok
     exact congrArg Array.size (upgradeToGloas_spec upgraded).1
   · obtain ⟨_, upgraded, rfl⟩ := ok
-    obtain ⟨_, rfl⟩ := upgradeToHeze_ok_iff.mp upgraded
+    obtain rfl := upgradeToHeze_ok_iff.mp upgraded
     rfl
 
 private theorem registry_upgrades_size {s t : ForkedBeaconState preset}
@@ -372,7 +361,7 @@ private theorem active_stake_le_window_of_prefix {g x a y : ForkedBeaconState pr
     (replayed : (pre.append rest).balanceEvents high = .ok events) :
     Models.stake (effectiveWeight a.state) (activeKeys a.state) ≤
       activeStakeWindow (config := config) x high events := by
-  have ⟨_, _, _, initialized⟩ := genesis
+  have ⟨_, _, _, _, initialized⟩ := genesis
   have earlyA := Nat.lt_of_le_of_lt (fork_le_of_chainSteps rest.chainSteps) early
   have epochA : (getCurrentEpoch a.state).toNat ≤ high + 1 := by
     have ordered := currentEpoch_le_of_chainSteps rest.chainSteps
@@ -391,8 +380,7 @@ private theorem active_stake_le_window_of_prefix {g x a y : ForkedBeaconState pr
   -- With a shorter delay every registry entry counts with the largest effective balance.
   · have unique := (validatorKeys_prefix_and_distinct_of_genesis_chainSteps initialized
       (shared.append pre).chainSteps).2
-    have capped := (shared.append pre).effectiveBalance_capped genesis caps.activation
-      caps.compounding earlyA
+    have capped := (shared.append pre).effectiveBalance_capped genesis caps
     have inside (i : ValidatorIndex)
         (member : i ∈ getActiveValidatorIndices a.state (getCurrentEpoch a.state)) :
         i.toNat < a.state.validators.data.size := by
@@ -452,7 +440,7 @@ private theorem departure_charges_le_funded_window_of_slots {g x y : ForkedBeaco
           config.MAX_PER_EPOCH_ACTIVATION_EXIT_CHURN_LIMIT.toNat +
           consolidationRate (preset := preset) (config := config)
             (activeStakeWindow (config := config) x high events) else 0)) := by
-  have ⟨_, _, _, initialized⟩ := genesis
+  have ⟨_, _, _, _, initialized⟩ := genesis
   have registry := registry_le_window tail early high endEpoch slots
   by_cases preFork : high + 1 < config.ELECTRA_FORK_EPOCH.toNat
   · -- A window before the fork has no Electra state, so it is charged only the count churn.
@@ -513,46 +501,56 @@ private theorem departure_charges_le_funded_window_of_slots {g x y : ForkedBeaco
 
 /-- Before Gloas, the departure charges of a run fit a window of funded queue capacity.
 
-The run starts at a state `x` reached from genesis and ends at a state `y` before Gloas.
-
-The bound covers the charges whose exit epoch is at most `high + 1`, and `y` is in the window.
-
-It is the queue carry at `x` plus `H` times the per-epoch caps, where `H = high + 2 - e`.
-
-Here `e` is the current epoch of `x`.
-
-Before Electra at `x`, the caps add the count churn of the registry window at its largest balance.
-
-The caps add `MAX_PER_EPOCH_ACTIVATION_EXIT_CHURN_LIMIT` and the consolidation rate of the window.
-
-They add these Electra caps only if the window reaches the Electra fork epoch.
-
-The consolidation rate is computed from the active stake that the funded window allows.
-
-With a withdrawal delay below two epochs, that stake is instead a registry bound.
-
-It is the registry window times `MAX_EFFECTIVE_BALANCE_ELECTRA`.
-
-The window reads the balance events of the steps that start by epoch `high + 1`.
-
-That replay succeeds for every run that ends before Gloas.
-
-The run must end by epoch `high + 1`.
-
-It also assumes that the preset orders its caps and has positive divisors; both presets do. -/
+The bound covers the charges whose exit epoch is at most `high + 1`, and `y` is in the window. -/
 theorem departure_charges_le_funded_window {g x y : ForkedBeaconState preset}
+    -- The run starts at a state `x` reached from genesis and ends at a state `y` before Gloas.
     (shared : Run config checks g x) (tail : Run config checks x y)
     (genesis : Genesis (config := config) (checks := checks) g)
+    -- The preset orders its caps and has positive divisors.
+    --
+    -- Both presets do.
     (caps : CapOrder preset) (divisors : preset.DivisorsPositive)
     (early : y.fork < .glamsterdam) (high : Nat)
+    -- The run must end by epoch `high + 1`.
     (endEpoch : (getCurrentEpoch y.state).toNat ≤ high + 1)
+    -- The window reads the balance events of the steps that start by epoch `high + 1`.
+    --
+    -- That replay succeeds for every run that ends before Gloas.
     (events : List (BalanceEvent preset)) (replayed : tail.balanceEvents high = .ok events) :
     ((tail.departureCharges.filter fun c => c.epoch ≤ high + 1).map (·.amount)).sum ≤
+      -- The bound is the queue carry at `x` plus `H` times the per-epoch caps.
+      --
+      -- Here `H = high + 2 - e`.
+      --
+      -- Here `e` is the current epoch of `x`.
       queueCarry x high + driftHorizon x high *
+        -- Before Electra at `x`, the caps add the count churn of the registry window.
+        --
+        -- That churn is taken at the largest balance.
         ((if x.fork < .pectra then max 1 (cohortCap config (registryWindow x high)) *
           preset.MAX_EFFECTIVE_BALANCE.toNat else 0) +
+        -- The caps add `MAX_PER_EPOCH_ACTIVATION_EXIT_CHURN_LIMIT` and the consolidation rate.
+        --
+        -- That rate is the consolidation rate of the window.
+        --
+        -- The caps add these Electra caps only if the window reaches the Electra fork epoch.
         (if config.ELECTRA_FORK_EPOCH.toNat ≤ high + 1 then
           config.MAX_PER_EPOCH_ACTIVATION_EXIT_CHURN_LIMIT.toNat +
+          -- The churn of a step is at most a rate of the active stake where the step starts.
+          --
+          -- That rate is computed from the active stake that the funded window allows.
+          --
+          -- The active stake of every state of the run is at most the funded stake of the window.
+          --
+          -- The funded stake counts the stake at the first state and the funding the run replays.
+          --
+          -- A prefix of the run replays a prefix of its events.
+          --
+          -- So the window of the whole run bounds every state inside it.
+          --
+          -- With a withdrawal delay below two epochs, that stake is instead a registry bound.
+          --
+          -- It is the registry window times `MAX_EFFECTIVE_BALANCE_ELECTRA`.
           consolidationRate (preset := preset) (config := config)
             (activeStakeWindow (config := config) x high events) else 0)) :=
   departure_charges_le_funded_window_of_slots shared tail genesis caps
@@ -612,35 +610,35 @@ def activationWindow (x : ForkedBeaconState preset) (high : Nat) : Nat :=
 
 /-- Each source other than deposits is charged its credit limit.
 
-Deposits from Electra on are charged to the deposit window, not here.
-
-Earlier deposits in a window that ends before the fork are charged per key, by the headroom term.
-
-A window that reaches the fork charges each earlier deposit in full.
-
-Its funding can become effective after the fork, beyond the room that its key had before. -/
+Deposits are charged here only in the cases that the comments below list. -/
 def residualCredit (high : Nat) (event : BalanceEvent preset) : Nat :=
   match event.source with
+  -- Deposits from Electra on are charged to the deposit window, not here.
   | .deposits => if .pectra ≤ event.before.fork then 0 else
+      -- Earlier deposits in a window that ends before the fork are charged per key.
+      --
+      -- The headroom term charges them.
+      --
+      -- A window that reaches the fork charges each earlier deposit in full.
+      --
+      -- Its funding can become effective after the fork, beyond the room its key had before.
       if high + 1 < config.ELECTRA_FORK_EPOCH.toNat then 0 else event.creditLimit
   | _ => event.creditLimit
 
 /-- The initial excess and the pre-Electra deposits of a window before the fork, per reference key.
 
-Each key active at the reference is charged its initial excess and its deposits together.
-
-The charge stops at the room of the key below the cap.
-
-Before Electra no effective balance exceeds the cap, so the key gains at most this room.
-
 Other keys are charged by the activation window when they join, or by the boundary stake. -/
 def depositHeadroom (x : ForkedBeaconState preset) (high : Nat)
     (events : List (BalanceEvent preset)) : Nat :=
   if high + 1 < config.ELECTRA_FORK_EPOCH.toNat then
+    -- Each key active at the reference is charged its initial excess and its deposits together.
     ((getActiveValidatorIndices x.state (getCurrentEpoch x.state)).map fun i =>
       min (actualBalanceAt x i.toNat - effectiveAt x i.toNat +
           (events.map fun e => if e.source = .deposits ∧ e.before.fork < .pectra then
             actualBalanceAt e.after i.toNat - actualBalanceAt e.before i.toNat else 0).sum)
+        -- The charge stops at the room of the key below the cap.
+        --
+        -- Before Electra no effective balance exceeds the cap, so the key gains at most this room.
         (preset.MAX_EFFECTIVE_BALANCE.toNat - effectiveAt x i.toNat)).sum
   else 0
 
@@ -1980,7 +1978,7 @@ private theorem intervalLoss_reference_indices {g x y : ForkedBeaconState preset
             w.pubkey = v.pubkey ∧ w.slashed = true then 0 else
           effectiveWeight x.state v.pubkey -
             Models.supported (recentKeys y.state) (effectiveWeight y.state) v.pubkey).sum := by
-  have ⟨_, _, _, initialized⟩ := genesis
+  have ⟨_, _, _, _, initialized⟩ := genesis
   classical
   have within := x.state.validators.bound early
   have unique := (validatorKeys_prefix_and_distinct_of_genesis_chainSteps initialized
@@ -2688,48 +2686,24 @@ theorem _root_.EthLib.Consensus.Step.balanceEvents_credit_sources
     · exact epoch.2.2.2.2
   cases source : e.source <;> simp_all
 
-/-- The balance events of a step, read per key, before Gloas.
-
-A slashing event lowers a key unslashed at its start only if it slashes that key.
-
-It lowers it by at most the effective balance at the start of the step over the quotient.
-
-The withdrawals event of a block starts after the header.
-
-It pays the expected withdrawals from Capella on, and otherwise keeps the balances.
-
-A consolidation request leaves a balance, or caps it at the activation balance.
-
-It caps only a key whose cap at the start of the step is at most the activation balance.
-
-Rewards and deposits lower no balance of the registry at the start of the step.
-
-Pending consolidations lower no balance of a key that is slashed or cannot withdraw next epoch.
-
-A slashing event lowers no balance of a key slashed at its start, unless its penalty is due.
-
-A fork crossing records an event only at the upgrade from Deneb to Electra.
-
-Exits are ordered before each event.
-
-Registry lifecycle and slashed persistence hold before, through and after it.
-
-Each registry index becomes slashed in at most one event.
-
-A slashing credit limit is supported by newly slashed keys at that site.
-
-A positive slashing credit limit has the step's initial effective balances at every index. -/
+/-- The balance events of a step, read per key, before Gloas. -/
 theorem _root_.EthLib.Consensus.Step.balanceEvents_sites {x y : ForkedBeaconState preset}
     (step : Step config checks x y) (early : y.fork < .glamsterdam) (holds : Invariant x.state)
     (compounding : preset.MIN_ACTIVATION_BALANCE ≤ preset.MAX_EFFECTIVE_BALANCE_ELECTRA)
     {events : List (BalanceEvent preset)} (replayed : step.balanceEvents = .ok events) :
     ∀ e ∈ events,
+      -- A slashing event lowers a key unslashed at its start only if it slashes that key.
+      --
+      -- It lowers it by at most the effective balance at the start of the step over the quotient.
       (e.source = .slashings → ∀ i : ValidatorIndex, i.toNat < x.state.validators.data.size →
         slashedFlag e.before.state i = .ok false →
         actualBalanceAt e.before i.toNat ≤ actualBalanceAt e.after i.toNat +
           if slashedFlag e.after.state i = .ok true then effectiveAt x i.toNat /
             (EthLib.Consensus.parameters preset x.fork).MIN_SLASHING_PENALTY_QUOTIENT.toNat
           else 0) ∧
+      -- The withdrawals event of a block starts after the header.
+      --
+      -- It pays the expected withdrawals from Capella on, and otherwise keeps the balances.
       (e.source = .withdrawals → ∃ (block : BeaconBlock preset x.fork)
         (s : BeaconState preset x.fork),
         e.before = ⟨x.fork, s⟩ ∧ processBlockHeader x.state block = .ok s ∧
@@ -2738,32 +2712,47 @@ theorem _root_.EthLib.Consensus.Step.balanceEvents_sites {x y : ForkedBeaconStat
             getExpectedWithdrawals s capella = .ok expected ∧
             ∀ i : ValidatorIndex, actualBalanceAt e.after i.toNat =
               actualBalanceAt e.before i.toNat - withdrawnFrom expected.withdrawals i)) ∧
+      -- A consolidation request leaves a balance, or caps it at the activation balance.
+      --
+      -- It caps only a key whose cap at the start of the step is at most the activation balance.
       (e.source = .excess → ∀ i, actualBalanceAt e.after i = actualBalanceAt e.before i ∨
         (actualBalanceAt e.after i =
             min (actualBalanceAt e.before i) preset.MIN_ACTIVATION_BALANCE.toNat ∧
           ∀ v, x.state.validators.data[i]? = some v →
             withdrawalMaxEffectiveBalance preset x.fork v ≤ preset.MIN_ACTIVATION_BALANCE)) ∧
+      -- Rewards and deposits lower no balance of the registry at the start of the step.
       (e.source = .rewards ∨ e.source = .deposits → ∀ i, i < x.state.validators.data.size →
         actualBalanceAt e.before i ≤ actualBalanceAt e.after i) ∧
+      -- Pending consolidations lower no balance of a key that is slashed.
+      --
+      -- Nor of a key that cannot withdraw next epoch.
       (e.source = .consolidations → ∀ (i : Nat) (v : Validator),
         e.before.state.validators.data[i]? = some v →
         (v.slashed = true ∨ getCurrentEpoch e.before.state + 1 < v.withdrawableEpoch) →
         actualBalanceAt e.before i ≤ actualBalanceAt e.after i) ∧
+      -- A slashing event lowers no balance of a key slashed at its start.
+      --
+      -- The exception is a key whose penalty is due.
       (e.source = .slashings → ∀ (i : ValidatorIndex) (v : Validator),
         e.before.state.validators.data[i.toNat]? = some v → v.slashed = true →
         ¬ SlashingPenaltyDue preset (getCurrentEpoch e.before.state) v →
         actualBalanceAt e.before i.toNat ≤ actualBalanceAt e.after i.toNat) ∧
+      -- A fork crossing records an event only at the upgrade from Deneb to Electra.
       (e.source = .crossing → e.before.fork = .dencun ∧ .pectra ≤ e.after.fork) ∧
+      -- Exits are ordered before each event.
       ExitsOrdered e.before.state ∧
+      -- Registry lifecycle and slashed persistence hold before, through and after it.
       RegistryLifecycle x.state e.before.state ∧
       RegistryLifecycle e.before.state e.after.state ∧
       RegistryLifecycle e.after.state y.state ∧
       SlashedPersistence x.state e.before.state ∧
       SlashedPersistence e.before.state e.after.state ∧
       SlashedPersistence e.after.state y.state ∧
+      -- Each registry index becomes slashed in at most one event.
       (∀ i : Nat, (events.countP fun event =>
         !(event.before.state.validators.data[i]?.map (·.slashed)).getD true &&
           (event.after.state.validators.data[i]?.map (·.slashed)).getD false) ≤ 1) ∧
+      -- A slashing credit limit is supported by newly slashed keys at that site.
       (e.source = .slashings → e.creditLimit ≤
         ∑ i ∈ Finset.range e.before.state.validators.data.size,
           if !(e.before.state.validators.data[i]?.map (·.slashed)).getD true &&
@@ -2771,6 +2760,7 @@ theorem _root_.EthLib.Consensus.Step.balanceEvents_sites {x y : ForkedBeaconStat
             effectiveAt e.before i /
               (EthLib.Consensus.parameters preset
                 e.before.fork).WHISTLEBLOWER_REWARD_QUOTIENT.toNat else 0) ∧
+      -- A positive slashing credit limit has the step's initial effective balances at every index.
       (e.source = .slashings → 0 < e.creditLimit →
         ∀ i : Nat, effectiveAt e.before i = effectiveAt x i) ∧
       (e.source = .slashings → 0 < e.creditLimit → e.before.fork = x.fork) ∧
@@ -3030,7 +3020,7 @@ private theorem intervalLoss_retained {g x y : ForkedBeaconState preset}
     effectiveWeight x.state v.pubkey -
         Models.supported (recentKeys y.state) (effectiveWeight y.state) v.pubkey ≤
       if deficit = 0 then 0 else deficit + preset.EFFECTIVE_BALANCE_INCREMENT.toNat - 1 := by
-  have ⟨_, _, _, initialized⟩ := genesis
+  have ⟨_, _, _, _, initialized⟩ := genesis
   have supported := intervalLoss_supported_events shared tail genesis early high
     endEpoch events replayed i.toNat v w found located active recent
   have covered := intervalLoss_filtered_coverage tail early high endEpoch events replayed
@@ -3069,7 +3059,7 @@ private theorem intervalLoss_departing {g x y : ForkedBeaconState preset}
       (events.map (referenceDebit i.toNat)).sum - actualBalanceAt x i.toNat
     effectiveWeight x.state v.pubkey ≤ charge.amount +
       (if deficit = 0 then 0 else deficit + preset.EFFECTIVE_BALANCE_INCREMENT.toNat - 1) := by
-  have ⟨_, _, _, initialized⟩ := genesis
+  have ⟨_, _, _, _, initialized⟩ := genesis
   obtain ⟨a, b, pre, step, post, equal, first, last, before, after, unset,
     assigned, amount, epoch⟩ := tail.departure_charge_site charge member
   rw [index] at before after
@@ -3128,7 +3118,7 @@ private theorem intervalLoss_pointwise {g x y : ForkedBeaconState preset}
       | some c => if c.epoch ≤ high + 1 then c.amount else 0
       | none => 0) +
       (if deficit = 0 then 0 else deficit + preset.EFFECTIVE_BALANCE_INCREMENT.toNat - 1) := by
-  have ⟨_, _, _, initialized⟩ := genesis
+  have ⟨_, _, _, _, initialized⟩ := genesis
   obtain ⟨w, located, life⟩ := tail.registryLifecycle.validators i.toNat v found
   by_cases recent : isActiveValidator w (getCurrentEpoch y.state) = true ∨
       isActiveValidator w (getPreviousEpoch y.state) = true
@@ -3439,7 +3429,7 @@ private theorem intervalGain_reference_at {g x y : ForkedBeaconState preset}
     Models.supported (activeKeys x.state) (effectiveWeight x.state) w.pubkey =
       (if (x.state.validators.data[i]?.map fun v =>
         isActiveValidator v (getCurrentEpoch x.state)).getD false then effectiveAt x i else 0) := by
-  have ⟨_, _, _, initialized⟩ := genesis
+  have ⟨_, _, _, _, initialized⟩ := genesis
   have uniqueX := (validatorKeys_prefix_and_distinct_of_genesis_chainSteps initialized
       shared.chainSteps).2
   have uniqueY := (validatorKeys_prefix_and_distinct_of_genesis_chainSteps initialized
@@ -3510,7 +3500,7 @@ private theorem intervalGain_reference_sum {g x y : ForkedBeaconState preset}
         (if (x.state.validators.data[i]?.map fun v =>
           isActiveValidator v (getCurrentEpoch x.state)).getD false then
             effectiveAt x i else 0)) := by
-  have ⟨_, _, _, initialized⟩ := genesis
+  have ⟨_, _, _, _, initialized⟩ := genesis
   have unique := (validatorKeys_prefix_and_distinct_of_genesis_chainSteps initialized
       (shared.append tail).chainSteps).2
   have inside (i) (h : i ∈ intervalGain_indices y) : i < y.state.validators.data.size :=
@@ -4049,15 +4039,14 @@ private theorem intervalGain_active_path {g x y : ForkedBeaconState preset}
     gaining x y ≤ ((getActiveValidatorIndices x.state (getCurrentEpoch x.state)).map fun i =>
       min (actualBalanceAt x i.toNat - effectiveAt x i.toNat + pathCredits i.toNat tail.balancePath)
         (preset.MAX_EFFECTIVE_BALANCE.toNat - effectiveAt x i.toNat)).sum := by
-  have ⟨_, _, _, initialized⟩ := genesis
+  have ⟨_, _, _, _, initialized⟩ := genesis
   have uniqueX := (validatorKeys_prefix_and_distinct_of_genesis_chainSteps initialized
       shared.chainSteps).2
   have uniqueY := (validatorKeys_prefix_and_distinct_of_genesis_chainSteps initialized
       (shared.append tail).chainSteps).2
   have gloas : y.fork < .glamsterdam := Nat.lt_trans early (by decide)
   have earlyX := Nat.lt_of_le_of_lt (fork_le_of_chainSteps tail.chainSteps) gloas
-  have capped := (shared.append tail).effectiveBalance_capped genesis caps.activation
-    caps.compounding gloas
+  have capped := (shared.append tail).effectiveBalance_capped genesis caps
   have allKeys : gaining x y ≤ ∑ k ∈ activeKeys x.state,
       (effectiveWeight y.state k - effectiveWeight x.state k) := by
     apply Finset.sum_le_sum_of_subset
@@ -4206,9 +4195,8 @@ private theorem intervalGain_boundary_carry (x : ForkedBeaconState preset)
   have filtered (vs : List Validator) :
       ((vs.filter selected).map (·.effectiveBalance.toNat)).sum =
         (vs.map fun v => if selected v then v.effectiveBalance.toNat else 0).sum := by
-    induction vs with
-    | nil => simp
-    | cons v rest ih => cases h : selected v <;> simp [h, ih]
+    simpa only [Bool.decide_eq_true] using
+      (Base.sum_map_ite_eq_sum_filter (selected · = true) (·.effectiveBalance.toNat) vs).symm
   have forget : (x.state.validators.data.toList.zipIdx.map fun (v, _) =>
       if selected v then v.effectiveBalance.toNat else 0) =
       x.state.validators.data.toList.map
@@ -4284,7 +4272,7 @@ private theorem gains_and_activations_over_interval {g x y : ForkedBeaconState p
         (if high + 1 < config.ELECTRA_FORK_EPOCH.toNat then 0 else initialExcess x) +
         (events.map (residualCredit (config := config) high)).sum +
         depositHeadroom (config := config) x high events := by
-  have ⟨_, _, _, initialized⟩ := genesis
+  have ⟨_, _, _, _, initialized⟩ := genesis
   by_cases crossing : config.ELECTRA_FORK_EPOCH.toNat ≤ high + 1
   · have notBefore : ¬ high + 1 < config.ELECTRA_FORK_EPOCH.toNat := by omega
     simp only [depositHeadroom, notBefore, ↓reduceIte, Nat.add_zero]
@@ -4378,22 +4366,18 @@ private theorem sourceDrift_le_of_prefix (x : ForkedBeaconState preset) (high : 
   unfold sourceDrift
   omega
 
-/-- The balance replay of a run succeeds, and the observed drift is at most the source envelope.
-
-The run ends before Gloas, and the reference state is at most one epoch past the horizon.
-
-The preset meets the parameters, has at least two slots per epoch and orders its caps.
-
-Its largest effective balances are whole numbers of increments.
-
-The withdrawal delay is positive. -/
+/-- The balance replay of a run succeeds, and the observed drift is at most the source envelope. -/
 theorem derivedDrift_le_sources {g x y : ForkedBeaconState preset}
     (shared : Run config checks g x) (tail : Run config checks x y)
     (genesis : Genesis (config := config) (checks := checks) g)
+    -- The withdrawal delay is positive.
     (delay : 0 < config.MIN_VALIDATOR_WITHDRAWABILITY_DELAY.toNat)
+    -- The preset meets the parameters, has at least two slots per epoch and orders its caps.
     (parameters : Parameters preset)
     (twoSlots : 2 ≤ preset.SLOTS_PER_EPOCH.toNat) (caps : CapOrder preset)
+    -- Its largest effective balances are whole numbers of increments.
     (aligned : MaxEffectiveBalancesAligned preset)
+    -- The run ends before Gloas, and the reference state is at most one epoch past the horizon.
     (early : y.fork < .glamsterdam) (high : Nat)
     (startEpoch : (getCurrentEpoch x.state).toNat ≤ high + 1) :
     ∃ events, tail.balanceEvents high = .ok events ∧

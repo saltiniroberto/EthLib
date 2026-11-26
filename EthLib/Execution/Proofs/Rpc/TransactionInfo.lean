@@ -11,8 +11,6 @@ A lookup by hash returns only a transaction of that hash, in a canonical block.
 
 The search under it finds nothing exactly when no canonical block has a transaction of that hash.
 
-The blocks off the canonical chain never change that search.
-
 A lookup by block and index returns the transaction at that index of the block that it names.
 
 In a valid view, the run of each canonical block after the lowest checked each of its transactions.
@@ -87,6 +85,12 @@ private theorem findSome_mem {l : List BlockRecord} {hash : Hash32} {r : BlockRe
   obtain ⟨p, hp, hq⟩ := Option.map_eq_some_iff.mp hf
   cases hq
   exact ⟨by simp [hl], hp⟩
+
+/-- The base fee of a block record is the base fee of the environment its header builds. -/
+theorem _root_.EthLib.Execution.Rpc.BlockRecord.baseFee_eq_baseFeeOf (r : BlockRecord)
+    (config : ChainConfig) (hashes : List Hash32) (blobGasPrice : Option Nat := none) :
+    r.baseFee = baseFeeOf (blockEnvironment config hashes r.block.header blobGasPrice) := by
+  simp [baseFeeOf, BlockRecord.baseFee, blockEnvironment]
 
 /-- A search by hash finds a transaction with that hash, at its index in a canonical block. -/
 theorem findTransaction_some {v : ChainView} {hash : Hash32} {r : BlockRecord} {tx : Transaction}
@@ -237,6 +241,6 @@ theorem Valid.transactionInfo_inclusion {v : ChainView} {checkSeal : Bool}
   obtain ⟨sender, hash, hs, -, rfl⟩ := BlockRecord.transactionInfo_eq_ok.mp h
   refine ⟨hashes, state, body, before, inc, hrec, hdao, hstart, hbefore, hinc, ?_, ?_⟩
   · exact Except.ok.inj (hs.symm.trans hsender)
-  · simp [hprice, baseFeeOf, BlockRecord.baseFee, blockEnvironment]
+  · simp only [hprice, BlockRecord.baseFee_eq_baseFeeOf _ v.config hashes]
 
 end EthLib.Execution.Rpc.ChainView

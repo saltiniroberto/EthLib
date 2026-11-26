@@ -19,7 +19,7 @@ None of them reads the bytecode of the contract.
 
 namespace EthLib.Execution.Blocks.WithdrawalRequests
 
-open EthLib.Base (Fork U256 byteAt_extract)
+open EthLib.Base (Fork U256 byteAtOrZero_extract)
 open EthLib.Execution.Evm
 open EthLib.Execution.Evm.Logic
 open EthLib.Execution.State (TransactionState)
@@ -30,21 +30,19 @@ variable {fork : Fork} {message : Message fork} {returnData : ByteArray}
 
 /-- The three words that start a record of 76 bytes, after the bytes `pre` from offset 0.
 
-The first word holds the address in its first 20 bytes, the second the first 32 bytes of the key.
-
-The third holds the end of the key in its first 16 bytes, under the mask of the code.
-
-Each write starts where the bytes before it end, so it overwrites the tail of the word before.
-
-Memory then holds `pre`, the address, the second word and the first 16 bytes of the third. -/
+Each write starts where the bytes before it end, so it overwrites the tail of the word before. -/
 theorem holds_head {M M₁ M₂ M₃ pre : ByteArray} {off e₁ e₂ e₃ : Nat} {v₀ v₁ v₂ : U256}
     (hpre : Holds M 0 pre) (hoff : pre.size = off)
+    -- The first word holds the address in its first 20 bytes.
     (hM₁ : M₁ = memoryWrite (memoryExtend M e₁) off (wordBytes (bitwiseShl 96#256 v₀)))
+    -- The second holds the first 32 bytes of the key.
     (hM₂ : M₂ = memoryWrite (memoryExtend M₁ e₂) (off + 20) (wordBytes v₁))
+    -- The third holds the end of the key in its first 16 bytes, under the mask of the code.
     (hM₃ : M₃ = memoryWrite (memoryExtend M₂ e₃) (off + 52) (wordBytes (bitwiseAnd
       0xffffffffffffffffffffffffffffffff00000000000000000000000000000000#256 v₂)))
     (h₁ : off + 32 ≤ M.size + e₁) (h₂ : off + 20 + 32 ≤ M₁.size + e₂)
     (h₃ : off + 52 + 32 ≤ M₂.size + e₃) :
+    -- Memory then holds `pre`, the address, the second word and the first 16 bytes of the third.
     Holds M₃ 0 (pre ++ ((wordBytes v₀).extract 12 32 ++ wordBytes v₁ ++
       (wordBytes v₂).extract 0 16)) := by
   have s := size_wordBytes
@@ -59,9 +57,9 @@ theorem holds_head {M M₁ M₂ M₃ pre : ByteArray} {off e₁ e₂ e₃ : Nat}
       have := hw.1
       simp only [s, ByteArray.size_extract] at this ⊢
       omega
-    refine Holds.of_byteAt hfit fun i hi => ?_
+    refine Holds.of_byteAtOrZero hfit fun i hi => ?_
     simp only [ByteArray.size_extract, s] at hi
-    rw [hw.byteAt_eq (by rw [s]; omega), byteAt_wordBytes_shl v₀ (by omega), byteAt_extract, s,
+    rw [hw.byteAtOrZero_eq (by rw [s]; omega), byteAtOrZero_wordBytes_shl v₀ (by omega), byteAtOrZero_extract, s,
       ite_eq_left (by omega)]
   have hsA : ((wordBytes v₀).extract 12 32).size = 20 := by simp [s]
   have hA₂ : Holds M₂ off ((wordBytes v₀).extract 12 32) :=
@@ -77,9 +75,9 @@ theorem holds_head {M M₁ M₂ M₃ pre : ByteArray} {off e₁ e₂ e₃ : Nat}
       have := hw.1
       simp only [s, ByteArray.size_extract] at this ⊢
       omega
-    refine Holds.of_byteAt hfit fun i hi => ?_
+    refine Holds.of_byteAtOrZero hfit fun i hi => ?_
     simp only [ByteArray.size_extract, s] at hi
-    rw [hw.byteAt_eq (by rw [s]; omega), byteAt_wordBytes_and v₂ (by omega), byteAt_extract, s,
+    rw [hw.byteAtOrZero_eq (by rw [s]; omega), byteAtOrZero_wordBytes_and v₂ (by omega), byteAtOrZero_extract, s,
       ite_eq_left (by omega), Nat.zero_add]
   have hP₁ : Holds M₁ 0 pre := hM₁ ▸ Holds.extend_write hpre w₁ (by omega)
   have hP₂ : Holds M₂ 0 pre := hM₂ ▸ Holds.extend_write hP₁ w₂ (by omega)
@@ -94,14 +92,14 @@ theorem extract_amount (v : U256) : (wordBytes v).extract 16 24 =
       UInt8.ofNat (v.toNat / 256 ^ 13), UInt8.ofNat (v.toNat / 256 ^ 12),
       UInt8.ofNat (v.toNat / 256 ^ 11), UInt8.ofNat (v.toNat / 256 ^ 10),
       UInt8.ofNat (v.toNat / 256 ^ 9), UInt8.ofNat (v.toNat / 256 ^ 8)].toArray⟩ := by
-  refine EthLib.Base.eq_of_byteAt (by rw [ByteArray.size_extract, size_wordBytes]; rfl)
+  refine EthLib.Base.eq_of_byteAtOrZero (by rw [ByteArray.size_extract, size_wordBytes]; rfl)
     fun j => ?_
-  rw [byteAt_extract, size_wordBytes]
+  rw [byteAtOrZero_extract, size_wordBytes]
   by_cases hj : j < 8
-  · rw [ite_eq_left (by omega), byteAt_wordBytes _ (by omega)]
+  · rw [ite_eq_left (by omega), byteAtOrZero_wordBytes _ (by omega)]
     obtain _ | _ | _ | _ | _ | _ | _ | _ | j := j
     all_goals first | rfl | omega
-  · rw [ite_eq_right (by omega), EthLib.Base.byteAt_of_size_le (by
+  · rw [ite_eq_right (by omega), EthLib.Base.byteAtOrZero_of_size_le (by
       show 8 ≤ j
       omega)]
 

@@ -21,7 +21,7 @@ So the invariant holds across fork boundaries, and the finalized epoch never dec
 
 When the upgrades due at a slot succeed, no upgrade is due after them.
 
-So at the first slot of an epoch, the next fork of the state they reach does not start then.
+So at the first slot of an epoch, the state that the upgrades reach has no fork that starts then.
 -/
 
 @[expose] public section

@@ -16,12 +16,6 @@ Such a frame is one that no revert undoes.
 
 Each account it marks is marked by the frame that ends the run, when that frame has no error.
 
-The frames that a run goes through are those of a chain of steps under the runner of messages.
-
-They are also those that the code of a message sent on the way goes through.
-
-That message must end without an error, so that no revert undoes them.
-
 These facts hold at every fork.
 
 The proofs about transactions use this for the deletions at the end of a transaction.
@@ -51,6 +45,7 @@ theorem toDeleteLe_runFrame [LawfulGasMeter Meter] {bound : Nat} {evm after : Ev
     ToDeleteLe evm after := by
   refine stepRules_toDeleteLe.runFrame (fun caller message _ ended ran => ?_) h
   unfold processRunner at ran
+  -- This runner runs each message that a step sends, by its call or creation.
   split at ran
   · exact fun x hx => (toDeleteLe_processMessage_induction message.gas).1 message caller.state
       caller.substate.child _ _ rfl ended ran x hx
@@ -63,17 +58,7 @@ theorem toDeleteLe_runFrame [LawfulGasMeter Meter] {bound : Nat} {evm after : Ev
 
 It says nothing of whether the run ends with an error; the theorems that use it ask for that.
 
-Its messages run under the runner of the messages of code, with gas below `bound`.
-
-A frame reaches each frame of its chain of steps under that runner.
-
-It also reaches the frames that the code of a message sent on the way goes through.
-
-That message must end without an error, so that the frames of its code count.
-
-The code of the message starts from the state and the child substate of the sender.
-
-It starts with a new meter. -/
+Its messages run under the runner of the messages of code, with gas below `bound`. -/
 inductive Visits [LawfulGasMeter Meter] (fork : Fork) :
     Nat → Evm fork Meter → Evm fork Meter → Prop where
   /-- A frame reached by steps under the runner, the frame itself included. -/
@@ -83,10 +68,15 @@ inductive Visits [LawfulGasMeter Meter] (fork : Fork) :
   | child {bound : Nat} {evm mid caller start inner : Evm fork Meter} {message : Message fork}
       {resume : Evm fork Meter → Except EvmError (Evm fork Meter)}
       {ended : { child : Evm fork Meter // GasMeter.gasHeld child.gas ≤ message.gas }} :
+      -- The message is sent on the way.
       Reaches (StepBy fork bound (processRunner fork bound)) evm mid → mid.running = true →
       step fork mid = .ok (.child caller message resume) →
       ∀ lt : message.gas < bound, processRunner fork bound caller message lt = .ok ended →
+      -- That message must end without an error, so that the frames of its code count.
       ended.val.error = none →
+      -- The code of the message starts from the state and the child substate of the sender.
+      --
+      -- It starts with a new meter.
       CodeStarts fork message caller.state caller.substate.child
         (GasMeter.start message.gas message.reservoir) start →
       Visits fork message.gas start inner → Visits fork bound evm inner

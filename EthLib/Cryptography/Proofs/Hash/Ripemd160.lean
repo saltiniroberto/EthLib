@@ -7,29 +7,9 @@ public import Mathlib.Logic.Function.Defs
 /-!
 # Proofs: `Hash.Ripemd160`
 
-What is proved about RIPEMD-160:
+The constants, the steps and the padding of RIPEMD-160, against the authors' pseudo-code.
 
-- The added constants are the ones the authors derive from square and cube roots.
-- Each group of sixteen steps of `r` and `r'` lists sixteen indices that include every message word, so it reads each once.
-- Rotating a word left by `n` bits with `0 < n < 32` has left rotation by `32 - n` as its inverse.
-- Each step with a rotation of 1 to 31 bits permutes the five-word state, and so do both lines.
-- Padding fills whole blocks, with the least zeros that do, and keeps the message and the `0x80` byte in place.
-- One block's compression, read as 32-bit vectors, is the compression of a model of the pseudo-code.
-- The hash of every message is the hash of the model, with no bound on the length of the message.
-
-The model follows the authors' pseudo-code over 32-bit vectors.
-
-It runs both lines in one loop, as the pseudo-code does, and rotates bit vectors.
-
-It reads each message word with its least significant byte first, as MD4 does (RFC 1320 §2).
-
-It shares only the constants `K` and `K'`, the word orders and the rotation amounts with the code.
-
-The model pads the message as MD4 does (RFC 1320 §3.1 and §3.2).
-
-It runs the blocks from its own initial value.
-
-Its digest puts the least significant byte of each word first.
+The hash of every message is the hash of the model, with no bound on the length of the message.
 
 The Python tests of the bindings check the hash against the published test vectors.
 -/
@@ -38,7 +18,14 @@ The Python tests of the bindings check the hash against the published test vecto
 
 namespace EthLib.Cryptography.Hash.Ripemd160
 
-/-! ## The model -/
+/-! ## The model
+
+The model follows the authors' pseudo-code over 32-bit vectors.
+
+It runs both lines in one loop, as the pseudo-code does, and rotates bit vectors.
+
+It shares only the constants `K` and `K'`, the word orders and the rotation amounts with the code.
+-/
 
 namespace Spec
 
@@ -150,6 +137,7 @@ def digest (h : Vector Word 5) : Vector UInt8 20 :=
 /-- RIPEMD-160 of a message: pad it, run every block from the initial value, and read the digest. -/
 def hash (message : ByteArray) : Vector UInt8 20 :=
   let input := padded message
+  -- The model runs the blocks from its own initial value.
   digest (blocks input initial (input.size / 64) (Nat.mul_div_le input.size 64))
 
 end Spec
@@ -426,7 +414,8 @@ theorem little32_toBitVec (block : ByteArray) (start : Nat) (within : start + 4 
       block[start + 3].toBitVec ++ block[start + 2].toBitVec ++ block[start + 1].toBitVec ++
         block[start].toBitVec := by
   refine BitVec.eq_of_getLsbD_eq fun i hi => ?_
-  simp only [little32, UInt32.toBitVec_or, UInt32.toBitVec_shiftLeft, BitVec.getLsbD_or]
+  simp only [little32, Base.uint32OfBytes, UInt32.toBitVec_or, UInt32.toBitVec_shiftLeft,
+    BitVec.getLsbD_or]
   simp only [BitVec.getLsbD_append]
   -- Bit `i` comes from byte `i / 8`, and every other byte is zero there.
   by_cases h8 : i < 8
@@ -497,72 +486,6 @@ theorem compress_toBitVec (h : Vector UInt32 5) (block : ByteArray) (start : Nat
 @[simp] theorem lengthBytes_size (size : Nat) : (lengthBytes size).size = 8 := by
   simp only [lengthBytes, ByteArray.size, Array.size_ofFn]
 
-/-- Padding adds the `0x80` byte, the zeros, and the eight length bytes. -/
-theorem pad_size (message : ByteArray) :
-    (pad message).size = message.size + 1 + paddingZeros message.size + 8 := by
-  simp only [pad, ByteArray.size_append, ByteArray.size_push, lengthBytes_size]
-  simp only [ByteArray.size, Array.size_replicate]
-
-/-- Padding adds fewer than a block of zeros. -/
-theorem paddingZeros_lt (size : Nat) : paddingZeros size < 64 := Nat.mod_lt _ (by decide)
-
-/-- A padded message is whole blocks. -/
-theorem pad_size_mod (message : ByteArray) : (pad message).size % 64 = 0 := by
-  rw [pad_size]
-  unfold paddingZeros
-  omega
-
-/-- No fewer zeros would fill whole blocks. -/
-theorem paddingZeros_minimal (size zeros : Nat) (complete : (size + 1 + zeros + 8) % 64 = 0) :
-    paddingZeros size ≤ zeros := by
-  unfold paddingZeros
-  omega
-
-/-- Padding keeps every byte of the message where it was. -/
-theorem pad_prefix (message : ByteArray) (i : Nat) (within : i < message.size) :
-    (pad message)[i]'(by rw [pad_size]; omega) = message[i] := by
-  -- Name the bound, so it unfolds together with the padded message.
-  have bound : i < (pad message).size := by rw [pad_size]; omega
-  change (pad message)[i]'bound = message[i]
-  unfold pad at bound ⊢
-  rw [ByteArray.getElem_append_left (by simp; omega), ByteArray.getElem_append_left (by simp; omega)]
-  exact Array.getElem_push_lt within
-
-/-- The byte after the message is `0x80`. -/
-theorem pad_delimiter (message : ByteArray) :
-    (pad message)[message.size]'(by rw [pad_size]; omega) = 0x80 := by
-  -- Name the bound, so it unfolds together with the padded message.
-  have bound : message.size < (pad message).size := by rw [pad_size]; omega
-  change (pad message)[message.size]'bound = 0x80
-  unfold pad at bound ⊢
-  rw [ByteArray.getElem_append_left (by simp; omega), ByteArray.getElem_append_left (by simp)]
-  exact Array.getElem_push_eq
-
-/-- Every byte between `0x80` and the length is zero. -/
-theorem pad_zero (message : ByteArray) (i : Nat) (within : i < paddingZeros message.size) :
-    (pad message)[message.size + 1 + i]'(by rw [pad_size]; omega) = 0 := by
-  have zeroSize : (ByteArray.mk (Array.replicate (paddingZeros message.size) 0)).size =
-      paddingZeros message.size := Array.size_replicate
-  -- Name the bound, so it unfolds together with the padded message.
-  have bound : message.size + 1 + i < (pad message).size := by rw [pad_size]; omega
-  change (pad message)[message.size + 1 + i]'bound = 0
-  unfold pad at bound ⊢
-  rw [ByteArray.getElem_append_left (by simp only [ByteArray.size_append, ByteArray.size_push, zeroSize]; omega)]
-  rw [ByteArray.getElem_append_right (by simp)]
-  exact Array.getElem_replicate _
-
-/-- The last eight bytes are the length. -/
-theorem pad_length_suffix (message : ByteArray) :
-    (pad message).extract ((pad message).size - 8) (pad message).size = lengthBytes message.size := by
-  have zeroSize : (ByteArray.mk (Array.replicate (paddingZeros message.size) 0)).size =
-      paddingZeros message.size := Array.size_replicate
-  rw [pad_size]
-  unfold pad
-  apply ByteArray.extract_append_eq_right
-  · simp only [ByteArray.size_append, ByteArray.size_push, zeroSize]
-    omega
-  · simp only [ByteArray.size_append, ByteArray.size_push, lengthBytes_size, zeroSize]
-
 /-! ## The hash -/
 
 /-- Byte `i` of the length is digit `i` in base 256 of the low 64 bits of the bit length. -/
@@ -580,8 +503,8 @@ theorem lengthBytes_digit (size : Nat) (i : Fin 8) :
 
 /-- The padding is the one of RFC 1320 §3.1 and §3.2, for every message. -/
 theorem pad_eq_spec (message : ByteArray) : pad message = Spec.padded message := by
-  have zeros : paddingZeros message.size = Spec.zeroCount message.size := by
-    unfold paddingZeros Spec.zeroCount
+  have zeros : Padding.paddingZeros message.size = Spec.zeroCount message.size := by
+    unfold Padding.paddingZeros Spec.zeroCount
     omega
   have length : (lengthBytes message.size).data =
       Array.ofFn fun i : Fin 8 =>
@@ -594,7 +517,7 @@ theorem pad_eq_spec (message : ByteArray) : pad message = Spec.padded message :=
         lengthBytes_digit message.size ⟨p, by simpa using left⟩
   -- The message, the `0x80` byte, the zeros and the length agree region by region.
   apply ByteArray.ext
-  simp [pad, Spec.padded, zeros, length, ByteArray.data_append, ByteArray.push]
+  simp [pad, Padding.pad, Spec.padded, zeros, length, ByteArray.data_append, ByteArray.push]
 
 /-- The initial value of the code is the one of the model. -/
 theorem IV_toBitVec : IV.map UInt32.toBitVec = Spec.initial := by
@@ -620,7 +543,7 @@ theorem digest_eq_spec (state : Vector UInt32 5) :
   intro i _
   apply UInt8.toNat_inj.mp
   -- Each byte is one base-256 digit of its word.
-  simp [digest, Spec.digest, UInt32.toNat_shiftRight, Nat.shiftRight_eq_div_pow,
+  simp [digest, Base.uint32Byte, Spec.digest, UInt32.toNat_shiftRight, Nat.shiftRight_eq_div_pow,
     UInt32.toNat_mul, UInt32.toNat_ofNat]
   rw [Nat.mod_eq_of_lt (show 8 * (i % 4) < 32 by omega)]
 

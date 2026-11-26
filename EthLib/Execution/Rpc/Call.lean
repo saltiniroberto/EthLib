@@ -7,94 +7,13 @@ public import EthLib.Execution.Transactions.Process
 /-!
 # `Execution.Rpc.Call`
 
-The method `eth_call` of [`execute.yaml`][execute]: a message call on the state after a block.
+The method `eth_call`: a message call on the state after a block.
 
 The call runs the message of its transaction as the state transition runs it, but commits nothing.
 
-It reads the state after the block that its block parameter names, `latest` by default.
+Source: [`execute.yaml`][execute], at commit `1ca0818` of execution-apis: the method.
 
-The sender is the field `from` of the request, else a sender of the node's choice.
-
-The source fixes few rules of the call, and the node makes the other choices.
-
-These choices are one structure, which every call takes:
-
-- the fork and the block environment of the call;
-- the gas limit of a request that names none;
-- the price per gas that the code sees when the request names no fee;
-- the sender of a request without `from`.
-
-By default the call runs in the environment of the header of the block that it names.
-
-The fixtures `call-callenv.io` and `call-block-hash-object.io` expect the number of that block.
-
-The source fixes no other field of that environment.
-
-The default gas limit is the gas limit of that header, and the default sender is address zero.
-
-That gas limit may be above the cap on the gas of a transaction of EIP-7825, which a call ignores.
-
-A request that names no fee falls under a rule of the source.
-
-It must not fail solely because the sender cannot afford the gas fees of the node's defaults.
-
-It adds that this does not waive the balance requirement for a value that is not zero.
-
-So a request that names no fee pays no fee, and the code sees the price of the node's choice.
-
-Its environment then has a base fee of 0, so that this price need not cover a base fee.
-
-The fixture `call-callenv.io` expects that base fee of 0.
-
-The fixture `call-callenv-options-eip1559.io` names a fee, and expects the base fee of the header.
-
-A blob fee cap alone names no fee, so such a request pays neither fee.
-
-A request that names a fee buys its gas as a transaction does.
-
-It pays its gas limit times its effective price per gas, and the fee of its blobs.
-
-A transaction must hold the fee at its caps, but a call needs only the fee that it pays.
-
-The blob fee cap is not checked against the base fee per blob gas.
-
-As in a transaction, the nonce of the sender grows by one and the fee leaves its balance.
-
-The nonce of the request is not checked, as the source fixes no rule for it.
-
-Nor is the nonce of the sender bounded, as EIP-2681 bounds it for a transaction.
-
-The call ignores the field `type`, as the [text of the method][rules] requires.
-
-The other fields decide the kind of the transaction, so any type gives the answer of no type.
-
-A field whose EIP is not active at the block makes the request invalid, even when it is zero.
-
-The fields are an access list before Berlin, a fee cap or a priority fee before London.
-
-They also include blob hashes before Cancun, and authorizations before Prague.
-
-The kind of the request has the fork of the latest of these fields, so its fork check covers them.
-
-The text names no code for its rejections, and the fixtures expect -32000.
-
-That is the code of invalid input in [EIP-1474][eip-1474], which EthLib gives them.
-
-Past their reading as bytes, a call never reads the blobs, their commitments or their proofs.
-
-So its kind does not limit them.
-
-The other checks of a transaction before its block do not run.
-
-They are the checks of the blobs and of the authorization list, and of a sender with code.
-
-The source fixes the answer of a revert, and no answer for a halt other than a revert.
-
-EthLib takes the codes of the other answers from `src/error-groups/` of the source.
-
-[execute]: https://github.com/ethereum/execution-apis/blob/3284ee80c3da3e516c53782dde75157cccf1ebdc/src/eth/execute.yaml
-[rules]: https://github.com/ethereum/execution-apis/blob/68d76a5b1c09dff023782d97eec6ce87a6f6505e/src/eth/execute.yaml#L11-L24
-[eip-1474]: https://eips.ethereum.org/EIPS/eip-1474#error-codes
+[execute]: https://github.com/ethereum/execution-apis/blob/1ca0818569467cff85b7f41372f22e728d5daa14/src/eth/execute.yaml
 -/
 
 @[expose] public section
@@ -116,7 +35,7 @@ structure CallEnvironment where
   /-- The block environment of the call. -/
   env : BlockEnvironment fork
 
-/-- The environment of the header of a block of the view.
+/-- The environment of the header of a block of the view, in which a call runs by default.
 
 The hashes before it are those of the last 256 canonical blocks below its number, or fewer.
 
@@ -125,24 +44,39 @@ They leave out the blocks of the history.
 For a block off the canonical chain, they are not the hashes of its ancestors. -/
 def ChainView.headerEnvironment (v : ChainView) (r : BlockRecord) : CallEnvironment :=
   let before := (v.canonical.filter (·.block.header.number < r.block.header.number)).map (·.hash)
+  -- The fixtures `call-callenv.io` and `call-block-hash-object.io` expect the number of the block.
+  --
+  -- The source fixes no other field of the environment.
   ⟨r.fork, blockEnvironment v.config (before.drop (before.length - 256)) r.block.header⟩
 
-/-- The choices that the source leaves to the node, for a call. -/
+/-- The choices that the source leaves to the node, for a call.
+
+The source fixes few rules of the call, and the node makes the other choices.
+
+Every call takes them as one structure. -/
 structure CallChoices where
   /-- The fork and the environment of a call on the state after a block of the view. -/
   environment : ChainView → BlockRecord → CallEnvironment := ChainView.headerEnvironment
-  /-- The gas limit of a request that names none, or none for the gas limit of the environment. -/
+  /-- The gas limit of a request that names none, or none for the gas limit of the environment.
+
+  The gas limit of the environment is that of the header by default. -/
   gasLimit : Option Nat := none
   /-- The price per gas that the code sees when the request names no fee. -/
   gasPrice : Nat := 0
-  /-- The sender of a request without `from`. -/
+  /-- The sender of a request without `from`, address zero by default. -/
   sender : Address := Vector.replicate 20 0
 
 /-- The error of a parameter of a call that does not fit its field or its kind. -/
 def callParamError (reason : String) : RpcError :=
   RpcError.invalidParams s!"transaction: {reason}"
 
-/-- The error of a request that a rule of the method rejects, code -32000 for invalid input. -/
+/-- The error of a request that a rule of the method rejects, code -32000 for invalid input.
+
+The text names no code for its rejections, and the fixtures expect -32000.
+
+That is the code of invalid input in [EIP-1474][eip-1474], which EthLib gives them.
+
+[eip-1474]: https://eips.ethereum.org/EIPS/eip-1474#error-codes -/
 def callRuleError (reason : String) : RpcError :=
   invalidInput.toRpcError (some (.str s!"transaction: {reason}"))
 
@@ -157,32 +91,30 @@ def callUint64 (what : String) (n : Nat) : Except RpcError UInt64 :=
 
 /-- The unsigned transaction of a request, with every signature field 0.
 
-`nonce` is the nonce of the sender's account, and `gas` is the gas limit.
+A request is an invalid parameter when a field does not fit its kind.
 
-`chainId` is the chain of the node.
+So is a request whose chain is not that of the node, or with a number too large for its field.
 
-Each fee field that the request leaves out is 0 here, and the fee cap is `maxFee`.
+So is a request with a type above 4, or of type 3 or 4 without a recipient.
 
-A fee, an access list, blob hashes, a blob fee cap or authorizations that its kind lacks fail.
+Past their reading as bytes, the blobs, their commitments and their proofs are never checked.
 
-So does a chain other than `chainId`, a kind above 4, or type 3 or 4 without a recipient.
+They leave the result unchanged.
 
-So does a value, fee or fee cap of the request, or `nonce`, `gas` or `maxFee`, of `2 ^ 256` or more.
-
-Type 4 holds its nonce in 64 bits, so it also fails on a `nonce` of `2 ^ 64` or more.
-
-Each of these fails with the code of invalid parameters.
-
-The schema of the request ties none of its fields to its kind, so the checks of kind are EthLib's.
-
-The blobs, their commitments and their proofs are never checked, and leave the result unchanged.
+So the kind of a request does not limit its blobs.
 -/
 def GenericTransaction.toTransaction (tx : GenericTransaction) (chainId : UInt64)
     (nonce gas maxFee : Nat) : Except RpcError Transaction := do
   -- The type of the request, else the kind its fields imply, EthLib's reading; above 4 is invalid.
   let kind := tx.kind
   ensure (kind ≤ 4) (callParamError "type: not a transaction type")
+  -- The schema of the request ties none of its fields to its kind.
+  --
+  -- So the checks of kind are EthLib's.
+  --
   -- Each field that the kind lacks is an invalid parameter.
+  --
+  -- These fields are a fee, an access list, blob hashes, a blob fee cap and authorizations.
   ensure (¬(kind ≤ 1 && (tx.maxFeePerGas.isSome || tx.maxPriorityFeePerGas.isSome)))
     (callParamError "a fee cap needs type 2, 3 or 4")
   ensure (¬(2 ≤ kind && tx.gasPrice.isSome)) (callParamError "a gas price needs type 0 or 1")
@@ -191,15 +123,20 @@ def GenericTransaction.toTransaction (tx : GenericTransaction) (chainId : UInt64
   ensure (¬(kind ≠ 3 && (tx.blobVersionedHashes.isSome || tx.maxFeePerBlobGas.isSome)))
     (callParamError "blobs need type 3")
   ensure (¬(kind ≠ 4 && tx.authorizationList.isSome)) (callParamError "authorizations need type 4")
-  -- A chain other than the node's is an invalid parameter.
+  -- The chain ID passed in is that of the node, and any other chain is an invalid parameter.
   if let some c := tx.chainId then
     ensure (c = chainId.toNat) (callParamError "chainId: not the chain of the node")
   -- Each number must fit in 256 bits, else an invalid parameter.
+  --
+  -- These are the value, each fee and the fee cap, and the nonce and the gas limit.
+  --
+  -- The nonce is that of the sender's account.
   let nonce ← callWord "nonce" nonce
   let gas ← callWord "gas" gas
   let value ← callWord "value" (tx.value.getD 0)
   let data := tx.input.getD .empty
   let accessList := tx.accessList.getD []
+  -- Each fee field that the request leaves out is 0, and the fee cap is the one passed in.
   let maxPriorityFeePerGas ← callWord "maxPriorityFeePerGas" (tx.maxPriorityFeePerGas.getD 0)
   let maxFeePerGas ← callWord "maxFeePerGas" maxFee
   let gasPrice ← callWord "gasPrice" (tx.gasPrice.getD 0)
@@ -220,6 +157,8 @@ def GenericTransaction.toTransaction (tx : GenericTransaction) (chainId : UInt64
                    maxFeePerBlobGas := ← callWord "maxFeePerBlobGas" (tx.maxFeePerBlobGas.getD 0)
                    blobVersionedHashes := tx.blobVersionedHashes.getD [] }
   -- A set-code transaction holds its nonce in 64 bits.
+  --
+  -- So type 4 also fails on a nonce of `2 ^ 64` or more.
   let nonce ← callUint64 "nonce" nonce.toNat
   return .setCode { chainId, nonce, maxPriorityFeePerGas, maxFeePerGas, gas, to, value, data,
                     accessList, authorizations := tx.authorizationList.getD [], yParity := 0,
@@ -267,15 +206,36 @@ def callInternalError (reason : String) : RpcError :=
 
 /-- The call of a request on the state after a block, ready to run, or the error that stops it.
 
-The block is the one that `p` names, and `choices` are the choices of the node. -/
+The block is the one that `p` names, and `choices` are the choices of the node.
+
+The call ignores the field `type`, as the [text of the method][rules] requires.
+
+[rules]: https://github.com/ethereum/execution-apis/blob/1ca0818569467cff85b7f41372f22e728d5daa14/src/eth/execute.yaml#L11-L24
+-/
 def ChainView.prepareCall (v : ChainView) (tx : GenericTransaction) (p : BlockParam)
     (choices : CallChoices) : Except RpcError CallSetup :=
   -- The text of the method ignores the type of the request, so the other fields decide the kind.
+  --
+  -- So any type gives the answer of no type.
   let tx : GenericTransaction := { tx with type := none }
   v.ofBlock p fun r => do
     let ce := choices.environment v r
     let fork := ce.fork
-    -- A request that names no fee pays none, so its environment has a base fee of 0.
+    -- A request that names no fee falls under a rule of the source.
+    --
+    -- Such a request must not fail solely because the sender cannot afford the node's default fees.
+    --
+    -- The rule adds that this does not waive the balance requirement for a value that is not zero.
+    --
+    -- So a request that names no fee pays no fee, and the code sees the price of the node's choice.
+    --
+    -- Its environment then has a base fee of 0, so that this price need not cover a base fee.
+    --
+    -- The fixture `call-callenv.io` expects that base fee of 0.
+    --
+    -- The fixture `call-callenv-options-eip1559.io` names a fee, and expects the header's base fee.
+    --
+    -- A blob fee cap alone names no fee, so such a request pays neither fee.
     let env := if tx.namesFee then ce.env else { ce.env with baseFeePerGas := fun _ => 0 }
     -- A fork that EthLib does not yet specify: EthLib's rejection, code -32603.
     ensure (fork < .hegota) (callInternalError "fork not yet specified")
@@ -289,17 +249,29 @@ def ChainView.prepareCall (v : ChainView) (tx : GenericTransaction) (p : BlockPa
     let state := TransactionState.ofBlock ⟨r.state, ∅, ∅, ∅, ∅⟩
     let account := state.getAccount sender
     -- The gas limit of the request, else the node's choice, else that of the environment.
+    --
+    -- It may be above the cap on the gas of a transaction of EIP-7825, which a call ignores.
     let gas := tx.gas.getD (choices.gasLimit.getD env.gasLimit)
     -- A missing fee cap is the base fee plus the priority fee, and a missing priority fee is 0.
     let baseFee := baseFeeOf env
     let priority := tx.maxPriorityFeePerGas.getD 0
     let maxFee := tx.maxFeePerGas.getD (baseFee + priority)
     -- The unsigned transaction at the sender's nonce, with a fee cap of 0 when no fee is named.
+    --
+    -- The nonce of the request is not checked, as the source fixes no rule for it.
+    --
+    -- Nor is the nonce of the sender bounded, as EIP-2681 bounds it for a transaction.
     let t ← tx.toTransaction env.chainId account.nonce gas (if tx.namesFee then maxFee else 0)
     -- A priority fee above the fee cap: code 804.
     if 2 ≤ tx.kind && tx.namesFee then
       ensure (priority ≤ maxFee) (priorityFeeAboveCap.toRpcError)
-    -- A field whose EIP is not active at the block: code -32000.
+    -- A field whose EIP is not active at the block: code -32000, even when zero or an empty list.
+    --
+    -- The fields are an access list before Berlin, a fee cap or a priority fee before London.
+    --
+    -- They also include blob hashes before Cancun, and authorizations before Prague.
+    --
+    -- The kind has the fork of the latest of these fields, so its fork check covers them.
     ensure (t.fork ≤ fork) (callRuleError "a field is not active at the fork of the block")
     -- A fee cap or a gas price below the base fee: code 806.
     ensure (¬(tx.namesFee && t.maxFeePerGas < baseFee)) feeCapBelowBaseFee.toRpcError
@@ -309,7 +281,17 @@ def ChainView.prepareCall (v : ChainView) (tx : GenericTransaction) (p : BlockPa
     ensure (t.value.toNat ≤ account.balance.toNat) insufficientFunds.toRpcError
     let target ← (messageTarget sender account.nonce t).mapError fun _ =>
       callInternalError "no address for the creation"
-    -- A request that names a fee buys its gas as a transaction does; the nonce grows in both cases.
+    -- A request that names a fee buys its gas as a transaction does.
+    --
+    -- That request pays its gas limit times its effective price per gas, and the fee of its blobs.
+    --
+    -- A transaction must hold the fee at its caps, but a call needs only the fee that it pays.
+    --
+    -- The blob fee cap is not checked against the base fee per blob gas.
+    --
+    -- As in a transaction, the nonce of the sender grows by one and the fee leaves its balance.
+    --
+    -- A request that names no fee still grows the nonce of the sender by one.
     let bought :=
       if tx.namesFee then buyGas env state sender t else state.incrementNonce fork sender
     let state ← bought.mapError fun
@@ -319,6 +301,9 @@ def ChainView.prepareCall (v : ChainView) (tx : GenericTransaction) (p : BlockPa
     ensure (t.value.toNat ≤ (state.getAccount sender).balance.toNat) insufficientFunds.toRpcError
     -- A gas limit below the intrinsic gas, or from Pectra the floor of EIP-7623: code 800.
     ensure (minimumGas fork sender t ≤ gas) intrinsicGasTooLow.toRpcError
+    -- The other checks of a transaction before its block do not run.
+    --
+    -- They are the checks of the blobs and of the authorization list, and of a sender with code.
     let (message, substate) ←
       (transactionStart env state sender target price (intrinsicGas fork sender t) t).mapError
         fun _ => callInternalError "code: missing from the state"
@@ -351,7 +336,11 @@ def haltError : EvmError → RpcError
   -- Any other halt, such as a creation at an address that has code: code -32000, EthLib's choice.
   | _ => { code := -32000, message := "execution failed" }
 
-/-- The answer of a call whose message gave `o`: its return data, or the error that stopped it. -/
+/-- The answer of a call whose message gave `o`: its return data, or the error that stopped it.
+
+The source fixes the answer of a revert, and no answer for a halt other than a revert.
+
+EthLib takes the codes of the other answers from `src/error-groups/` of the source. -/
 def callAnswer (o : CallOutput) : Except RpcError ByteArray :=
   match o.error with
   -- The data that the message returns.
@@ -370,7 +359,9 @@ def ChainView.runCall (v : ChainView) (tx : GenericTransaction) (p : BlockParam)
   let o ← s.run.mapError fun _ => callInternalError "the execution aborted"
   return (s, o)
 
-/-- The answer of `eth_call` for a request on the state after the block that `p` names. -/
+/-- The answer of `eth_call` for a request on the state after the block that `p` names.
+
+The sender is the field `from` of the request, else a sender of the node's choice. -/
 def ChainView.ethCall (v : ChainView) (tx : GenericTransaction) (p : BlockParam)
     (choices : CallChoices) : Except RpcError ByteArray := do
   let (_, o) ← v.runCall tx p choices

@@ -12,13 +12,12 @@ A map from roots to blocks turns each checkpoint into a checkpoint of the model.
 
 Each pair of votes that breaks a slashing condition of the model is slashable in the beacon chain.
 
-The beacon chain slashes two more kinds of pairs, so the converse fails.
+The beacon chain slashes two more kinds of pairs, so the converse fails:
 
-The first kind is two different attestations with one source and one target.
+- Two different attestations with one source and one target.
+- A surround whose inner vote does not go forward in epochs.
 
-They differ in their slot, their committee or their head, and they make one vote of the model.
-
-The second kind is a surround whose inner vote does not go forward in epochs.
+The first kind differs in its slot, its committee or its head, and makes one vote of the model.
 
 The model counts a surround only when the inner link goes forward.
 
@@ -30,7 +29,9 @@ With these two kinds added, and an injective map, the two rules agree exactly.
 
 Accountable safety then holds for signed attestations.
 
-Two conflicting finalized checkpoints make validators with one third of the stake slashable.
+Two conflicting finalized checkpoints make some validators slashable.
+
+Together they hold at least one third of the stake.
 
 Each of them signed two attestations that an attester slashing can hold.
 -/
@@ -64,12 +65,16 @@ def ffgVotes (block : Root → β) (signed : Set (ν × AttestationData)) : Set 
 
 They make one vote of the model, but the beacon chain slashes them as a double vote. -/
 def SameLinkDoubleVote (data1 data2 : AttestationData) : Prop :=
+  -- They differ in their slot, their committee or their head.
   data1 ≠ data2 ∧ data1.source = data2.source ∧ data1.target = data2.target
 
 /-- The first data surrounds the second, whose target epoch is not after its source epoch.
 
 The beacon chain slashes such a pair, but the model does not. -/
 def BackwardSurroundVote (data1 data2 : AttestationData) : Prop :=
+  -- The model counts a surround only when the inner link goes forward in epochs.
+  --
+  -- Casper FFG §2 states its second slashing condition with that order of the four epochs.
   data1.source.epoch < data2.source.epoch ∧ data2.target.epoch ≤ data2.source.epoch ∧
     data2.target.epoch < data1.target.epoch
 
@@ -117,6 +122,7 @@ theorem isSlashableAttestationData_iff_ffg {block : Root → β}
       DoubleVote (data1.toFfgVote block validator) (data2.toFfgVote block validator) ∨
         SurroundVote (data1.toFfgVote block validator) (data2.toFfgVote block validator) ∨
         SameLinkDoubleVote data1 data2 ∨ BackwardSurroundVote data1 data2 := by
+  -- The two kinds that the model does not see make the converse of the slashing rule fail.
   have checkpoints := Checkpoint.toFfg_injective injective
   simp only [isSlashableAttestationData, Bool.or_eq_true, Bool.and_eq_true, bne_iff_ne, ne_eq,
     beq_iff_eq, decide_eq_true_eq, DoubleVote, SurroundVote, SameLinkDoubleVote,
@@ -211,11 +217,13 @@ The theorem takes one validator set and one stake for every vote, a special case
 theorem accountable_safety_isSlashableAttestationData [Preorder β] {V : Finset ν} {w : ν → ℕ}
     {genesis : β} {block : Root → β} {signed : Set (ν × AttestationData)}
     {c₁ c₂ : Models.Ffg.Checkpoint β}
+    -- The votes of the model are those that the signed attestation data cast.
     (finalized₁ : Finalized (fun _ => V) w genesis (ffgVotes block signed) c₁)
     (finalized₂ : Finalized (fun _ => V) w genesis (ffgVotes block signed) c₂)
     (conflicting : Conflicting c₁.block c₂.block) :
     stake w V ≤ 3 * stake w {validator ∈ V | ∃ data1 data2, (validator, data1) ∈ signed ∧
       (validator, data2) ∈ signed ∧ isSlashableAttestationData data1 data2 = true} :=
+  -- Each of these validators signed two attestations that an attester slashing can hold.
   (accountable_safety finalized₁ finalized₂ conflicting).trans <|
     Nat.mul_le_mul_left 3 <| stake_mono <| Finset.monotone_filter_right V
       fun _ _ => exists_isSlashableAttestationData_of_slashable

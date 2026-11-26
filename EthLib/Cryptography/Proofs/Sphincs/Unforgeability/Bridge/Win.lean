@@ -12,27 +12,11 @@ public import VCVio.OracleComp.QueryTracking.RandomOracle.CachePartial
 
 The model's adversary runs EthLib's adversary on the translated public key.
 
-It sends each signing request on, translated, and translates each answer back.
-
-It returns the forgery translated to the model.
-
 Both games then draw the same seed and give the adversary the same answers in distribution.
-
-Key generation and verification are the same calls.
-
-The signers make different calls.
-
-Key generation leaves a cache, and every answer function that agrees with it gives the key.
-
-Under such an answer function the signers agree, since EthLib rebuilds the same key.
 
 So the forgery, the log and the verdict have the same joint distribution in both games.
 
 A forgery that wins against EthLib also wins against the model.
-
-EthLib's cap of `2^30` requests is below the model's cap of 1,182,000,000.
-
-A signature that no request returned stays so after translation.
 -/
 
 @[expose] public section
@@ -63,14 +47,14 @@ theorem evalWithAnswerFn_eq_of_mem_support_run {α : Type} (oa : OracleComp Hash
 
 /-- EthLib's message as the model's: its little-endian number, on 256 bits. -/
 def toMessage (m : Message) : SphincsSecurity.Message :=
-  BitVec.ofNat _ (Base.bytesToUint m)
+  BitVec.ofNat _ (Base.ByteOrder.ofLE m)
 
 /-- A message read as a number and written back is itself. -/
 theorem ofMessage_toMessage (m : Message) : ofMessage (toMessage m) = m :=
-  HashSig.ofBV_ofNat_bytesToUint m (by decide)
+  HashSig.ofBV_ofNat_ofLE m (by decide)
 
 /-- EthLib's forgery as the model's. -/
-def toForgery (forgery : Forgery) : SphincsSecurity.Forgery :=
+def toForgery (forgery : SufCma.Forgery Message Signature) : SphincsSecurity.Forgery :=
   ⟨toMessage forgery.message, toSignature forgery.signature⟩
 
 /-- The model's adversary that runs EthLib's adversary.
@@ -89,10 +73,11 @@ def ofEntry (entry : (_ : SphincsSecurity.Message) × Option SphincsSecurity.Sig
 
 It returns EthLib's forgery, the model's log of requests and the result of verification. -/
 noncomputable def modelRun (adversary : Adversary) :
-    OracleComp OracleWorld (Forgery × QueryLog SphincsSecurity.SigningSpec × Bool) := do
+    OracleComp OracleWorld
+      (SufCma.Forgery Message Signature × QueryLog SphincsSecurity.SigningSpec × Bool) := do
   let seed ← liftM SphincsSecurity.sampleMasterSeed
   let (pk, sk) ← liftM (SphincsSecurity.Seeded.keygen seed)
-  let ((forgery, log) : Forgery × QueryLog SphincsSecurity.SigningSpec) ←
+  let ((forgery, log) : SufCma.Forgery Message Signature × QueryLog SphincsSecurity.SigningSpec) ←
     (simulateQ (QueryImpl.ofLift OracleWorld
       (WriterT (QueryLog SphincsSecurity.SigningSpec) (OracleComp OracleWorld)) +
         SphincsSecurity.Security.signingOracle sk)
@@ -103,24 +88,30 @@ noncomputable def modelRun (adversary : Adversary) :
   return (forgery, log, verified)
 
 /-- The model's verdict on a run. -/
-def modelWins (run : Forgery × QueryLog SphincsSecurity.SigningSpec × Bool) : Bool :=
+def modelWins
+    (run : SufCma.Forgery Message Signature × QueryLog SphincsSecurity.SigningSpec × Bool) : Bool :=
   decide (SphincsSecurity.SigningTranscript.Valid run.2.1 ∧
     ¬SphincsSecurity.SigningTranscript.Contains run.2.1 (toForgery run.1)) && run.2.2
 
 /-- EthLib's verdict on a run, with the log translated back. -/
-def wins (run : Forgery × QueryLog SphincsSecurity.SigningSpec × Bool) : Bool :=
-  decide (Valid (run.2.1.map ofEntry) ∧ ¬Contains (run.2.1.map ofEntry) run.1) && run.2.2
+noncomputable def wins
+    (run : SufCma.Forgery Message Signature × QueryLog SphincsSecurity.SigningSpec × Bool) : Bool :=
+  decide (Valid (run.2.1.map ofEntry) ∧ ¬SufCma.Returned scheme (run.2.1.map ofEntry) run.1) &&
+    run.2.2
 
 /-- A run that EthLib counts as a win is a win for the model. -/
-theorem modelWins_of_wins (run : Forgery × QueryLog SphincsSecurity.SigningSpec × Bool)
+theorem modelWins_of_wins
+    (run : SufCma.Forgery Message Signature × QueryLog SphincsSecurity.SigningSpec × Bool)
     (h : wins run = true) : modelWins run = true := by
   simp only [wins, modelWins, Bool.and_eq_true, decide_eq_true_eq] at h ⊢
   obtain ⟨⟨hvalid, hfresh⟩, hv⟩ := h
   refine ⟨⟨?_, fun ⟨entry, hmem, hm, hs⟩ ↦
     hfresh ⟨ofEntry entry, List.mem_map_of_mem hmem, ?_, ?_⟩⟩, hv⟩
+  -- EthLib's cap of `2^30` requests is below the model's cap of 1,182,000,000.
   · simp only [Valid, List.length_map] at hvalid
     exact hvalid.trans signatureLimit_le
-  · simp only [ofEntry, hm, toForgery, ofMessage_toMessage]
+  -- A signature that no request returned stays so after translation.
+  · simp only [scheme_message, ofEntry, hm, toForgery, ofMessage_toMessage]
   · simp only [ofEntry, hs, toForgery, Option.map_some, ofSignature_toSignature]
 
 /-- The model's game against the translated adversary is its verdict on the run. -/
@@ -135,7 +126,7 @@ theorem gameCore_translate (adversary : Adversary) :
 noncomputable def signedGame (adversary : Adversary) : OracleComp OracleWorld Bool := do
   let seed ← liftM SphincsSecurity.sampleMasterSeed
   let (pk, sk) ← liftM (SphincsSecurity.Seeded.keygen seed)
-  let ((forgery, log) : Forgery × QueryLog SigningSpec) ←
+  let ((forgery, log) : SufCma.Forgery Message Signature × QueryLog SigningSpec) ←
     (simulateQ (QueryImpl.ofLift OracleWorld
       (WriterT (QueryLog SigningSpec) (OracleComp OracleWorld)) +
         QueryImpl.withLogging (fun message ↦ Option.map ofSignature <$>
@@ -145,7 +136,7 @@ noncomputable def signedGame (adversary : Adversary) : OracleComp OracleWorld Bo
       (adversary.main (ofPublicKey pk))).run
   let verified ← liftM (SphincsSecurity.Concrete.verify pk (toMessage forgery.message)
     (toSignature forgery.signature) : OracleComp HashSpec Bool)
-  return decide (Valid log ∧ ¬Contains log forgery) && verified
+  return decide (Valid log ∧ ¬SufCma.Returned scheme log forgery) && verified
 
 /-- With the model's signer, EthLib's game is EthLib's verdict on the model's run. -/
 theorem signedGame_eq (adversary : Adversary) :
@@ -165,16 +156,18 @@ theorem signedGame_eq (adversary : Adversary) :
 Key generation leaves a cache, and every answer function that agrees with it gives the key.
 
 From then on, both signers agree under every such answer function. -/
-theorem gameCore_romEquiv (adversary : Adversary) :
-    RomEquiv (gameCore adversary) (signedGame adversary) := by
-  have hverify : ∀ (pk : SphincsSecurity.PublicKey) (forgery : Forgery),
+theorem game_romEquiv (adversary : Adversary) :
+    RomEquiv (SufCma.game scheme adversary) (signedGame adversary) := by
+  have hverify : ∀ (pk : SphincsSecurity.PublicKey) (forgery : SufCma.Forgery Message Signature),
       verifyWith H (ofPublicKey pk) forgery.message forgery.signature =
         (SphincsSecurity.Concrete.verify pk (toMessage forgery.message)
           (toSignature forgery.signature) : OracleComp HashSpec Bool) := fun pk forgery ↦ by
     have h := verifyWith_queryH (m := OracleComp HashSpec) pk (toMessage forgery.message)
       (toSignature forgery.signature)
     rwa [ofMessage_toMessage, ofSignature_toSignature] at h
-  unfold gameCore signedGame sampleSeed signingOracle
+  rw [game_eq]
+  unfold signedGame sampleSeed signingOracle signer
+  -- Key generation and verification are the same calls.
   simp only [← liftComp_eq_liftM, liftComp_map, bind_map_left, keyGenWith_queryH, hverify]
   apply RomEquiv.bind_right
   intro seed
@@ -191,20 +184,26 @@ theorem gameCore_romEquiv (adversary : Adversary) :
   apply RomEquivFrom.liftComp
   intro f hf
   conv_lhs => rw [← ofMessage_toMessage message]
+  -- The signers make different calls.
+  --
+  -- Take an answer function that agrees with the cache after key generation.
+  --
+  -- Under it the signers agree, since EthLib rebuilds the same key.
   rw [signWith_answers f seed (toMessage message), evalWithAnswerFn_map, hkey f hf]
 
 /-- An adversary against EthLib wins at most as often as its translation against the model. -/
 theorem forgeAdvantage_le (adversary : Adversary) :
-    forgeAdvantage adversary ≤ SphincsSecurity.Security.forgeAdvantage (translate adversary) := by
-  have hE : forgeAdvantage adversary =
+    SufCma.advantage scheme (SufCma.randomOracleModel HashSpec) adversary ≤
+      SphincsSecurity.Security.forgeAdvantage (translate adversary) := by
+  have hE : SufCma.advantage scheme (SufCma.randomOracleModel HashSpec) adversary =
       Pr{let result ←
-        (simulateQ HashSpec.romImpl (gameCore adversary)).run' ∅}[result = true] :=
-    HashSig.prEvent_run_withAddCost _ _
+        (simulateQ HashSpec.romImpl (SufCma.game scheme adversary)).run' ∅}[result = true] := by
+    rw [SufCma.advantage, SufCma.runIn_randomOracleModel]
   have hM : SphincsSecurity.Security.forgeAdvantage (translate adversary) =
       Pr{let result ← (simulateQ HashSpec.romImpl
         (SphincsSecurity.Security.gameCore (translate adversary))).run' ∅}[result = true] :=
     HashSig.prEvent_run_withAddCost _ _
-  have hd := RomEquiv.evalDist_run' (gameCore_romEquiv adversary) ∅
+  have hd := RomEquiv.evalDist_run' (game_romEquiv adversary) ∅
   rw [hE, hM, (_root_.EvalDistEq.of_evalDist_eq hd).prEvent_eq, signedGame_eq,
     gameCore_translate]
   simp only [simulateQ_map, StateT.run'_eq, StateT.run_map, Functor.map_map]

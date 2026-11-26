@@ -1,18 +1,12 @@
 module
 
 public import EthLib.Networking.Encoding.Varint
+import EthLib.Base.Proofs.CodeInjective
 
 /-!
 # `Networking.Proofs.Encoding.Varint`
 
 Properties of the unsigned protobuf varint codec, proved for every 64-bit value and every input.
-
-- Decoding undoes encoding.
-- An encoding never exceeds the ten bytes the specification allows.
-- An encoding is always minimal.
-- The decoder accepts only these encodings, so exactly one byte string decodes to each value.
-- An input is too long exactly when it has over ten bytes and the first ten are continued.
-- Splitting an encoding from any bytes after it returns the encoding and those bytes.
 -/
 
 @[expose] public section
@@ -364,6 +358,8 @@ theorem encode_decode {bs : List UInt8} {v : UInt64} (h : decode bs = .ok v) : e
 
 - Every value decodes back from its encoding.
 - Every input that decodes is the encoding of what it decodes to.
+
+So exactly one byte string decodes to each value.
 -/
 theorem decode_eq_ok_iff {bs : List UInt8} {v : UInt64} : decode bs = .ok v ↔ encode v = bs :=
   ⟨encode_decode, fun h => h ▸ decode_encode v⟩
@@ -469,9 +465,7 @@ open EthLib.Networking.Encoding.Varint
 theorem _root_.EthLib.Networking.Encoding.Varint.VarintError.code_injective
     (e₁ e₂ : VarintError) (h : e₁.code = e₂.code) :
     e₁.ctorIdx = e₂.ctorIdx := by
-  -- Two distinct constructors have two distinct literal codes, which `decide` separates.
-  cases e₁ <;> cases e₂ <;>
-    first | rfl | (simp only [VarintError.code] at h; exact absurd h (by decide))
+  code_injective VarintError.code
 
 end
 

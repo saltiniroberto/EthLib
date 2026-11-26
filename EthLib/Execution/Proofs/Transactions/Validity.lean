@@ -6,29 +6,9 @@ public import EthLib.Execution.Transactions.Validity
 /-!
 # Proofs: the intrinsic gas and the rules of a transaction
 
-The intrinsic gas is at least 12000 at every fork, and 21000 before Glamsterdam.
+The theorems bound the intrinsic gas.
 
-Before Glamsterdam, it does not depend on the sender.
-
-The price of call data and of an access list adds up over concatenation, so it only grows.
-
-A transaction that passes the rules has a gas limit that covers its least gas limit.
-
-Its nonce is below `2^64 - 1`, and from Fusaka to BPO5 its gas limit is at most `2^24`.
-
-From Shapella the init code of a creation has at most the size that the fork allows.
-
-From Glamsterdam its gas limit is at most `2^32 - 1`, and its least gas limit at most `2^24`.
-
-A transaction passes the rules exactly when it meets these bounds and its fees are not inverted.
-
-Its fees are inverted when its priority fee per gas is above its maximum fee per gas.
-
-From Glamsterdam the rules also check its blobs and its authorizations.
-
-Before Glamsterdam the rules give the same result for every sender.
-
-Exact conditions also state when the chain check, the contents check and the whole check pass.
+They also give the exact condition for a transaction to pass each of its rules.
 -/
 
 @[expose] public section
@@ -115,6 +95,40 @@ theorem dataCost_le_append (fork : Fork) (a b : ByteArray) :
   rw [dataCost_append]
   omega
 
+/-- From Istanbul, call data costs the standard price of a token for each of its tokens.
+
+[EIP-7623](https://eips.ethereum.org/EIPS/eip-7623#specification) writes the price so. -/
+theorem dataCost_eq_tokens {fork : Fork} (h : fork ≥ .istanbul) (data : ByteArray) :
+    dataCost fork data = TX_DATA_TOKEN_STANDARD * tokens data := by
+  -- From Istanbul a zero byte costs 4 and a nonzero byte 16, one and four tokens of 4 gas.
+  simp only [dataCost, tokens, gasSchedule, h, ite_true, TX_DATA_PER_ZERO, TX_DATA_TOKEN_STANDARD]
+  omega
+
+/-- The tokens of call data add up over concatenation. -/
+theorem tokens_append (a b : ByteArray) : tokens (a ++ b) = tokens a + tokens b := by
+  have ha := zeroBytes_le_size a
+  have hb := zeroBytes_le_size b
+  simp only [tokens, zeroBytes_append, ByteArray.size_append]
+  omega
+
+/-- Call data has at least one token per byte. -/
+theorem size_le_tokens (data : ByteArray) : data.size ≤ tokens data := by
+  have h := zeroBytes_le_size data
+  simp only [tokens]
+  omega
+
+/-- Call data has at most four tokens per byte. -/
+theorem tokens_le_four_mul_size (data : ByteArray) : tokens data ≤ 4 * data.size := by
+  have h := zeroBytes_le_size data
+  simp only [tokens]
+  omega
+
+/-- The floor tokens of call data add up over concatenation, at every fork. -/
+theorem floorTokens_append (fork : Fork) (a b : ByteArray) :
+    floorTokens fork (a ++ b) = floorTokens fork a + floorTokens fork b := by
+  unfold floorTokens
+  split <;> simp [tokens_append, ByteArray.size_append, Nat.mul_add]
+
 /-- The price of access lists adds up over concatenation. -/
 theorem accessListCost_append (fork : Fork) (a b : List Access) :
     accessListCost fork (a ++ b) = accessListCost fork a + accessListCost fork b := by
@@ -125,6 +139,41 @@ theorem accessListCost_le_append (fork : Fork) (a b : List Access) :
     accessListCost fork a ≤ accessListCost fork (a ++ b) := by
   rw [accessListCost_append]
   omega
+
+/-- The bytes of access lists add up over concatenation. -/
+theorem accessListBytes_append (a b : List Access) :
+    accessListBytes (a ++ b) = accessListBytes a + accessListBytes b := by
+  simp [accessListBytes, List.map_append, List.sum_append]
+
+/-- An access list has at least 20 bytes per address. -/
+theorem twenty_mul_length_le_accessListBytes (accessList : List Access) :
+    20 * accessList.length ≤ accessListBytes accessList := by
+  induction accessList with
+  | nil => simp [accessListBytes]
+  | cons a rest ih =>
+    simp only [accessListBytes, List.map_cons, List.sum_cons, List.length_cons] at ih ⊢
+    omega
+
+/-- The data price of access lists adds up over concatenation, at every fork. -/
+theorem accessListDataCost_append (fork : Fork) (a b : List Access) :
+    accessListDataCost fork (a ++ b) = accessListDataCost fork a + accessListDataCost fork b := by
+  unfold accessListDataCost
+  split <;> simp [accessListBytes_append, Nat.mul_add]
+
+/-- Before Glamsterdam, an access list has no data price. -/
+theorem accessListDataCost_of_lt_glamsterdam {fork : Fork} (h : fork < .glamsterdam)
+    (accessList : List Access) : accessListDataCost fork accessList = 0 := by
+  have hn : ¬ fork ≥ Fork.glamsterdam := Nat.not_le.mpr h
+  simp [accessListDataCost, hn]
+
+/-- From Glamsterdam, an access list costs 64 gas per byte of data.
+
+EIP-7981 counts four tokens per byte, and EIP-7976 prices a token at 16 gas. -/
+theorem accessListDataCost_of_glamsterdam_le {fork : Fork} (h : fork ≥ .glamsterdam)
+    (accessList : List Access) :
+    accessListDataCost fork accessList = 64 * accessListBytes accessList := by
+  -- Four floor tokens per byte, at the floor price of 16 gas from Glamsterdam.
+  simp [accessListDataCost, h, gasSchedule, TX_DATA_TOKEN_STANDARD]
 
 /-- The least gas limit covers the intrinsic gas. -/
 theorem intrinsicGas_le_minimumGas (fork : Fork) (sender : Address) (tx : Transaction) :
@@ -141,32 +190,32 @@ theorem calldataFloor_le_minimumGas {fork : Fork} (hFork : fork ≥ .pectra) (se
 /-! ## A valid transaction -/
 
 /-- A transaction passes the type, gas, nonce and fee rules exactly when it satisfies each of them.
-
-It then returns its intrinsic gas.
-
-Its gas limit covers the least gas limit of the fork, and its nonce is below `2^64 - 1`.
-
-From Shapella its init code has at most the size that the fork allows.
-
-From Fusaka to BPO5 its gas limit is at most `2^24`.
-
-From Glamsterdam its gas limit is at most `2^32 - 1`, and its least gas limit at most `2^24`.
-
-From Glamsterdam its blobs and its authorizations pass their rules.
-
-Its priority fee per gas is at most its maximum fee per gas.
-
-Its type exists at the fork. -/
+-/
 theorem validateTransaction_eq_ok_iff {fork : Fork} {sender : Address} {tx : Transaction}
     {gas : Nat} :
     validateTransaction fork sender tx = .ok gas ↔
+      -- It then returns its intrinsic gas.
+      --
+      -- Its gas limit covers the least gas limit of the fork.
       gas = intrinsicGas fork sender tx ∧ minimumGas fork sender tx ≤ tx.gas.toNat ∧
+        -- Its nonce is below `2^64 - 1`.
         tx.nonce.toNat < 2 ^ 64 - 1 ∧
+        -- From Shapella its init code has at most the size that the fork allows.
         (fork ≥ .shapella → tx.to = none → tx.data.size ≤ maxInitCodeSize fork) ∧
+        -- From Fusaka to BPO5 its gas limit is at most `2^24`.
         (fork ≥ .fusaka → fork < .glamsterdam → tx.gas.toNat ≤ TX_MAX_GAS_LIMIT) ∧
         (fork ≥ .glamsterdam →
+          -- From Glamsterdam its gas limit is at most `2^32 - 1`.
+          --
+          -- Its least gas limit is then at most `2^24`.
           tx.gas.toNat ≤ TX_MAX_TOTAL_GAS_LIMIT ∧ minimumGas fork sender tx ≤ TX_MAX_GAS_LIMIT ∧
+            -- From Glamsterdam its blobs and its authorizations pass their rules.
             checkContents fork tx = .ok ()) ∧
+        -- Its fees are not inverted.
+        --
+        -- Its priority fee per gas is at most its maximum fee per gas.
+        --
+        -- Its type exists at the fork.
         validateTransaction.feesInverted tx = false ∧ tx.fork ≤ fork := by
   unfold validateTransaction
   by_cases hg : fork ≥ .glamsterdam
@@ -196,24 +245,23 @@ theorem validateTransaction_sender_of_lt_glamsterdam {fork : Fork} (h : fork < .
   rw [minimumGas_sender_of_lt_glamsterdam h sender sender' tx,
     intrinsicGas_sender_of_lt_glamsterdam h sender sender' tx]
 
-/-- What a transaction that passes the gas, nonce and fee rules satisfies.
-
-It returns its intrinsic gas, and its gas limit covers the least gas limit of the fork.
-
-Its nonce is below `2^64 - 1`.
-
-From Shapella its init code has at most the size that the fork allows.
-
-From Fusaka to BPO5 its gas limit is at most `2^24`.
-
-From Glamsterdam its gas limit is at most `2^32 - 1`, and its least gas limit at most `2^24`. -/
+/-- What a transaction that passes the gas, nonce and fee rules satisfies. -/
 theorem validateTransaction_ok {fork : Fork} {sender : Address} {tx : Transaction} {gas : Nat}
     (h : validateTransaction fork sender tx = .ok gas) :
+    -- It returns its intrinsic gas.
+    --
+    -- Its gas limit covers the least gas limit of the fork.
     gas = intrinsicGas fork sender tx ∧ minimumGas fork sender tx ≤ tx.gas.toNat ∧
+      -- Its nonce is below `2^64 - 1`.
       tx.nonce.toNat < 2 ^ 64 - 1 ∧
+      -- From Shapella its init code has at most the size that the fork allows.
       (fork ≥ .shapella → tx.to = none → tx.data.size ≤ maxInitCodeSize fork) ∧
+      -- From Fusaka to BPO5 its gas limit is at most `2^24`.
       (fork ≥ .fusaka → fork < .glamsterdam → tx.gas.toNat ≤ TX_MAX_GAS_LIMIT) ∧
       (fork ≥ .glamsterdam →
+        -- From Glamsterdam its gas limit is at most `2^32 - 1`.
+        --
+        -- Its least gas limit is then at most `2^24`.
         tx.gas.toNat ≤ TX_MAX_TOTAL_GAS_LIMIT ∧ minimumGas fork sender tx ≤ TX_MAX_GAS_LIMIT) := by
   obtain ⟨hGas, hMin, hNonce, hInit, hCap, hAfter, -⟩ := validateTransaction_eq_ok_iff.mp h
   exact ⟨hGas, hMin, hNonce, hInit, hCap, fun hg => ⟨(hAfter hg).1, (hAfter hg).2.1⟩⟩
@@ -286,24 +334,22 @@ theorem checkChainId_eq_ok_iff {fork : Fork} {chainId : UInt64} {tx : Transactio
 
 /-- The blobs and authorizations of a transaction pass exactly when three rules hold.
 
-A blob transaction has at least one blob, and at most 6 from Fusaka.
-
-Each of its versioned hashes starts with the KZG version byte.
-
-A set code transaction has at least one authorization.
-
 Every other transaction passes. -/
 theorem checkContents_eq_ok_iff {fork : Fork} {tx : Transaction} :
     checkContents fork tx = .ok () ↔
+      -- A blob transaction has at least one blob.
       (∀ b, tx = .blob b → b.blobVersionedHashes ≠ [] ∧
+        -- It has at most 6 blobs from Fusaka.
         (fork ≥ .fusaka → b.blobVersionedHashes.length ≤ MAX_BLOBS_PER_TRANSACTION) ∧
-        ∀ h ∈ b.blobVersionedHashes, h[0] = Cryptography.Kzg.VERSIONED_HASH_VERSION_KZG) ∧
+        -- Each of its versioned hashes starts with the KZG version byte.
+        ∀ h ∈ b.blobVersionedHashes, h.bytes[0] = Cryptography.Kzg.VERSIONED_HASH_VERSION_KZG) ∧
+      -- A set code transaction has at least one authorization.
       ∀ a, tx = .setCode a → a.authorizations ≠ [] := by
   cases tx with
   | blob b =>
     have key : checkContents fork (.blob b) = .ok () ↔ b.blobVersionedHashes ≠ [] ∧
         (fork ≥ .fusaka → b.blobVersionedHashes.length ≤ MAX_BLOBS_PER_TRANSACTION) ∧
-        ∀ h ∈ b.blobVersionedHashes, h[0] = Cryptography.Kzg.VERSIONED_HASH_VERSION_KZG := by
+        ∀ h ∈ b.blobVersionedHashes, h.bytes[0] = Cryptography.Kzg.VERSIONED_HASH_VERSION_KZG := by
       simp only [checkContents]
       by_cases hempty : b.blobVersionedHashes.isEmpty = true
       · simp [List.isEmpty_iff.mp hempty]
@@ -317,9 +363,8 @@ theorem checkContents_eq_ok_iff {fork : Fork} {tx : Transaction} :
       simp only [hcount, ↓reduceIte]
       have hle : fork ≥ .fusaka → b.blobVersionedHashes.length ≤ MAX_BLOBS_PER_TRANSACTION :=
         fun hf => Nat.not_lt.mp fun hlt => hcount ⟨hf, hlt⟩
-      by_cases hhash :
-          (b.blobVersionedHashes.any fun h => h[0] != Cryptography.Kzg.VERSIONED_HASH_VERSION_KZG)
-            = true
+      by_cases hhash : (b.blobVersionedHashes.any fun h =>
+          h.bytes[0] != Cryptography.Kzg.VERSIONED_HASH_VERSION_KZG) = true
       · simp only [hhash, ↓reduceIte, reduceCtorEq, false_iff, not_and]
         simp only [List.any_eq_true, bne_iff_ne, ne_eq] at hhash
         obtain ⟨x, hx, hbad⟩ := hhash

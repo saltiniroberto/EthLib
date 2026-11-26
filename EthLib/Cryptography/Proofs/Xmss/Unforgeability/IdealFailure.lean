@@ -9,27 +9,7 @@ In the ideal game of the derivations, a request may fail or leave a search witho
 
 Its chance is at most `Q / 2^95 + 2 exp(-4000)`, as long as every earlier search found one.
 
-Then every tree the key keeps holds a top signature, since no earlier request failed.
-
 Here `Q` bounds the game's hash calls on every run, and so the size of its cache.
-
-A union bound over the `r` requests, by induction on the adversary, bounds the chance of a failure.
-
-The bound charges each new search the whole cache, at most `Q` entries, as hits on its trials.
-
-`Q` grows with the requests, so the term is quadratic in `r`: at least `r^2 / 2^62`.
-
-It exceeds 1 from about `2^31` requests, half of a key's `2^32` leaf indices, or for `qH >= 2^95`.
-
-This loss comes from the proof, not from leanXMSS.
-
-Other keys' trials have other addresses, and messages have a fixed length.
-
-So only the adversary's queries can hold a trial input of a new search.
-
-A count of only those queries would give a bound linear in `r`.
-
-So would a count of how many trials are cached, rather than of whether one is.
 
 With the two hidden-seed hops, this bounds the failure in the real game.
 
@@ -98,6 +78,11 @@ theorem failsAtMost_run_failSignerOf (Q : ℕ) {α : Type}
       Q (n * ((Q : ℝ≥0∞) / 2 ^ 95 + 2 * ENNReal.ofReal (Real.exp (-4000))))
       ((simulateQ (failSignerOf (HashSpec.withDerivationsLift PrfInput HashOutput) prfD) oa).run
         sk).run := by
+  -- A union bound over the `r` requests bounds the chance of a failure.
+  --
+  -- It goes by induction on the adversary.
+  --
+  -- Every tree the key keeps holds a top signature, since no earlier request failed.
   induction oa using OracleComp.inductionOn generalizing n sk with
   | pure a =>
     simp only [simulateQ_pure, StateT.run_pure, WriterT.run_pure']
@@ -142,7 +127,12 @@ theorem failsAtMost_run_failSignerOf (Q : ℕ) {α : Type}
         · exact ⟨entry, hmem, hnone⟩
       · rw [Nat.add_sub_cancel, Nat.cast_add, Nat.cast_one, add_mul, one_mul, add_comm]
 
-/-! ## The size of the cache -/
+/-! ## The size of the cache
+
+The bound charges each new search the whole cache, at most `Q` entries, as hits on its trials.
+
+`Q` grows with the requests, so the term is quadratic in `r`: at least `r^2 / 2^62`.
+-/
 
 /-- A step of the ideal game adds at most one cache entry, and only on a hash query. -/
 theorem encard_le_of_mem_support_idealImpl {t : PrfSpec.Domain} {st : IdealState}
@@ -213,8 +203,8 @@ theorem failsAtMost_prfGame (Q : ℕ) (adversary : ReasonAdversary) {r : ℕ}
   unfold prfGame failGameOf Internal.keyGenFrom
   rw [pure_bind]
   simp only [bind_assoc]
-  refine FailsAtMost.bind_of_noBase isQueryBoundP_publicParamOf fun pp => ?_
-  refine FailsAtMost.bind_of_noBase (isQueryBoundP_build pp .top _ _) fun top => ?_
+  refine FailsAtMost.bind_of_noBase isQueryBoundP_publicParamOf fun publicParam => ?_
+  refine FailsAtMost.bind_of_noBase (isQueryBoundP_build publicParam .top _ _) fun top => ?_
   simp only [pure_bind]
   -- The key of key generation keeps no tree.
   refine (FailsAtMost.bind (failsAtMost_run_failSignerOf Q _ (hr _) _
@@ -222,11 +212,11 @@ theorem failsAtMost_prfGame (Q : ℕ) (adversary : ReasonAdversary) {r : ℕ}
   rcases z with ⟨⟨forgery, sk'⟩, log⟩
   dsimp only
   rw [show verifyWith (hashOf (HashSpec.withDerivationsLift PrfInput HashOutput))
-      { root := top.value, publicParam := pp } forgery.message forgery.signature = _ from
+      { root := top.value, publicParam := publicParam } forgery.message forgery.signature = _ from
     verifyWith_hashD _ _ _]
   refine (FailsAtMost.bind (failA := fun _ => False) (ε₁ := 0) (ε₂ := 0)
     (FailsAtMost.of_withDerivationsLift
-      (verifyWith queryH { root := top.value, publicParam := pp } forgery.message
+      (verifyWith queryH { root := top.value, publicParam := publicParam } forgery.message
         forgery.signature : OracleComp XmssSecurity.OracleWorld Bool))
     fun v _ => ?_).mono_bound (add_zero _).le
   exact FailsAtMost.pure (fail := SomeFailure) (a := (forgery, log, v)) hz
@@ -239,7 +229,17 @@ The adversary makes at most `qH` hash queries and `r` signing requests.
 
 The bound is `r (Q / 2^95 + 2 exp(-4000))`, quadratic in `r` through the budget `Q`.
 
-It says nothing from about `2^31` requests. -/
+It exceeds 1 from about `2^31` requests, half of a key's `2^32` leaf indices, or for `qH >= 2^95`.
+
+This loss comes from the proof, not from leanXMSS.
+
+Other keys' trials have other addresses, and messages have a fixed length.
+
+So only the adversary's queries can hold a trial input of a new search.
+
+A count of only those queries would give a bound linear in `r`.
+
+So would a count of how many trials are cached, rather than of whether one is. -/
 theorem prEvent_prfGame_ideal_le (adversary : ReasonAdversary) {qH r : ℕ}
     (hh : ∀ pk, IsQueryBoundP (adversary.main pk) IsAdversaryHash qH)
     (hr : ∀ pk, IsQueryBoundP (adversary.main pk) IsAdversaryRequest r) :
@@ -279,7 +279,8 @@ The bound says nothing from about `2^31` requests, since its last term is quadra
 
 It forges with probability at most `q / 2^127 + 2 Q / 2^256 + r (Q / 2^95 + 2 exp(-4000))`. -/
 theorem reasonForgeAdvantage_le_bounded (q : ℕ) (hq : 1 ≤ q) (adversary : ReasonAdversary)
-    (hbound : HasHashQueryBound (hideReasons adversary) q) {qH r : ℕ}
+    (hbound : SufCma.IsGameQueryBound scheme (SufCma.randomOracleModel HashSpec)
+      (hideReasons adversary) q) {qH r : ℕ}
     (hh : ∀ pk, IsQueryBoundP (adversary.main pk) IsAdversaryHash qH)
     (hr : ∀ pk, IsQueryBoundP (adversary.main pk) IsAdversaryRequest r) :
     reasonForgeAdvantage adversary ≤

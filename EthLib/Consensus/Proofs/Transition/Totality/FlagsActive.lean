@@ -9,21 +9,17 @@ public import EthLib.Consensus.Proofs.Transition.Totality.PendingBlock
 
 From Altair, a state records the participation flags of each validator in two epochs.
 
-An attestation sets flags only at members of a committee of its target epoch.
+Each step of a chain keeps these flags set only at validators active at their epoch:
 
-That epoch is the previous or the current one, and each member is active at it.
+- An attestation sets flags only at members of a committee of its target epoch.
+  - That epoch is the previous or the current one, and each member is active at it.
+- A new validator gets no flag.
+- At the end of an epoch the current flags move to the previous epoch, and new ones start unset.
+- The upgrade to Altair sets flags only at the attesters of the pending attestations.
 
-A new validator gets no flag.
+The upgrade needs their slots in the previous epoch, which well-formed pending attestations ensure.
 
-At the end of an epoch the current flags move to the previous epoch, and new ones start unset.
-
-The upgrade to Altair sets flags only at the attesters of the pending attestations.
-
-This needs their slots in the previous epoch, which well-formed pending attestations ensure.
-
-Each step keeps which validators are active in each epoch up to the current one.
-
-So each step of a chain keeps the flags set only at validators active at their epoch.
+Each step also keeps which validators are active in each epoch up to the current one.
 
 That bounds the weight of the flags by the active balances of the two epochs.
 -/
@@ -710,7 +706,7 @@ theorem FlagsActive.of_upgradeNext {pre : ForkedBeaconState preset}
   | glamsterdam =>
     simp only [upgradeNext, bind_ok_iff, pure, Except.pure, Except.ok.injEq] at computed
     obtain ⟨after, afterOk, rfl⟩ := computed
-    obtain ⟨-, rfl⟩ := upgradeToHeze_ok_iff.mp afterOk
+    obtain rfl := upgradeToHeze_ok_iff.mp afterOk
     have lists := upgradeHezeFields_lists (config := config) pre
     exact holds.of_upgrade (show Fork.altair ≤ .glamsterdam by decide) kept slot
       (Nat.le_of_eq (by rw [lists.1]))

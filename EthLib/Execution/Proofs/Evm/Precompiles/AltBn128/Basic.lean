@@ -2,17 +2,20 @@ module
 
 public import EthLib.Execution.Evm.Precompiles.AltBn128
 public import EthLib.Execution.Proofs.Evm.Machine.Memory
-public import EthLib.Base.Proofs.BigEndian
+public import EthLib.Base.Proofs.ByteOrder
 public import EthLib.Base.Proofs.MapM
+import EthLib.Base.Proofs.CodeInjective
 
 /-!
 # Proofs: `Evm.Precompiles.AltBn128`
 
-- ECADD and ECMUL fail exactly when the gas is below the price or a point is invalid.
-- ECPAIRING succeeds exactly when the gas covers the price and every pair decodes.
-- Every decoded point is on its curve: a point of `G_1` on the curve, a point of `G_2` on the twist.
-- Every output of ECADD and ECMUL has 64 bytes, and every output of ECPAIRING is the word 0 or 1.
-- ECPAIRING charges its gas before it checks that the call data is a whole number of 192-byte pairs.
+This file proves when ECADD, ECMUL and ECPAIRING fail and when they succeed.
+
+Each output of ECADD and ECMUL has 64 bytes.
+
+Each output of ECPAIRING is the word 0 or 1.
+
+Each decoded point is on its curve: a point of `G_1` on the curve, a point of `G_2` on the twist.
 
 The Python suite checks the outputs against py_ecc.
 -/
@@ -40,7 +43,7 @@ theorem ecmul_outOfGas (fork : Fork) (data : ByteArray) {gas : Nat}
 /-- The 64 bytes of a point. -/
 theorem length_g1ToBytes : (point : Point) → (g1ToBytes point).length = 64
   | .infinity => by simp [g1ToBytes]
-  | .affine _ _ => by simp [g1ToBytes, EthLib.Base.natToBytes_length]
+  | .affine _ _ => by simp [g1ToBytes]
 
 /-- Every output of ECADD has 64 bytes. -/
 theorem ecadd_size {fork : Fork} {data : ByteArray} {gas : Nat} {out : ByteArray}
@@ -67,13 +70,13 @@ theorem ecmul_size {fork : Fork} {data : ByteArray} {gas : Nat} {out : ByteArray
 
 /-- A first coordinate at or above `p` is rejected, and the error holds it. -/
 theorem bytesToG1_invalidFieldElement {raw : List UInt8}
-    (hx : Fp.modulus ≤ EthLib.Base.bytesToNat (raw.take 32)) :
-    bytesToG1 raw = .error (.invalidFieldElement (EthLib.Base.bytesToNat (raw.take 32))) := by
+    (hx : Fp.modulus ≤ EthLib.Base.ByteOrder.ofBE (raw.take 32)) :
+    bytesToG1 raw = .error (.invalidFieldElement (EthLib.Base.ByteOrder.ofBE (raw.take 32))) := by
   simp [bytesToG1, Nat.not_lt.mpr hx, throw, throwThe, MonadExceptOf.throw]
 
 /-! ## Success -/
 
-/-- A decoded point is on the curve. -/
+/-- A decoded point of `G_1` is on the curve. -/
 theorem bytesToG1_isOnCurve {raw : List UInt8} {p : Point} (h : bytesToG1 raw = .ok p) :
     p.isOnCurve = true := by
   simp only [bytesToG1, pure, Except.pure, throw, throwThe, MonadExceptOf.throw] at h
@@ -105,7 +108,9 @@ theorem bytesToG2_isOnCurve {raw : List UInt8} {q : Point2} (h : bytesToG2 raw =
       assumption
     · cases h
 
-/-- ECADD succeeds exactly when the gas covers the price and both points decode. -/
+/-- ECADD succeeds exactly when the gas covers the price and both points decode.
+
+So it fails exactly when the gas is below the price or a point is invalid. -/
 theorem ecadd_eq_ok_iff (fork : Fork) (data : ByteArray) (gas : Nat) (out : ByteArray) :
     ecadd fork data gas = .ok out ↔ ecaddGas fork ≤ gas ∧ ∃ p0 p1,
       bytesToG1 (bufferRead data 0 64) = .ok p0 ∧ bytesToG1 (bufferRead data 64 64) = .ok p1 ∧
@@ -117,12 +122,14 @@ theorem ecadd_eq_ok_iff (fork : Fork) (data : ByteArray) (gas : Nat) (out : Byte
     cases h0 : bytesToG1 (bufferRead data 0 64) <;>
       cases h1 : bytesToG1 (bufferRead data 64 64) <;> simp [Nat.not_lt.mp hgas, eq_comm]
 
-/-- ECMUL succeeds exactly when the gas covers the price and the point decodes. -/
+/-- ECMUL succeeds exactly when the gas covers the price and the point decodes.
+
+So it fails exactly when the gas is below the price or the point is invalid. -/
 theorem ecmul_eq_ok_iff (fork : Fork) (data : ByteArray) (gas : Nat) (out : ByteArray) :
     ecmul fork data gas = .ok out ↔ ecmulGas fork ≤ gas ∧ ∃ p0,
       bytesToG1 (bufferRead data 0 64) = .ok p0 ∧
       out = ⟨(g1ToBytes
-        (Point.mulBits 256 (Base.bytesToNat (bufferRead data 64 32)) p0)).toArray⟩ := by
+        (Point.mulBits 256 (Base.ByteOrder.ofBE (bufferRead data 64 32)) p0)).toArray⟩ := by
   by_cases hgas : gas < ecmulGas fork
   · simp [ecmul_outOfGas fork data hgas, Nat.not_le.mpr hgas]
   · simp only [ecmul, hgas, bind, Except.bind, pure, Except.pure, throw, throwThe,
@@ -131,7 +138,9 @@ theorem ecmul_eq_ok_iff (fork : Fork) (data : ByteArray) (gas : Nat) (out : Byte
 
 /-! ## ECPAIRING -/
 
-/-- ECPAIRING runs out of gas below its price, before it checks the length. -/
+/-- ECPAIRING runs out of gas below its price.
+
+It charges its gas before it checks that the call data is a whole number of 192-byte pairs. -/
 theorem ecpairing_outOfGas (fork : Fork) (data : ByteArray) {gas : Nat}
     (hgas : gas < ecpairingGas fork data.size) :
     ecpairing fork data gas = .error (.outOfGas (ecpairingGas fork data.size) gas) := by
@@ -190,8 +199,6 @@ theorem ecpairing_eq_ok_iff (fork : Fork) (data : ByteArray) (gas : Nat) (out : 
 /-- Two errors with one code come from one constructor. -/
 theorem AltBn128Error.code_injective (e₁ e₂ : AltBn128Error) (h : e₁.code = e₂.code) :
     e₁.ctorIdx = e₂.ctorIdx := by
-  -- Two distinct constructors have two distinct literal codes, which `decide` separates.
-  cases e₁ <;> cases e₂ <;>
-    first | rfl | (simp only [AltBn128Error.code] at h; exact absurd h (by decide))
+  code_injective AltBn128Error.code
 
 end EthLib.Execution.Evm.Precompiles.AltBn128

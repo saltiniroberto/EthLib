@@ -10,49 +10,11 @@ public import EthLib.Consensus.Proofs.ForkChoice.Optimistic
 /-!
 # Proofs: optimistic sync
 
-A block passes the optimistic check exactly when its parent carries a payload or it is old enough.
+These proofs cover the optimistic import of a block and the latest verified ancestor of a node.
 
-It is old enough when its slot is far enough before the clock.
+They cover the payload chain of a block, and how a valid or an invalid payload changes the store.
 
-Before Gloas, the latest verified ancestor of a node is reached through optimistic blocks only.
-
-It is not optimistic, or its parent root is zero.
-
-From Gloas it is the first payload that the node holds and that is not optimistic.
-
-It fails when there is none, and a node without its payload is never its own answer.
-
-Before Gloas the payload chain of a block is its chain.
-
-From Gloas it keeps the ancestors whose payload the chain builds on, linked by their bids.
-
-It goes on at the first ancestor whose bid names the hash that the chain expects.
-
-From any of its roots on, it is the payload chain of that root, so it holds every payload below.
-
-A valid payload removes exactly the block and its ancestors on its payload chain from the set.
-
-The first invalid block removes exactly the optimistic roots whose payload chain holds it.
-
-A tree filtered from a node is empty exactly when no viable leaf is reached from that node.
-
-So the second case of an optimistic node holds exactly when the filtered tree has no viable leaf.
-
-From Gloas a full head reads its own payload, and an empty one the payload it builds on.
-
-A node whose head is optimistic is an optimistic node, at every fork.
-
-Otherwise, at every fork, it needs a dropped block at or above the justified block.
-
-An optimistic validator may not sign exactly under seven domain types.
-
-From Heze a payload kept before it is validated satisfies its inclusion lists.
-
-An invalidated payload is never kept.
-
-Once an optimistic payload turns valid, the answer of the execution layer is recorded for its block.
-
-The answers of the other blocks stay.
+They also cover the optimistic head and node, and the domains an optimistic validator may not sign.
 -/
 
 @[expose] public section
@@ -252,6 +214,37 @@ private theorem chain_of_not_lower {root : Root} {block parent : BeaconBlock pre
     subst otherFound
     rw [dite_eq_right notLower]
     rfl
+
+variable {store} in
+/-- The payload chain of a known block can be read when each known parent is at a lower slot. -/
+theorem payloadChain_exists
+    -- Each known parent of a known block is at a lower slot.
+    (lower : ∀ (root : Root) (block parent : BeaconBlock preset fork),
+      store.blocks[root]? = some block → store.blocks[block.parentRoot]? = some parent →
+        parent.slot < block.slot)
+    {root : Root} {block : BeaconBlock preset fork} (found : store.blocks[root]? = some block) :
+    ∃ roots, store.payloadChain root = .ok roots := by
+  -- The chain of a known block exists, by induction on its slot.
+  have chainOk : ∀ (n : ℕ) (root : Root) (block : BeaconBlock preset fork),
+      block.slot.toNat = n → store.blocks[root]? = some block →
+        ∃ roots, store.chain root = .ok roots := by
+    intro n
+    induction n using Nat.strong_induction_on with
+    | _ n ih =>
+    intro root block hn found
+    cases parentFound : store.blocks[block.parentRoot]? with
+    | none => exact ⟨_, chain_of_parent_unknown store found parentFound⟩
+    | some parent =>
+      have below := lower root block parent found parentFound
+      obtain ⟨rest, restOk⟩ := ih parent.slot.toNat
+        (hn ▸ UInt64.lt_iff_toNat_lt.mp below) _ parent rfl parentFound
+      exact ⟨root :: rest, by
+        rw [chain_of_lower store found parentFound below, restOk]; rfl⟩
+  obtain ⟨roots, rootsOk⟩ := chainOk _ root block rfl found
+  by_cases gloas : .glamsterdam ≤ fork
+  · exact ⟨store.payloadsOnChain gloas none roots, by
+      simp [payloadChain, rootsOk, gloas, bind, Except.bind, pure, Except.pure]⟩
+  · exact ⟨roots, by simp [payloadChain, rootsOk, gloas, bind, Except.bind, pure, Except.pure]⟩
 
 /-- Each root of the chain of a known block is a known block at a slot at most its slot. -/
 private theorem chain_slot_le {root : Root} {all : List Root} {block : BeaconBlock preset fork}
@@ -457,7 +450,9 @@ theorem payloadChain_of_lt_glamsterdam (before : fork < .glamsterdam) (root : Ro
   simp only [payloadChain, notGloas, ↓reduceDIte]
   cases store.chain root <;> rfl
 
-/-- From Gloas, the payload chain of a block is its chain, filtered from no expected hash. -/
+/-- From Gloas, the payload chain of a block is its chain, filtered from no expected hash.
+
+It keeps the ancestors whose payload the chain builds on, linked by their bids. -/
 theorem payloadChain_of_glamsterdam (gloas : .glamsterdam ≤ fork) (root : Root) :
     store.payloadChain root = (store.payloadsOnChain gloas none ·) <$> store.chain root := by
   simp only [payloadChain, gloas, ↓reduceDIte]
@@ -582,32 +577,22 @@ theorem parentRoot_mem_payloadChain_iff (gloas : .glamsterdam ≤ fork) {root : 
 /-- Dropping the roots that fail a test leaves nothing when no root passes it. -/
 private theorem dropWhile_not_of_find?_eq_none {test : Root → Bool} {roots : List Root}
     (missing : roots.find? test = none) : (roots.dropWhile fun root => !test root) = [] := by
-  induction roots with
-  | nil => rfl
-  | cons root rest ih =>
-    simp only [List.find?_cons] at missing
-    split at missing
-    · cases missing
-    · rename_i failed
-      simp [failed, ih missing]
+  -- Every root fails the test, so the whole list is dropped.
+  have dropped := List.dropWhile_append_of_pos (l₂ := ([] : List Root))
+    (p := fun root => !test root) fun root member => by
+      simpa using List.find?_eq_none.mp missing root member
+  simpa using dropped
 
 /-- Dropping the roots that fail a test leaves the first root that passes it and the rest. -/
 private theorem dropWhile_not_of_find?_eq_some {test : Root → Bool} {roots : List Root}
     {first : Root} (search : roots.find? test = some first) :
     ∃ before after, roots = before ++ first :: after ∧
       (roots.dropWhile fun root => !test root) = first :: after := by
-  induction roots with
-  | nil => cases search
-  | cons root rest ih =>
-    simp only [List.find?_cons] at search
-    split at search
-    · rename_i passed
-      cases search
-      exact ⟨[], rest, rfl, by simp [passed]⟩
-    · rename_i failed
-      obtain ⟨before, after, split, dropped⟩ := ih search
-      exact ⟨root :: before, after, by rw [split, List.cons_append],
-        by simp [failed, dropped]⟩
+  -- The roots before the first passing one all fail the test, so they are dropped.
+  obtain ⟨passed, before, after, split, failed⟩ := List.find?_eq_some_iff_append.mp search
+  refine ⟨before, after, split, ?_⟩
+  rw [split, List.dropWhile_append_of_pos fun root member => by simpa using failed root member,
+    List.dropWhile_cons_of_neg (by simpa using passed)]
 
 /-- In a list without repeated roots, what follows a root is fixed by the list. -/
 private theorem suffix_eq_of_nodup {middle : Root} {before after other rest : List Root}

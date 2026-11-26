@@ -13,7 +13,9 @@ The count is of the adversary's own hash queries.
 
 This file proves that, under a hash-query bound, the count never reaches the budget.
 
-It also proves that the source game counts the adversary's encoding queries.
+It also splits the source game's count of a class into the adversary's queries and the signer's.
+
+So the source game's count bounds the adversary's encoding queries.
 -/
 
 @[expose] public section
@@ -29,10 +31,17 @@ def IsAdvHash : (OracleWorld + SigningSpec).Domain → Prop
 
 noncomputable instance : DecidablePred IsAdvHash := Classical.decPred _
 
-/-- An encoding query of the adversary. -/
-def IsAdvEncoding (parameter : PublicParameter) : (OracleWorld + SigningSpec).Domain → Prop
-  | .inl input => CappedEncodingMonitor.IsEncodingHashQuery parameter input
+/-- A query of the adversary in a class of the game's queries. -/
+def IsAdvQuery (R : OracleWorld.Domain → Prop) : (OracleWorld + SigningSpec).Domain → Prop
+  | .inl input => R input
   | .inr _ => False
+
+noncomputable instance (R : OracleWorld.Domain → Prop) : DecidablePred (IsAdvQuery R) :=
+  Classical.decPred _
+
+/-- An encoding query of the adversary. -/
+def IsAdvEncoding (parameter : PublicParameter) : (OracleWorld + SigningSpec).Domain → Prop :=
+  IsAdvQuery (CappedEncodingMonitor.IsEncodingHashQuery parameter)
 
 noncomputable instance (parameter : PublicParameter) : DecidablePred (IsAdvEncoding parameter) :=
   Classical.decPred _
@@ -215,14 +224,140 @@ theorem expectedSimulatedCost_overBudget_eq_zero (Q : ℕ)
               mul_zero]
           · rw [(prEvent_eq_zero_of_not_mem_support _) hr, zero_mul]
 
-theorem expectedSimulatedQueryCount_liftM_query (parameter : PublicParameter)
-    (input : OracleWorld.Domain) (cache : QueryCache HashSpec) :
-    expectedSimulatedQueryCount romImpl (CappedEncodingMonitor.IsEncodingHashQuery parameter)
+/-- The budget is never exceeded, under a bound on the adversary's own hash queries. -/
+theorem expectedSimulatedCost_overBudget_eq_zero_of_isQueryBoundP (Q : ℕ)
+    (computation : OracleComp (OracleWorld + SigningSpec) α) :
+    ∀ (n : ℕ) (s : State), IsQueryBoundP computation IsAdvHash n → s.2 + n ≤ Q →
+      expectedSimulatedCost (impl publicKey secretKey) (overBudget Q) computation s = 0 := by
+  induction computation using OracleComp.inductionOn with
+  | pure value => intros; simp
+  | query_bind input next ih =>
+      rintro n ⟨⟨cache, trace⟩, k⟩ hbound hk
+      rw [isQueryBoundP_query_bind_iff] at hbound
+      rw [expectedSimulatedCost_query_bind]
+      have hcost : overBudget Q input ((cache, trace), k) = 0 := by
+        unfold overBudget
+        rw [ite_eq_right]
+        rintro ⟨hadv, hQ⟩
+        have := hbound.1.resolve_left (not_not.2 hadv)
+        dsimp only at hk
+        omega
+      rw [hcost, zero_add]
+      refine tsum_eq_zero_iff.2 fun r => ?_
+      by_cases hr : r ∈ support ((impl publicKey secretKey input).run ((cache, trace), k))
+      · obtain ⟨r0, hr0, rfl⟩ := mem_support_impl publicKey secretKey hr
+        refine mul_eq_zero_of_right _ (ih r0.1 _ _ (hbound.2 r0.1) ?_)
+        dsimp only at hk ⊢
+        unfold tick
+        split_ifs with h
+        · have := hbound.1.resolve_left (not_not.2 h)
+          omega
+        · exact hk
+      · rw [(prEvent_eq_zero_of_not_mem_support _) hr, zero_mul]
+
+/-- A run's expected cost is at most a bound on the queries that each cost at most one. -/
+theorem expectedSimulatedCost_le_of_isQueryBoundP {ι σ : Type} {spec : OracleSpec ι}
+    (implementation : QueryImpl spec (StateT σ ProbComp)) {p : ι → Prop} [DecidablePred p]
+    {cost : ι → σ → ℝ≥0∞} (hcost : ∀ input s, cost input s ≤ if p input then 1 else 0)
+    (computation : OracleComp spec α) :
+    ∀ (n : ℕ) (s : σ), IsQueryBoundP computation p n →
+      expectedSimulatedCost implementation cost computation s ≤ n := by
+  induction computation using OracleComp.inductionOn with
+  | pure value => intros; simp
+  | query_bind input next ih =>
+      intro n s hbound
+      rw [isQueryBoundP_query_bind_iff] at hbound
+      rw [expectedSimulatedCost_query_bind]
+      calc _ ≤ (if p input then 1 else 0) + ∑' r, Pr{let x ← (implementation input).run s}[x = r] *
+            ((if p input then n - 1 else n : ℕ) : ℝ≥0∞) :=
+          add_le_add (hcost input s)
+            (tsum_le_tsum fun r => mul_le_mul' le_rfl (ih r.1 _ r.2 (hbound.2 r.1)))
+        _ ≤ (if p input then 1 else 0) + ((if p input then n - 1 else n : ℕ) : ℝ≥0∞) := by
+          rw [ENNReal.tsum_mul_right]
+          exact add_le_add le_rfl (mul_le_of_le_one_left' (OracleComp.tsum_prEvent_le_one _))
+        _ ≤ n := by
+          split_ifs with h
+          · have := hbound.1.resolve_left (not_not.2 h)
+            rw [← Nat.cast_one, ← Nat.cast_add]
+            exact_mod_cast (by omega : 1 + (n - 1) ≤ n)
+          · simp
+
+/-- An encoding query of the adversary is one of its hash queries. -/
+theorem isAdvHash_of_isAdvEncoding {parameter : PublicParameter} :
+    ∀ {input : (OracleWorld + SigningSpec).Domain}, IsAdvEncoding parameter input → IsAdvHash input
+  | .inl (.inr _), _ => trivial
+  | .inl (.inl _), h => h.elim
+  | .inr _, h => h.elim
+
+/-- One query of the game counts one in a class that holds it, and none otherwise. -/
+theorem expectedSimulatedQueryCount_liftM_query_eq (R : OracleWorld.Domain → Prop)
+    [DecidablePred R] (input : OracleWorld.Domain) (cache : QueryCache HashSpec) :
+    expectedSimulatedQueryCount romImpl R
         (liftM (OracleWorld.query input) : OracleComp OracleWorld _) cache =
-      if CappedEncodingMonitor.IsEncodingHashQuery parameter input then 1 else 0 := by
+      if R input then 1 else 0 := by
   rw [← bind_pure (liftM (OracleWorld.query input) : OracleComp OracleWorld _),
     expectedSimulatedQueryCount_query_bind]
   simp
+
+/-- The cost of a query in a class.
+
+It is one for an adversary query in the class, and the signer's expected count for a request. -/
+noncomputable def sourceCost (R : OracleWorld.Domain → Prop) [DecidablePred R] :
+    (OracleWorld + SigningSpec).Domain → State → ℝ≥0∞
+  | .inl input, _ => if R input then 1 else 0
+  | .inr request, s => expectedSimulatedQueryCount romImpl R
+      (Concrete.scheme.sign secretKey request.leafIndex request.message) s.1.1
+
+/-- The source game's count of a class is the adversary's queries in it plus the signer's. -/
+theorem expectedSimulatedQueryCount_source_eq (R : OracleWorld.Domain → Prop) [DecidablePred R]
+    (computation : OracleComp (OracleWorld + SigningSpec) α) :
+    ∀ (cache : QueryCache HashSpec) (trace : SigningCacheTrace) (k : ℕ),
+      expectedSimulatedQueryCount romImpl R
+          (simulateQ (cappedSourceUnloggedMappedAdversaryImpl publicKey secretKey) computation)
+          cache =
+        expectedSimulatedCost (impl publicKey secretKey) (sourceCost secretKey R) computation
+          ((cache, trace), k) := by
+  induction computation using OracleComp.inductionOn with
+  | pure value => intros; simp
+  | query_bind input next ih =>
+      intro cache trace k
+      rw [expectedSimulatedCost_query_bind, simulateQ_source_query_bind,
+        expectedSimulatedQueryCount_bind, impl_run, OracleComp.tsum_prEvent_map_mul]
+      congr 1
+      · cases input with
+        | inl world =>
+            rw [source_world]
+            exact expectedSimulatedQueryCount_liftM_query_eq R world cache
+        | inr request => rfl
+      · exact tsum_congr fun r => by rw [ih r.1 r.2 _ _]
+
+/-- With a signer that makes no query in the class, the source game counts only the adversary's. -/
+theorem expectedSimulatedQueryCount_source_le_adv (R : OracleWorld.Domain → Prop)
+    [DecidablePred R]
+    (hsign : ∀ request : SignRequest,
+      IsQueryBoundP (Concrete.scheme.sign secretKey request.leafIndex request.message) R 0)
+    (computation : OracleComp (OracleWorld + SigningSpec) α) (cache : QueryCache HashSpec)
+    (trace : SigningCacheTrace) (k : ℕ) :
+    expectedSimulatedQueryCount romImpl R
+        (simulateQ (cappedSourceUnloggedMappedAdversaryImpl publicKey secretKey) computation)
+        cache ≤
+      expectedSimulatedCost (impl publicKey secretKey)
+        (fun input _ => if IsAdvQuery R input then 1 else 0) computation ((cache, trace), k) := by
+  rw [expectedSimulatedQueryCount_source_eq publicKey secretKey R computation cache trace k]
+  refine expectedSimulatedCost_mono _ (fun input s => ?_) computation _
+  cases input with
+  | inl world =>
+      by_cases h : R world
+      · rw [ite_eq_left (show IsAdvQuery R (.inl world) from h)]
+        exact (ite_eq_left h).le
+      · rw [ite_eq_right (show ¬IsAdvQuery R (.inl world) from h)]
+        exact (ite_eq_right h).le
+  | inr request =>
+      -- The signer's count is at most its query bound, which is zero.
+      refine le_trans ?_ zero_le
+      rw [sourceCost, ← expectedSimulatedCost_indicator]
+      exact_mod_cast expectedSimulatedCost_le_of_isQueryBoundP romImpl (fun _ _ => le_rfl) _ 0
+        s.1.1 (hsign request)
 
 /-- The source game counts the adversary's encoding queries. -/
 theorem expectedSimulatedCost_advEncoding_le (parameter : PublicParameter)
@@ -232,21 +367,18 @@ theorem expectedSimulatedCost_advEncoding_le (parameter : PublicParameter)
           (fun input _ => if IsAdvEncoding parameter input then 1 else 0) computation ((cache, trace), k) ≤
         expectedSimulatedQueryCount romImpl (CappedEncodingMonitor.IsEncodingHashQuery parameter)
           (simulateQ (cappedSourceUnloggedMappedAdversaryImpl publicKey secretKey) computation) cache := by
-  induction computation using OracleComp.inductionOn with
-  | pure value => intros; simp
-  | query_bind input next ih =>
-      intro cache trace k
-      rw [expectedSimulatedCost_query_bind, simulateQ_source_query_bind, expectedSimulatedQueryCount_bind,
-        impl_run, OracleComp.tsum_prEvent_map_mul]
-      refine add_le_add ?_ (tsum_le_tsum fun r => mul_le_mul_right (ih _ _ _ _) _)
-      cases input with
-      | inl world =>
-          rw [source_world]
-          refine le_trans ?_ (le_of_eq (expectedSimulatedQueryCount_liftM_query parameter world cache).symm)
-          by_cases h : CappedEncodingMonitor.IsEncodingHashQuery parameter world
-          · rw [ite_eq_left h]; exact le_of_eq_of_le (ite_eq_left (show IsAdvEncoding parameter (.inl world) from h)) le_rfl
-          · rw [ite_eq_right (show ¬IsAdvEncoding parameter (.inl world) from h)]; exact zero_le
-      | inr request =>
-          rw [ite_eq_right (show ¬IsAdvEncoding parameter (.inr request) from id)]; exact zero_le
+  intro cache trace k
+  rw [expectedSimulatedQueryCount_source_eq publicKey secretKey _ computation cache trace k]
+  refine expectedSimulatedCost_mono _ (fun input s => ?_) computation _
+  cases input with
+  | inl world =>
+      by_cases h : CappedEncodingMonitor.IsEncodingHashQuery parameter world
+      · rw [ite_eq_left (show IsAdvEncoding parameter (.inl world) from h)]
+        exact (ite_eq_left h).ge
+      · rw [ite_eq_right (show ¬IsAdvEncoding parameter (.inl world) from h)]
+        exact zero_le
+  | inr request =>
+      rw [ite_eq_right (show ¬IsAdvEncoding parameter (.inr request) from id)]
+      exact zero_le
 
 end XmssSecurity.Ghost

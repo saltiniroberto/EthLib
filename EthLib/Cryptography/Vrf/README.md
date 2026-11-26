@@ -114,7 +114,26 @@ Every hash with 32-byte outputs has collisions, so the theorem names the one the
 The search reads only the index and the two openings.
 It is an efficient algorithm, so the theorem is a security reduction: whoever finds two outputs at one index also finds a Keccak-256 collision.
 The search makes at most 68 Keccak-256 calls, no more than verifying the two openings.
-The count is read from the definitions, and no theorem proves it.
+A theorem bounds the two checks by 68 calls (`extractOutputs_queryBound`), but the count of the search is read from the definitions.
+The variant over a permutation (`collisionSearch`) hashes each leaf once instead of twice, so it makes at most 66 calls to the permutation (`isQueryBoundP_collisionSearch`).
+
+In the random oracle model, two outputs at one index are unlikely (`prEvent_outputsWin_le_of_adversary`, `Uniqueness.lean`).
+There Keccak-256 is a random oracle on byte strings, for the leaves, the nodes and the outputs.
+An adversary makes at most `q` classical queries to it, then outputs a root, an index and two openings.
+Both openings verify, with two different outputs, with probability at most `(q + 68)^2 / 2^256`.
+The 68 counts the queries of the two checks: for each, the leaf, 32 nodes and the output.
+With `q = 2^64`, that is below `2^-127`.
+The experiment checks the openings with the check of the specification, with a query for each Keccak-256 call.
+With Keccak-256 in place of the oracle, a win is exactly two openings that verify with two different outputs (`outputsWin_keccak256_iff`).
+
+Over a uniform permutation, two outputs at one index are unlikely too (`prEvent_outputsWin_keccak256With_le`, `UniquenessPermutation.lean`).
+There every hash is Keccak-256 with a uniform permutation of the `2^1600` states in place of Keccak-f[1600].
+With Keccak-f[1600] itself, a win is exactly two openings that verify with two different outputs (`outputsWin_keccak256With_keccakF_iff`).
+An adversary makes at most `q` classical queries to the permutation and its inverse, then outputs a root, an index and two openings.
+Every input of the tree fits in one block, so the search turns a win into a collision of Keccak-256 on one block.
+`keccak256_collisionAdvantage_le` bounds that collision, with `Q = q + 68` calls: the adversary's, the 66 of the search and the 2 of the collision game.
+Both openings verify, with two different outputs, with probability at most `(Q (Q - 1) / 2 * 2^1344 + Q * 2^1088) / (2^1600 - Q)`.
+That is about `Q (Q - 1) / 2^257 + Q / 2^512`, and with `q = 2^64` it is below `2^-128`.
 
 A third statement, which is not one of those properties, says exactly what verification checks.
 An opening verifies if and only if its path leads from its leaf to the root, and its output is the hash of its index and its secret (`verify_eq_some_iff`).
@@ -146,7 +165,7 @@ The hash is a random oracle, the secret at the challenge index is uniform, and t
 The adversary gets the root, queries the hash `q_H` times, and asks for `q_O` openings at other indices.
 Its guess of the output at the challenge index is right with probability at most `(1 + 2 Q) / 2^256`, where `Q = q_H + (q_O + 1) 2^33` (`prEvent_guess_le`).
 With `q_H = 2^64` and `q_O = 2^32`, that is below `2^-189`.
-The game computes the root and the openings with the tree of this module, with the hash as an oracle (`rootWith_hash`, `openingWith_hash`).
+The game computes the root and the openings with the tree of the specification, with the hash as an oracle.
 
 That theorem fixes the challenge index before the game, where Micali, Rabin and Vadhan let the adversary choose it.
 A second theorem lets the adversary choose it (`prEvent_adaptiveGame_le`, `AdaptiveIndex.lean`).
@@ -175,7 +194,8 @@ It is selected when the opening verifies and the mixed value of its output is in
 That happens with probability at most `|I| |S| / 2^256 + q / 2^256`, plus the chance that `findHashCollision` returns a collision with the honest opening at that index.
 The first term is one fresh uniform value per allowed index, and the second is a mix query that already used `r`.
 Here `q` counts every evaluation of the mix by the holder, including its own Keccak-256 calls on mix inputs, as the random oracle assumption requires.
-No theorem bounds the third term, as for uniqueness.
+No theorem bounds the third term.
+The bound on two outputs takes the tree hash as a random oracle, while this theorem takes it as Keccak-256 itself.
 With one index, `|S| = 2^200` (a selection of one in `2^56`) and `q = 2^64`, the first two terms are below `2^-55`.
 The theorem does not cover a holder that registers a root without knowing a tree under it.
 Nor does it cover randomness that the holder knows at registration or can bias.
@@ -194,7 +214,9 @@ Pseudorandomness is not proved: that an output is indistinguishable from random 
 It rests on Keccak-256 being a pseudorandom function keyed by the seed, and on its preimage resistance, and both need a model of the hash.
 It could hold only for a tree whose secrets the holder did not choose.
 
-No bound on the cost of a Keccak-256 collision is proved either.
+No bound on the cost of a collision of Keccak-256 itself is proved either.
 Uniqueness turns a second output into a collision, but how hard a collision is to find depends on the hash.
 The generic cost of `2^128` hashes for a collision holds against a classical adversary.
+The bound in the random oracle model reaches 1 near `2^128` queries, with an oracle in place of Keccak-256.
+The bound over a uniform permutation reaches 1 near `2^128.5` queries, with that permutation in place of Keccak-f[1600].
 A quantum search for collisions needs about `2^85` queries.

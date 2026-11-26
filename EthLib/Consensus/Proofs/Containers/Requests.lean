@@ -14,13 +14,7 @@ Each container has distinct field names, and converts to and from its fields.
 
 So its bytes decode back to it, at every fork.
 
-The request types are distinct bytes, so a request list names its type without doubt.
-
 The list that the execution layer receives keeps the nonempty lists, in increasing order of type.
-
-Each of its entries has more than one byte: its type, then the bytes of a nonempty list.
-
-At Gloas, with no builder request, it is the list of Electra for the same requests.
 -/
 
 @[expose] public section
@@ -61,7 +55,7 @@ instance : LawfulSszType (ExecutionRequests preset fork) :=
       by_cases gloas : Fork.glamsterdam ≤ fork <;>
         simp [names, sinceNames, SszFields.descs, gloas],
      by simp [names],
-     firstDuplicate_of_nodup _ names_nodup⟩
+     names_nodup⟩
     (fun _ => rfl) (fun _ => rfl)
 
 /-- The types of the request lists, in their order: three, and from Gloas five. -/
@@ -197,7 +191,9 @@ theorem getExecutionRequestsList_glamsterdam {preset : Preset}
     serialize_forkList_across (by decide) (by decide) consolidations, List.filter_cons,
     (by decide : ¬Fork.glamsterdam ≤ Fork.pectra)]
 
-/-- The five request types are five distinct bytes. -/
+/-- The five request types are five distinct bytes.
+
+So a request list names its type without doubt. -/
 theorem requestTypes_nodup :
     [DEPOSIT_REQUEST_TYPE, WITHDRAWAL_REQUEST_TYPE, CONSOLIDATION_REQUEST_TYPE,
       BUILDER_DEPOSIT_REQUEST_TYPE, BUILDER_EXIT_REQUEST_TYPE].Nodup := by
@@ -226,7 +222,7 @@ instance [NeZero preset.BYTES_PER_LOGS_BLOOM.toNat] :
       by_cases deneb : Fork.dencun ≤ fork <;> by_cases electra : Fork.pectra ≤ fork <;>
         simp [names, sinceNames, SszFields.descs, deneb, electra],
      by simp [names],
-     firstDuplicate_of_nodup _ names_nodup⟩
+     names_nodup⟩
     (fun _ => rfl) (fun _ => rfl)
 
 end NewPayloadRequest

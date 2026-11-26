@@ -9,23 +9,15 @@ public import EthLib.Serialization.Proofs.Ssz.Typed.Since
 /-!
 # Proofs: the light client containers
 
-Each container has distinct field names at every fork, and converts to and from its fields.
+Each container decodes back from its bytes.
 
-So its bytes decode back to it.
+Each light client index is the one that its type gives.
 
-The indices of the finalized root and of the sync committees are those that the types give.
+The node at each index is the root of its field.
 
-They hold at every fork from Altair, at every preset.
+So the length of each branch is the depth of the node that it proves.
 
-The execution indices hold from Capella, at every preset.
-
-At each of these forks the node at each index is the root of its field.
-
-So the length of each branch is the depth of the node it proves.
-
-The nodes are those of a state of a lawful type.
-
-Instance search finds that type lawful in the mainnet and the minimal presets.
+Instance search finds the state type lawful in the mainnet and the minimal presets.
 -/
 
 @[expose] public section
@@ -126,18 +118,21 @@ theorem BeaconState.nodeRoot_nextSyncCommittee
     (altair : .altair ≤ fork) (state : BeaconState preset fork) {root : Bytes32}
     (rooted : SszType.hashTreeRoot (state.nextSyncCommittee altair) = .ok root) :
     nodeRoot (SszType.desc (BeaconState preset fork)) (SszType.toValue state)
-      (nextSyncCommitteeGindex fork) = .ok root.toArray := by
+      (nextSyncCommitteeGindex fork) = .ok ⟨root.toArray⟩ := by
   -- The field sits at the ordinal of its name, in a container or a progressive container.
   have selected : PathSelects (SszType.desc (BeaconState preset fork)) (SszType.toValue state)
-      [.position ((BeaconState.names fork).idxOf "next_sync_committee")] root.toArray := by
+      [.position ((BeaconState.names fork).idxOf "next_sync_committee")] ⟨root.toArray⟩ := by
     have inner := PathSelects.root
       ((SszType.hashTreeRoot_ok_iff (α := Rooted (SyncCommittee preset))).mp rooted)
     cases fork
     all_goals try exact absurd altair (by decide)
+    -- The kind of the container is read off its shape first, so no legality check is evaluated.
     all_goals first
-      | exact PathSelects.containerField (LawfulSszType.wellFormed (α := type_of% state))
+      | show PathSelects (.container _ _) _ _ _
+        exact PathSelects.containerField (LawfulSszType.wellFormed (α := type_of% state))
           (LawfulSszType.fits state) rfl rfl inner
-      | exact PathSelects.progressiveField (LawfulSszType.wellFormed (α := type_of% state))
+      | show PathSelects (.progressiveContainer _ _ _) _ _ _
+        exact PathSelects.progressiveField (LawfulSszType.wellFormed (α := type_of% state))
           (LawfulSszType.fits state) rfl rfl inner
   exact selected.nodeRoot_eq (lightClientGindices_eq altair).2.2
 
@@ -151,18 +146,21 @@ theorem BeaconState.nodeRoot_currentSyncCommittee
     (altair : .altair ≤ fork) (state : BeaconState preset fork) {root : Bytes32}
     (rooted : SszType.hashTreeRoot (state.currentSyncCommittee altair) = .ok root) :
     nodeRoot (SszType.desc (BeaconState preset fork)) (SszType.toValue state)
-      (currentSyncCommitteeGindex fork) = .ok root.toArray := by
+      (currentSyncCommitteeGindex fork) = .ok ⟨root.toArray⟩ := by
   -- The field sits at the ordinal of its name, in a container or a progressive container.
   have selected : PathSelects (SszType.desc (BeaconState preset fork)) (SszType.toValue state)
-      [.position ((BeaconState.names fork).idxOf "current_sync_committee")] root.toArray := by
+      [.position ((BeaconState.names fork).idxOf "current_sync_committee")] ⟨root.toArray⟩ := by
     have inner := PathSelects.root
       ((SszType.hashTreeRoot_ok_iff (α := Rooted (SyncCommittee preset))).mp rooted)
     cases fork
     all_goals try exact absurd altair (by decide)
+    -- The kind of the container is read off its shape first, so no legality check is evaluated.
     all_goals first
-      | exact PathSelects.containerField (LawfulSszType.wellFormed (α := type_of% state))
+      | show PathSelects (.container _ _) _ _ _
+        exact PathSelects.containerField (LawfulSszType.wellFormed (α := type_of% state))
           (LawfulSszType.fits state) rfl rfl inner
-      | exact PathSelects.progressiveField (LawfulSszType.wellFormed (α := type_of% state))
+      | show PathSelects (.progressiveContainer _ _ _) _ _ _
+        exact PathSelects.progressiveField (LawfulSszType.wellFormed (α := type_of% state))
           (LawfulSszType.fits state) rfl rfl inner
   exact selected.nodeRoot_eq (lightClientGindices_eq altair).2.1
 
@@ -175,24 +173,27 @@ theorem BeaconState.nodeRoot_finalizedCheckpoint_root
     [LawfulSszType (BeaconState preset fork)]
     (altair : .altair ≤ fork) (state : BeaconState preset fork) :
     nodeRoot (SszType.desc (BeaconState preset fork)) (SszType.toValue state)
-      (finalizedRootGindex fork) = .ok state.finalizedCheckpoint.root.toArray := by
+      (finalizedRootGindex fork) = .ok ⟨state.finalizedCheckpoint.root.toArray⟩ := by
   -- Finality descends through the checkpoint field, then its root at ordinal 1.
   have checkpoint : PathSelects (SszType.desc Checkpoint)
       (SszType.toValue state.finalizedCheckpoint) [.position 1]
-      state.finalizedCheckpoint.root.toArray :=
+      ⟨state.finalizedCheckpoint.root.toArray⟩ :=
     PathSelects.containerField (LawfulSszType.wellFormed (α := Checkpoint))
       (LawfulSszType.fits state.finalizedCheckpoint) (ordinal := 1)
       (child := SszType.desc Root) (inner := SszType.toValue state.finalizedCheckpoint.root)
       rfl rfl (.root (hashTreeRoot_chunk (by simp [bytesPerChunk])))
   have selected : PathSelects (SszType.desc (BeaconState preset fork)) (SszType.toValue state)
       [.position ((BeaconState.names fork).idxOf "finalized_checkpoint"), .position 1]
-      state.finalizedCheckpoint.root.toArray := by
+      ⟨state.finalizedCheckpoint.root.toArray⟩ := by
     cases fork
     all_goals try exact absurd altair (by decide)
+    -- The kind of the container is read off its shape first, so no legality check is evaluated.
     all_goals first
-      | exact PathSelects.containerField (LawfulSszType.wellFormed (α := type_of% state))
+      | show PathSelects (.container _ _) _ _ _
+        exact PathSelects.containerField (LawfulSszType.wellFormed (α := type_of% state))
           (LawfulSszType.fits state) rfl rfl checkpoint
-      | exact PathSelects.progressiveField (LawfulSszType.wellFormed (α := type_of% state))
+      | show PathSelects (.progressiveContainer _ _ _) _ _ _
+        exact PathSelects.progressiveField (LawfulSszType.wellFormed (α := type_of% state))
           (LawfulSszType.fits state) rfl rfl checkpoint
   exact selected.nodeRoot_eq (lightClientGindices_eq altair).1
 
@@ -381,6 +382,9 @@ variable [NeZero preset.BYTES_PER_LOGS_BLOOM.toNat] [NeZero preset.SYNC_COMMITTE
 instance : NeZero (Nat.log2 (executionBranchGindex fork)) :=
   ⟨by unfold executionBranchGindex; split <;> decide⟩
 
+-- Each light client container has distinct field names at every fork.
+--
+-- Each converts to and from its fields, so its bytes decode back to it.
 instance : LawfulSszType (LightClientHeader preset fork) :=
   .container
     ⟨by
@@ -394,7 +398,7 @@ instance : LawfulSszType (LightClientHeader preset fork) :=
           simp [LightClientHeader.names, sinceNames, duringNames, SszFields.descs, capella,
             gloas, early],
      by simp [LightClientHeader.names],
-     firstDuplicate_of_nodup _ LightClientHeader.names_nodup⟩
+     LightClientHeader.names_nodup⟩
     (fun _ => rfl) (fun _ => rfl)
 
 instance : NeZero (Nat.log2 (currentSyncCommitteeGindex fork)) :=
@@ -508,7 +512,7 @@ This holds at every preset. -/
 theorem ExecutionPayloadHeader.nodeRoot_blockHash (capella : .shapella ≤ fork)
     (beforeGloas : fork < .glamsterdam) (header : ExecutionPayloadHeader preset fork) :
     nodeRoot (SszType.desc (ExecutionPayloadHeader preset fork)) (SszType.toValue header)
-      (payloadHeaderBlockHashGindex fork) = .ok header.blockHash.toArray := by
+      (payloadHeaderBlockHashGindex fork) = .ok ⟨header.blockHash.toArray⟩ := by
   -- The block hash is field 12 at each of these forks, a leaf of the tree of fields.
   cases fork
   all_goals try first
@@ -516,11 +520,11 @@ theorem ExecutionPayloadHeader.nodeRoot_blockHash (capella : .shapella ≤ fork)
     | exact absurd beforeGloas (by decide)
   all_goals first
     | exact nodeRoot_containerLeaf (count := 15) (ordinal := 12)
-        (child := .byteVector bytesPerChunk) (inner := .bytes header.blockHash.toArray)
+        (child := .byteVector bytesPerChunk) (inner := .bytes ⟨header.blockHash.toArray⟩)
         rfl rfl (by decide) (by decide +kernel) (by decide +kernel) rfl rfl
         (hashTreeRoot_chunk (by simp [bytesPerChunk]))
     | exact nodeRoot_containerLeaf (count := 17) (ordinal := 12)
-        (child := .byteVector bytesPerChunk) (inner := .bytes header.blockHash.toArray)
+        (child := .byteVector bytesPerChunk) (inner := .bytes ⟨header.blockHash.toArray⟩)
         rfl rfl (by decide) (by decide +kernel) (by decide +kernel) rfl rfl
         (hashTreeRoot_chunk (by simp [bytesPerChunk]))
 

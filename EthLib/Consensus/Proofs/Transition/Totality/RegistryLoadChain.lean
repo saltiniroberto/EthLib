@@ -27,8 +27,6 @@ When that sum is within the limit of the registry, the registry at the end is wi
 The limit is weighted by the fork at the end, as the count is.
 
 A run here is checked: each block has its state root checked, and no upgrade is due at it.
-
-The update of the inactivity scores is restated with the count as its hypothesis.
 -/
 
 @[expose] public section
@@ -56,6 +54,9 @@ theorem upgradeNext_weightedRegistryLoad_le {pre : ForkedBeaconState preset}
     (computed : upgradeNext config checks pre = .ok next) :
     registryLoadFactor next.val.fork * registryLoad next.val.state ≤
       registryLoadFactor pre.fork * registryLoad pre.state := by
+  -- The upgrade to Electra adds at most the size of the registry.
+  --
+  -- Before Electra that size is at most the count, and the weight two covers it.
   have bound := upgradeNext_registryLoad_le computed
   have ordered : pre.fork.ctorIdx < next.val.fork.ctorIdx := next.property
   have size : pre.state.validators.data.size ≤ registryLoad pre.state := Nat.le_add_right _ _
@@ -74,7 +75,9 @@ theorem advanceSlotAcross_weightedRegistryLoad_le {forked after : ForkedBeaconSt
     registryLoadFactor after.fork * registryLoad after.state ≤
       registryLoadFactor forked.fork * registryLoad forked.state := by
   obtain ⟨advanced, slotOk, upgrades⟩ := bind_ok_iff.mp computed
-  -- The slot keeps the fork, and each upgrade lowers the weighted count.
+  -- The slot keeps the fork, and never raises the count within it.
+  --
+  -- Each upgrade lowers the weighted count.
   have upgraded := processUpgrades_induction
     (property := fun state => registryLoadFactor state.fork * registryLoad state.state ≤
       registryLoadFactor forked.fork * registryLoad advanced)
@@ -119,6 +122,7 @@ theorem Run.registryLoad_le {first last : ForkedBeaconState preset}
       simp only [Run.loadBound, Step.loadBound] at ih ⊢
       omega
     | @block fork before after engine signed due computed =>
+      -- A block adds at most its bound: its deposits, twice from Electra, plus its requests.
       have bound := applySignedBlock_registryLoad_le (config := config) (checks := checks)
         computed
       have := Nat.mul_le_mul_left (registryLoadFactor fork) bound

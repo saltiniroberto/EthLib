@@ -4,12 +4,17 @@ public import EthLib.Cryptography.Proofs.Xmss.Unforgeability.Game
 public import EthLib.Cryptography.Proofs.Xmss.Unforgeability.Reasons
 public import EthLib.Cryptography.Proofs.Xmss.Unforgeability.SeedHops
 public import EthLib.Cryptography.Proofs.Xmss.Unforgeability.IdealFailure
+public import EthLib.Cryptography.Proofs.Xmss.Unforgeability.SearchFailure
 public import EthLib.Cryptography.Proofs.Xmss.Unforgeability.AdversaryBudget
+public import EthLib.Cryptography.Proofs.Xmss.Unforgeability.Permutation
+public import EthLib.Cryptography.Proofs.Xmss.Unforgeability.Stateless
 
 /-!
 # Proofs: leanXMSS as EthLib computes it is unforgeable
 
 Source: the leanXMSS specification draft, section "Security".
+
+The game is the generic strong-unforgeability game, with leanXMSS as its scheme.
 
 The theorem holds in the random oracle model.
 
@@ -33,9 +38,15 @@ With all `2^32` leaf indices signed, `q` exceeds `2^64`, and the bound exceeds `
 
 A second form counts only the adversary's own calls: `qH` calls of `H` and `r` requests.
 
-Its bound is `Q / 2^127`, with `Q = 205 * 2^16 + 1 + qH + r (2^33 + 205 * 2^16 + 407) + 384`.
+Its bound is `Q / 2^127`, with `Q = 205 * 2^16 + 1 + qH + r (2^33 + 205 * 2^16 + 407) + 172`.
 
-For `r <= 2^32` it is at most `(qH + 2^65 + 205 * 2^48 + 407 * 2^32 + 205 * 2^16 + 385) / 2^127`.
+For `r <= 2^32` it is at most `(qH + 2^65 + 205 * 2^48 + 407 * 2^32 + 205 * 2^16 + 173) / 2^127`.
+
+A third form runs `H` as Keccak-256 over a random permutation, whose inverse is an oracle too.
+
+With at most `q` own calls of `π` or `π⁻¹` and `2^32` requests, it is `(q + 319) * 2^-127`.
+
+A fourth form signs every request with the key of key generation, with the third form's bound.
 
 The game runs EthLib's key generation, signing and verification.
 
@@ -64,7 +75,7 @@ Take an adversary that makes at most `qH` hash queries and `r` signing requests 
 
 The hops cost at most `2 Q / 2^256`, where `Q` bounds the hash calls of the game on every run.
 
-Here `Q = 205 * 2^16 + 1 + qH + r (2^33 + 205 * 2^16 + 407) + 384`.
+Here `Q = 205 * 2^16 + 1 + qH + r (2^33 + 205 * 2^16 + 407) + 172`.
 
 So it charges each request's worst case.
 
@@ -81,4 +92,10 @@ So the variant game's bound is `q / 2^127 + 2 Q / 2^256 + r (Q / 2^95 + 2 exp(-4
 The last term is at least `r^2 / 2^62`, so it says nothing from about `2^31` requests.
 
 That loss comes from the proof, which charges each new search the whole cache.
+
+A second bound on the failure needs no hop.
+
+A failed request leaves in the cache `2^31` trials that all missed the code.
+
+So the variant game's bound is also at most `q / 2^127 + Q exp(-2000)`, below the bound above.
 -/

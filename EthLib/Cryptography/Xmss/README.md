@@ -153,19 +153,27 @@ In the random oracle model, all `2^32` trials of one search miss the code with p
 The theorem assumes that the oracle's cache holds none of the trial inputs when the search starts, as an empty cache does.
 
 A whole signature fails with probability at most `2 exp(-4000)` (`prEvent_signWith_error_le`, `SignatureFailure.lean`).
-A trial input of a key carries the key's message address and a payload of one length.
+A trial input of a key is at the key's message call site, with a payload of one length.
 That length is 48 bytes on the bottom layer and 32 on the top.
 Before a key's search, the signer hashes no such input.
-Its other calls carry other addresses, and the input that grows the scheme seed has 40 bytes, too short to be a trial input.
+Its other calls are at other call sites, and the input that grows the scheme seed has 40 bytes, too short to be a trial input.
 The theorem assumes that the cache holds no trial input of the two keys when signing starts, as an empty cache does (`prEvent_signWith_error_le_empty`).
 It also assumes that a bottom tree of that index, if the key keeps one, holds a top signature, not an error; a key from `keyGen` keeps no bottom tree.
 Then the cache still holds none when each search starts, so each search fails with probability at most `exp(-4000)`.
 
+Inside the unforgeability game, earlier signatures and the adversary's queries can fill the cache, so those assumptions can fail there.
+Take the game with a signer that replies with its error (`Unforgeability/Reasons.lean`), and an adversary with at most `qH` calls of `H` and `r` requests.
+Some request fails with probability at most `Q (1 - |C| / 2^128)^(2^31)`, so at most `Q exp(-2000)` (`signingFailure_le_pow`, `signingFailure_le_exp`, `Unforgeability/SearchFailure.lean`).
+`Q` bounds the hash calls of that game, as in `SOUNDNESS.md`.
+A failed request leaves in the cache an aligned block of `2^31` trial inputs, whose answers all missed the code.
+The bound counts every hash call of the game from its empty cache, so it needs no assumption on the cache when a search starts.
+
 **Domain separation.**
-Every hash call carries an address that says where in the key it happens, so that two calls never hash the same input by accident (`Address.lean`, `TweakableHash.lean`).
-An address determines its type, its position and both fields (`encodeAddress_inj`), and the two layers never share an address (`layerHi_inj`).
-Each address of a key determines its own arguments (`addrPrf_inj` and the five like it).
-Finally, a hash input determines its public parameter, address and payload (`thInput_inj`).
+Every hash call names its call site: what it computes, and the arguments that kind of call takes, such as the layer, the key and the position.
+The hash reads the call site as a 16-byte address, so that two calls never hash the same input by accident (`Address.lean`, `TweakableHash.lean`).
+Two different call sites never share an address, whatever their kinds (`Address.encode_injective`).
+The type code keeps the kinds apart, and the top layer's bit keeps the two layers apart (`layerHi_inj`).
+Finally, a hash input determines its public parameter, call site and payload (`thInput_inj`).
 
 **The scheme in bytes.**
 The code holds its values as lanes, but the note writes every hash over bytes.
@@ -190,14 +198,14 @@ In the random oracle model, an adversary forges with probability at most `q / 2^
 The game is the note's section "Security", run on `keyGenWith`, `signWith` and `verifyWith` with `H` a query to the oracle, and its signer keeps its key across requests.
 `q` bounds the hash calls of that game on every run, key generation and signing included, so it is never below about `2^23.7`, plus more than `2^32` per signing request (`SOUNDNESS.md`).
 With all `2^32` leaf indices signed, `q` exceeds `2^64`, so over the key's lifetime the bound is above `2^-63`.
+Against the game whose signer replies with its error, an adversary forges with probability at most `q / 2^127 + Q exp(-2000)` (`reasonForgeAdvantage_le_exp`, `Unforgeability/SearchFailure.lean`).
 The proof, adapted from leanerVM's, reasons over these same definitions (`Proofs/Xmss/Security/`).
 
 ## What is not proved
 
 - No security property is proved beyond the random oracle model, so the theorem says nothing about an attack that uses the structure of Keccak-256.
 - Security against a quantum adversary is not proved.
-- The failure bound of a whole signature assumes a starting cache with no trial input of its two keys.
-  An earlier signature under the same top key caches that key's trial inputs, and in the unforgeability game the adversary's queries can too.
-  So no theorem bounds the failure of a later signature, or of signing inside the game.
+- No theorem bounds the failure of signing when several keys share the oracle, as on a node that holds several keys.
+  The bound for signing inside the unforgeability game covers its one key.
 - No theorem says that this module and any other implementation compute the same keys and signatures.
   The test vectors check one key and one signature against an independent implementation.

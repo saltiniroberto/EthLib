@@ -25,20 +25,9 @@ The code computes all 128 cell proofs together, by the Toeplitz structure of FK2
 
 See Feist and Khovratovich, "Fast amortized KZG proofs", <https://eprint.iacr.org/2023/033>.
 
-- The coset of cell `k` is `h_k * mu_64`, with `c_k = h_k^64 = omega_128^(rev_7(k))`.
-- Its vanishing polynomial is `Z_k(X) = X^64 - c_k`.
-- The quotient is `q_k[t] = sum_e c_k^e * f[t + 64 (e + 1)]`, over the terms that exist.
-- The point `H_d` is `sum_t f[t + 64 d] * [s^t]`.
-- The proof is the compression of `sum_e c_k^e * H_(e + 1)`.
+The sections prove that the direct method and the code give the same cells and proofs.
 
-The operation is stated through its body, a plain function of the setup and the coefficients.
-
-- Valid points of `G1` with the same group element compress to the same 48 bytes.
-- The vanishing polynomial of each cell's coset is `X^64 - h_k^64`.
-- Division by that polynomial gives the Toeplitz series `q_k`.
-- Cell `k` holds the values of the polynomial on its coset.
-- Proof `k` is the compressed commitment to the quotient `q_k`.
-- From at least 64 valid cells of a polynomial, recovery returns all 128 cells and proofs.
+They also prove that recovery returns them.
 -/
 
 @[expose] public section
@@ -149,7 +138,10 @@ theorem compressG1_eq_of_toPoint_eq {p₁ p₂ : G1}
     compressG1 p₁ = compressG1 p₂ :=
   compress_eq_of_toPoint_eq hv₁ hv₂ heq
 
-/-! ## Cell coset vanishing polynomial: `Z_k(X) = X^64 - c_k` -/
+/-! ## Cell coset vanishing polynomial: `Z_k(X) = X^64 - c_k`
+
+The coset of cell `k` is `h_k * mu_64`, with `c_k = h_k^64 = omega_128^(rev_7(k))`.
+-/
 
 /-- The coefficients of `X^n - c`: `-c` at index `0`, then zeros, and `1` at index `n`. -/
 def binomialVanishing (n : Nat) (c : Fr) : PolynomialCoeff :=
@@ -307,7 +299,10 @@ theorem vanishingPolynomialcoeff_cosetForCell
     rw [hroot, fr_mul_one]
     exact fr_sub_self _
 
-/-! ## Toeplitz quotient formula for division by `X^n - c` -/
+/-! ## Toeplitz quotient formula for division by `X^n - c`
+
+The quotient is `q_k[t] = sum_e c_k^e * f[t + 64 (e + 1)]`, over the terms that exist.
+-/
 
 /-- Toeplitz quotient array for dividing `f` by `X^n - c`.
 
@@ -642,7 +637,10 @@ theorem dividePolynomialcoeff_binomialVanishing {f : PolynomialCoeff} {n : Nat}
     rw [← getElem!_pos q i hi1, ← getElem!_pos (toeplitzQuotient f n c) i hi2,
       ← coeff_coefficientPolynomial, ← coeff_coefficientPolynomial, hq_poly_eq]
 
-/-! ## FK20 quotient commitment equivalence -/
+/-! ## FK20 quotient commitment equivalence
+
+The operation is stated through its body, a plain function of the setup and the coefficients.
+-/
 
 /-- The cells and proofs of a polynomial in coefficient form, as a plain value.
 
@@ -657,12 +655,14 @@ def fk20CellsAndProofs (setup : TrustedSetup) (polynomialCoeff : PolynomialCoeff
   let proofs := (Task.spawn fun _ =>
     let tasks := (Array.range shifts).map fun e => Task.spawn fun _ =>
       let d := e + 1
+      -- The point `H_d` is `sum_t f[t + 64 d] * [s^t]`.
       Bls.G1.msm (setup.g1Monomial.toArray.extract 0 (size - n * d))
         (polynomialCoeff.extract (n * d) size)
     let hs := tasks.map Task.get
     let padded := hs ++ Array.replicate (CELLS_PER_EXT_BLOB - hs.size) Bls.G1.zero
+    -- The FFT gives each sum `sum_e c_k^e * H_(e + 1)`, and its compression is the proof.
     bitReversalPermutation (fftG1 padded (computeRootsOfUnity CELLS_PER_EXT_BLOB))).get
-  (cells, proofs.map compressG1)
+  (cells, proofs.map fun proof => ⟨compressG1 proof⟩)
 
 /-- The cell operation on coefficients returns its plain body. -/
 theorem computeCellsAndKzgProofsPolynomialcoeff_eq (setup : TrustedSetup)
@@ -932,7 +932,7 @@ theorem fk20CellsAndProofs_eq_perCellSpec
       (fk20CellsAndProofs setup polynomialCoeff).1[cellIndex]! =
         cosetEvalsToCell (coset.map (evaluatePolynomialcoeff polynomialCoeff)) ∧
       (fk20CellsAndProofs setup polynomialCoeff).2[cellIndex]! =
-        compressG1 (Bls.G1.msm (setup.g1Monomial.toArray.extract 0 quotient.size) quotient) := by
+        ⟨compressG1 (Bls.G1.msm (setup.g1Monomial.toArray.extract 0 quotient.size) quotient)⟩ := by
   have hci : cellIndex < CELLS_PER_EXT_BLOB := cosetForCell_ok_iff.mp ⟨coset, hcoset⟩
   let n := FIELD_ELEMENTS_PER_CELL
   let N := CELLS_PER_EXT_BLOB
@@ -969,9 +969,11 @@ theorem fk20CellsAndProofs_eq_perCellSpec
     rfl
   have hproofs_eq :
       (fk20CellsAndProofs setup polynomialCoeff).2 =
-        (bitReversalPermutation (fftG1 padded (computeRootsOfUnity N))).map compressG1 := by
+        (bitReversalPermutation (fftG1 padded (computeRootsOfUnity N))).map
+          fun proof => ⟨compressG1 proof⟩ := by
     dsimp only [fk20CellsAndProofs]
-    change (bitReversalPermutation (fftG1 _ (computeRootsOfUnity N))).map compressG1 = _
+    change (bitReversalPermutation (fftG1 _ (computeRootsOfUnity N))).map
+      (fun proof => KZGProof.mk (compressG1 proof)) = _
     rw [htasks_eq]
   -- Relate `c` to `omega^r`.
   have hr_lt : r < N := reverseBits_lt_two_pow cellIndex 7
@@ -1022,7 +1024,7 @@ theorem fk20CellsAndProofs_eq_perCellSpec
   have hci_fft : cellIndex < fftOut.size := hfft_sz.symm ▸ hci
   have hget_proof :
       (fk20CellsAndProofs setup polynomialCoeff).2[cellIndex]! =
-        compressG1 fftOut[r]! := by
+        ⟨compressG1 fftOut[r]!⟩ := by
     rw [hproofs_eq,
       getElem!_pos _ cellIndex (by rw [Array.size_map]; exact hci_brp),
       Array.getElem_map,
@@ -1030,7 +1032,7 @@ theorem fk20CellsAndProofs_eq_perCellSpec
       getElem!_bitReversalPermutation fftOut cellIndex hci_fft,
       hfft_sz]
   rw [hget_proof, hq_sz]
-  exact compressG1_eq_of_toPoint_eq hv_fft hv_msm_q hpt_fft
+  exact congrArg KZGProof.mk (compressG1_eq_of_toPoint_eq hv_fft hv_msm_q hpt_fft)
 
 /-- The agreement of FK20 with the direct method, for a decoded blob.
 
@@ -1055,7 +1057,7 @@ theorem computeCellsAndKzgProofs_blob_spec
       (fk20CellsAndProofs setup polynomialCoeff).1[cellIndex]! =
         cosetEvalsToCell (coset.map (evaluatePolynomialcoeff polynomialCoeff)) ∧
       (fk20CellsAndProofs setup polynomialCoeff).2[cellIndex]! =
-        compressG1 (Bls.G1.msm (setup.g1Monomial.toArray.extract 0 quotient.size) quotient) := by
+        ⟨compressG1 (Bls.G1.msm (setup.g1Monomial.toArray.extract 0 quotient.size) quotient)⟩ := by
   intro polynomialCoeff
   have hp_sz : polynomialCoeff.size = FIELD_ELEMENTS_PER_BLOB := by
     rw [size_polynomialEvalToCoeff, size_blobToPolynomial blob poly hblob]
@@ -1193,7 +1195,7 @@ theorem recoverCellsAndKzgProofs_spec
       (fk20CellsAndProofs setup p).1[cellIndex]! =
         cosetEvalsToCell (coset.map (evaluatePolynomialcoeff p)) ∧
       (fk20CellsAndProofs setup p).2[cellIndex]! =
-        compressG1 (Bls.G1.msm (setup.g1Monomial.toArray.extract 0 quotient.size) quotient) :=
+        ⟨compressG1 (Bls.G1.msm (setup.g1Monomial.toArray.extract 0 quotient.size) quotient)⟩ :=
   ⟨recoverCellsAndKzgProofs_ok_eq setup hp hlen hmin hbound hasc hdec hmatch,
    fk20CellsAndProofs_eq_perCellSpec
      (hp ▸ (by decide : FIELD_ELEMENTS_PER_BLOB ≤ FIELD_ELEMENTS_PER_EXT_BLOB))

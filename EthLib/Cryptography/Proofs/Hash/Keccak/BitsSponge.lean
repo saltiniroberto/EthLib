@@ -14,8 +14,6 @@ FIPS 202 Appendix B.1 orders the bits of each byte from least significant to mos
 
 This file proves that the two sponges agree in that order for one squeezed block.
 
-The proof covers every positive byte rate that is a multiple of 8.
-
 FIPS 202 §4 defines the sponge only for rates below 200 bytes, which include those of both hashes.
 
 Keccak-256 and Keccak-512 therefore equal their bit models on every message.
@@ -175,7 +173,7 @@ theorem padded_blockCount_eq {rate : Nat} (hr : 0 < rate) (msg : ByteArray) :
 
 /-- The bits of the block of `rate` bytes from byte `start`, as an `8 * rate`-bit block. -/
 def blockBits (rate : Nat) (bytes : ByteArray) (start : Nat) : Block (8 * rate) :=
-  Vector.ofFn fun i => (EthLib.Base.byteAt bytes (start + i.val / 8)).toNat.testBit (i.val % 8)
+  Vector.ofFn fun i => (EthLib.Base.byteAtOrZero bytes (start + i.val / 8)).toNat.testBit (i.val % 8)
 
 /-- After absorbing a block, lane `(x, y)` is XORed with block lane `x + 5 * y`. -/
 theorem _root_.EthLib.Cryptography.Hash.Keccak.Internal.absorbBlock_lane {rate : Nat}
@@ -218,15 +216,16 @@ theorem absorbBlock_ofLanes {rate : Nat} (hlanes : 8 ∣ rate)
 /-- Absorbing `n` blocks of `rate` bytes from byte `start` is absorbing their bits in order. -/
 theorem absorbBlocks_ofLanes {rate : Nat} (hlanes : 8 ∣ rate)
     (bytes : ByteArray) (n start : Nat) (a : Keccak.State) :
-    ofLanes (Keccak.Internal.absorbBlocks Keccak.keccakF rate (Keccak.Internal.laneAt bytes) n
-      start a) =
+    ofLanes (Id.run (Keccak.Internal.absorbBlocks (fun S => pure (Keccak.keccakF S)) rate
+      (Keccak.Internal.laneAt bytes) n start a)) =
       (List.range n).foldl
         (fun s j => permutation (absorb s (blockBits rate bytes (start + rate * j))))
         (ofLanes a) := by
   induction n generalizing start a with
   | zero => rfl
   | succ n ih =>
-    rw [Keccak.Internal.absorbBlocks, ih, permutation_ofLanes, absorbBlock_ofLanes hlanes,
+    rw [Keccak.Internal.absorbBlocks, Id.run_bind, Id.run_pure, ih, permutation_ofLanes,
+      absorbBlock_ofLanes hlanes,
       List.range_succ_eq_map, List.foldl_cons, List.foldl_map]
     simp only [Nat.mul_zero, Nat.add_zero, Nat.succ_eq_add_one, Nat.mul_add, Nat.mul_one,
       Nat.add_assoc, Nat.add_comm rate]
@@ -259,14 +258,14 @@ theorem paddedBlock_eq {rate : Nat} (hr : 0 < rate) (msg : ByteArray)
   have bitIndex : (8 * rate * i.val + j) % 8 = j % 8 := by
     rw [heq, Nat.add_mul_mod_self_left]
   simp only [byteIndex, bitIndex] at bit
-  simp only [paddedBlock, blockBits, Vector.getElem_ofFn, EthLib.Base.byteAt,
+  simp only [paddedBlock, blockBits, Vector.getElem_ofFn, EthLib.Base.byteAtOrZero,
     dite_eq_left inside, ByteArray.getElem_eq_getElem_data]
   exact bit
 
 /-- The lane sponge at `rate` bytes absorbs every message to the state of the bit model. -/
 theorem absorbAll_eq {rate : Nat} (hr : 0 < rate) (hlanes : 8 ∣ rate) (msg : ByteArray) :
-    ofLanes (Keccak.Internal.spongeAbsorb Keccak.keccakF rate msg.size
-        (Keccak.Internal.laneAt msg)) =
+    ofLanes (Id.run (Keccak.Internal.spongeAbsorb (fun S => pure (Keccak.keccakF S)) rate
+        msg.size (Keccak.Internal.laneAt msg))) =
       absorbAll (rateBits := 8 * rate) (Nat.mul_pos (by decide) hr) msg := by
   have zero : ofLanes Keccak.State.zero = (fun _ _ _ => false) := by
     funext x y z
@@ -381,18 +380,22 @@ theorem outputByte_eq_squeeze512 (a : Keccak.State) (i : Fin 64) :
 
 /-- A squeeze that reads the first `outBytes` output bytes of the absorbed state is the bit sponge.
 
-The output fits in one rate block, so FIPS 202 Algorithm 8 stops before another permutation. -/
+The output fits in one rate block, so FIPS 202 Algorithm 8 stops before another permutation.
+
+The proof covers every positive byte rate that is a multiple of 8. -/
 theorem sponge_eq_of_squeeze {rate outBytes : Nat} (hr : 0 < rate) (hlanes : 8 ∣ rate)
     (hout : outBytes ≤ rate) (sq : Keccak.State → Vector UInt8 outBytes)
     (hsq : ∀ (a : Keccak.State) (i : Fin outBytes), (sq a)[i] = outputByte (ofLanes a) i.val)
     (msg : ByteArray) :
-    sq (Keccak.Internal.spongeAbsorb Keccak.keccakF rate msg.size (Keccak.Internal.laneAt msg)) =
+    sq (Id.run (Keccak.Internal.spongeAbsorb (fun S => pure (Keccak.keccakF S)) rate msg.size
+      (Keccak.Internal.laneAt msg))) =
       sponge (rateBits := 8 * rate) (Nat.mul_pos (by decide) hr) (Nat.mul_le_mul_left 8 hout)
         msg := by
   apply Vector.ext
   intro i hi
   have out := hsq
-    (Keccak.Internal.spongeAbsorb Keccak.keccakF rate msg.size (Keccak.Internal.laneAt msg))
+    (Id.run (Keccak.Internal.spongeAbsorb (fun S => pure (Keccak.keccakF S)) rate msg.size
+      (Keccak.Internal.laneAt msg)))
     ⟨i, hi⟩
   simp only [Fin.getElem_fin, absorbAll_eq hr hlanes] at out
   simpa only [sponge, squeezeBytes, Vector.getElem_ofFn] using out

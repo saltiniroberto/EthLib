@@ -11,21 +11,9 @@ import EthLib.Cryptography.Proofs.Bls.SignaturesCorrect
 /-!
 # Proofs: from Electra, the honest aggregate of a slot is accepted, and flags its honest members
 
-From Electra an attestation in a block may cover several committees of one slot, as [EIP-7549] says.
-
-Its committee bits name the committees, and its bits run over each of them in turn.
-
 The honest aggregate of a slot covers each committee of the slot that has an honest member.
 
-It joins the honest attestation of each such committee, as an honest proposer joins aggregates.
-
 From Electra until Gloas, the attestation step of a block in the inclusion window accepts it.
-
-Its signature check needs the secret keys of all honest members of the slot not to sum to zero.
-
-Each honest member of each committee of the slot then holds the timely target flag.
-
-[EIP-7549]: https://eips.ethereum.org/EIPS/eip-7549#consensus-layer
 -/
 
 @[expose] public section
@@ -47,19 +35,23 @@ def honestCommittees (state : BeaconState preset fork) (honest : Finset Validato
 
 /-- From Electra: the honest aggregate of a slot, one attestation over its committees.
 
-It covers each committee of the slot of the data that has an honest member.
-
-It is built from the honest attestation of each of them, joined as an honest proposer joins them.
+From Electra an attestation in a block may cover several committees of one slot, as [EIP-7549] says.
 
 It assumes that every honest member of the slot votes for the same data.
 
-It also assumes that the aggregate of each committee reaches the proposer in time. -/
+It also assumes that the aggregate of each committee reaches the proposer in time.
+
+[EIP-7549]: https://eips.ethereum.org/EIPS/eip-7549#consensus-layer
+-/
 def honestSlotAggregate (electra : .pectra ≤ fork) (config : Config)
     (state : BeaconState preset fork) (honest : Finset ValidatorIndex)
     (key : ValidatorIndex → Signatures.SecretKey) (data : AttestationData) :
     Except ProposerError (Attestation preset fork) := do
+  -- It covers each committee of the slot of the data that has an honest member.
   let committees ← (honestCommittees state honest data.slot).mapError .accessor
+  -- It is built from the honest attestation of each of them.
   let aggregates ← (committees.mapM (honestAttestation config state honest key data)).mapError .duty
+  -- They are joined as an honest proposer joins them.
   computeOnChainAggregate electra aggregates
 
 /-! ## Bits that follow the honest members of committees -/
@@ -182,13 +174,6 @@ private theorem committeesAttestersOf_honest {honest : Finset ValidatorIndex} {s
 
 /-! ## The committee bits of the aggregate -/
 
-/-- Positions below `2^64` keep their order as 64-bit numbers. -/
-private theorem toUInt64_lt_toUInt64 {a b : Nat} (lt : a < b) (small : b < 2 ^ 64) :
-    a.toUInt64 < b.toUInt64 := by
-  rw [UInt64.lt_iff_toNat_lt, Nat.toUInt64_eq, Nat.toUInt64_eq, UInt64.toNat_ofNat_of_lt' small,
-    UInt64.toNat_ofNat_of_lt' (Nat.lt_trans lt small)]
-  exact lt
-
 /-- The indices of the set bits from a start increase strictly, and are at least the start. -/
 private theorem filterMap_zipIdx_increasing (bits : List Bool) (start : Nat)
     (small : start + bits.length ≤ 2 ^ 64) :
@@ -232,7 +217,8 @@ private theorem getCommitteeIndices_ofFn_contains {count : UInt64} {positions : 
   refine List.Pairwise.eq_of_mem_iff
     (filterMap_zipIdx_increasing _ 0 (by simpa using small.le)).1 ?_ fun index => ?_
   · refine List.pairwise_map.mpr (increasing.imp_of_mem fun first second lt => ?_)
-    exact toUInt64_lt_toUInt64 lt (Nat.lt_trans (inside _ second) small)
+    have below := Nat.lt_trans (inside _ second) small
+    exact (UInt64.ofNat_lt_iff_lt (Nat.lt_trans lt below) below).mpr lt
   · simp only [List.mem_filterMap, Option.ite_none_right_eq_some, Option.some.injEq,
       List.mem_zipIdx_iff_getElem?, Prod.exists, Vector.toList_ofFn, List.getElem?_ofFn,
       List.mem_map]
@@ -265,15 +251,8 @@ private theorem mapM_committeeOfAggregate {electra : .pectra ≤ fork} {keys : L
 private theorem pairwise_zip_keys {keys : List CommitteeIndex}
     {aggregates : List (Attestation preset fork)} (ordered : keys.Pairwise (· ≤ ·)) :
     (keys.zip aggregates).Pairwise fun a b => decide (a.1 ≤ b.1) = true := by
-  induction keys generalizing aggregates with
-  | nil => simp
-  | cons key rest ih =>
-    cases aggregates with
-    | nil => simp
-    | cons aggregate others =>
-      rw [List.zip_cons_cons, List.pairwise_cons]
-      refine ⟨fun pair member => ?_, ih (List.pairwise_cons.mp ordered).2⟩
-      exact decide_eq_true ((List.pairwise_cons.mp ordered).1 _ (List.of_mem_zip member).1)
+  have firsts := ordered.sublist (map_fst_zip_prefix keys aggregates).sublist
+  simpa only [decide_eq_true_eq] using List.pairwise_map.mp firsts
 
 /-- Keys zipped with as many aggregates, then mapped on the aggregates, map the aggregates. -/
 private theorem map_zip_snd {β : Type} {keys : List CommitteeIndex}
@@ -568,8 +547,8 @@ private theorem selected_exists {honest : Finset ValidatorIndex} {slot : Slot}
   -- The positions are below a 64-bit count, so their indices keep their order.
   refine List.pairwise_map.mpr ((List.pairwise_map.mp increasing).imp_of_mem
     fun first second lt => ?_)
-  exact UInt64.le_of_lt (toUInt64_lt_toUInt64 lt
-    (Nat.lt_trans (good _ second).1 (UInt64.toNat_lt _)))
+  have below := Nat.lt_trans (good _ second).1 (UInt64.toNat_lt _)
+  exact UInt64.le_of_lt ((UInt64.ofNat_lt_iff_lt (Nat.lt_trans lt below) below).mpr lt)
 
 /-- The count of committees of a slot is at most the largest number, when that is positive. -/
 theorem toNat_getCommitteeCountPerSlot_le (state : BeaconState preset fork)

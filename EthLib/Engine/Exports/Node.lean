@@ -101,26 +101,20 @@ The arguments are the chain configuration, the state after the block, and the bl
 
 The block is the fork name, the header and its ommers, the header and each ommer in RLP form.
 
-Its header must commit to its ommers, to no transaction and, from Shapella, to no withdrawal.
-
 Then come the terminal total difficulty, the total difficulty of the block and the requests. -/
 def runNodeOf (args : PyValue × ByteArray × (String × ByteArray × List ByteArray) × Nat × Nat ×
     PyValue) : Result PyValue := do
   let (config, state, anchor, terminalTotalDifficulty, totalDifficulty, requests) := args
   -- A block of proof of work also takes its total difficulty, and the terminal one.
-  unless terminalTotalDifficulty < 2 ^ 256 do
-    rejectArgument none
-      s!"config: a terminal total difficulty of {terminalTotalDifficulty}, not below 2^256"
-  let transition : TransitionConfiguration := {
-    terminalTotalDifficulty := BitVec.ofNat 256 terminalTotalDifficulty
-    terminalBlockHash := 0
-    terminalBlockNumber := 0 }
+  let transition ← transitionOf terminalTotalDifficulty
   -- The configuration, the state and the block take the forms of the export on a chain.
   let chain ← Execution.Blocks.Exports.chainOf config state [anchor]
   let some block := chain.recent.head? | rejectArgument none "anchor: no block"
   -- The block crosses without its body, so its header must commit to an empty body.
   --
   -- Its header must also commit to its ommers.
+  --
+  -- An empty body is no transaction and, from Shapella, no withdrawal.
   let some node := Node.start chain.config transition block chain.state totalDifficulty
     | rejectArgument none
         "anchor: no hash, a body that is not empty, or a total below the difficulty"

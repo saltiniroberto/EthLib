@@ -184,9 +184,9 @@ def verifyDataColumnSidecarKzgProofs {preset : Preset} {fork : Fork} (setup : Tr
   -- Cell `j` of the column answers to commitment `j`, with proof `j`.
   --
   -- Every cell sits at the index of the column in the extended blob of its row.
-  verifyCellKzgProofBatch setup (sidecar.commitments bidCommitments).data
+  verifyCellKzgProofBatch setup ((sidecar.commitments bidCommitments).data.map (·.bytes))
     (Array.replicate sidecar.column.data.size sidecar.index.toNat) sidecar.column.data
-    sidecar.kzgProofs.data
+    (sidecar.kzgProofs.data.map (·.bytes))
 
 /-- From Gloas: the largest size of a serialized data column sidecar.
 
@@ -302,9 +302,9 @@ def getDataColumnSidecars (preset : Preset) {fork : Fork}
   if beforeGloas : fork < .glamsterdam then
     let count := (kzgCommitments beforeGloas).data.size
     if cellsAndKzgProofs.length ≠ count then throw (.count count cellsAndKzgProofs.length)
+  -- With no rows there is no sidecar, since the check of a sidecar rejects one with no blob.
+  if cellsAndKzgProofs.isEmpty then return []
   -- Sidecar `i` serves column `i`, for each `i < NUMBER_OF_COLUMNS`.
-  --
-  -- With no rows, each of these sidecars has an empty column.
   (List.range preset.NUMBER_OF_COLUMNS.toNat).mapM fun column => do
     -- Cell `i` of every row, in the order of the blobs; a row without it is an error.
     let cells ← cellsAndKzgProofs.mapM fun (cells, _) =>
@@ -468,19 +468,22 @@ instance {fork : Fork} : SszType (PartialDataColumnGroupID fork) :=
   .container (names fork) (fun g => (g.beaconBlockRoot, g.slot))
     (fun (beaconBlockRoot, slot) => ⟨beaconBlockRoot, slot⟩)
 
-/-- The gossip group ID of a group: the version byte 0, then the SSZ bytes of the group. -/
+/-- The version byte of a gossip group ID at a fork: 0 before Gloas, and 1 from Gloas. -/
+def version (fork : Fork) : UInt8 :=
+  if fork < .glamsterdam then 0 else 1
+
+/-- The gossip group ID of a group: the version byte of the fork, then the SSZ bytes. -/
 def toGroupId {fork : Fork} (group : PartialDataColumnGroupID fork) : Except Err ByteArray := do
-  -- The version byte 0, then the SSZ bytes of the group.
-  return ByteArray.mk #[0] ++ (← SszType.serialize group)
+  return ByteArray.mk #[version fork] ++ (← SszType.serialize group)
 
 /-- The group that a gossip group ID names.
 
-An ID whose first byte is not the version 0 names no group, since an unknown version is ignored.
+An ID whose first byte is not the version of the fork names no group, as it is ignored.
 
 Nor does an ID whose remaining bytes are not the SSZ bytes of a group. -/
 def ofGroupId (fork : Fork) (bytes : ByteArray) : Option (PartialDataColumnGroupID fork) :=
-  -- The first byte is the version 0.
-  if bytes.data[0]? = some 0 then
+  -- The first byte is the version of the fork.
+  if bytes.data[0]? = some (version fork) then
     -- The group is the SSZ decoding of the remaining bytes, if they decode.
     (SszType.deserialize (PartialDataColumnGroupID fork) (bytes.extract 1 bytes.size)).toOption
   -- An empty ID or another version names no group.
@@ -517,7 +520,8 @@ def verifyPartialDataColumnSidecarKzgProofs {preset : Preset} {fork : Fork}
   -- The `j`-th cell present answers to the commitment of the `j`-th set bit, with proof `j`.
   --
   -- Every cell sits at the index of the column in the extended blob of its row.
-  verifyCellKzgProofBatch setup commitments (Array.replicate indices.size columnIndex.toNat)
-    sidecar.partialColumn.data sidecar.kzgProofs.data
+  verifyCellKzgProofBatch setup (commitments.map (·.bytes))
+    (Array.replicate indices.size columnIndex.toNat)
+    sidecar.partialColumn.data (sidecar.kzgProofs.data.map (·.bytes))
 
 end EthLib.Consensus

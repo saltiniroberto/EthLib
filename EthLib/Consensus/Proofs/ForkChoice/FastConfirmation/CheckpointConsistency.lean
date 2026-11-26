@@ -12,12 +12,6 @@ import EthLib.Consensus.Proofs.HonestAggregation
 
 A call of the fast confirmation rule counts honest voters for its current target.
 
-An honest set pins each justified checkpoint if 3 times its stake exceeds the total plus a reserve.
-
-One of its members signed that checkpoint.
-
-If that member was counted for the target, it signed both, so the two checkpoints are one.
-
 So an honest store's justified checkpoint of the call's epoch or earlier meets the confirmed root.
 
 One of the two descends from the other, while honest heads descend from the root.
@@ -38,47 +32,50 @@ variable {preset : Preset} {fork : Fork} {config : Config} {checks : SignatureCh
 
 /-- An honest set of a call's voters pins the justified checkpoints of the call's epoch.
 
-The call reads its fork-choice head, and the set is active in its pulled-up head state.
+An honest set pins each justified checkpoint if 3 times its stake exceeds the total plus a reserve.
 
-There `total + (margin + pinReserve) < 3 * stake` holds for the set.
-
-So its stake exceeds a third of the sum of the total, `margin` and the call's pin reserve.
-
-The pin reserve reads that state and the state of the call's target block.
-
-It also reads the state of that block's finalized checkpoint, or the anchor state before then.
-
-Take an up-to-date honest store in the interval whose justified checkpoint is of the call's epoch.
-
-If that epoch is after the anchor's, a member of the set signed the checkpoint.
-
-It signed before the store's slot.
-
-The reserve reads the call's blocks, so two honest stores may collide instead. -/
+One of its members signed that checkpoint. -/
 def JustifiedPinned (anchorEpoch : Epoch) (margin first last : ℕ) : Prop :=
   ∀ u ∈ J, ∀ n (head : Root) state total epoch (voters : Finset ValidatorIndex),
     (e.world n).time ≤ last →
+    -- The call reads its fork-choice head.
     (∃ node, ((e.world n).state u).getHead config = .ok node ∧ node.root = head) →
     ((e.world n).state u).getPulledUpHeadState config head = .ok state →
     getTotalActiveBalance state = .ok total →
     ((e.world n).state u).getCurrentStoreEpoch config = .ok epoch →
+    -- The pin reserve reads the pulled-up head state and the state of the call's target block.
+    --
+    -- It also reads the state of that block's finalized checkpoint.
+    --
+    -- Before then, it reads the anchor state instead.
     ∀ (target : Checkpoint) (anc fin : BeaconState preset fork),
     ((e.world n).state u).getCurrentTarget config head = .ok target →
     ((e.world n).state u).blockStates[target.root]? = some anc →
     (getCurrentEpoch anchorState < anc.finalizedCheckpoint.epoch →
       ((e.world n).state u).blockStates[anc.finalizedCheckpoint.root]? = some fin) →
     (anc.finalizedCheckpoint.epoch ≤ getCurrentEpoch anchorState → fin = anchorState) →
+    -- The set is active in the pulled-up head state.
     (∀ v ∈ voters, v ∈ J ∧ v ∈ activeVoters state) →
+    -- In the pulled-up head state, `total + (margin + pinReserve) < 3 * stake` holds for the set.
+    --
+    -- So its stake exceeds a third of the sum of the total, the margin and the call's pin reserve.
     total.toNat + (margin + pinReserve config state anc fin) <
       3 * stake (fun v => balanceAt state v.toNat) voters →
+    -- Take an up-to-date honest store in the interval.
+    --
+    -- Its justified checkpoint is of the call's epoch.
     ∀ w ∈ J, ∀ k (slot : Slot), first ≤ (e.world k).time → (e.world k).time ≤ last →
       UpToDate config checks sources (e.world k).time ((e.world k).view w)
         ((e.world k).state w) →
       ((e.world k).state w).getCurrentSlot config = .ok slot →
       ((e.world k).state w).justifiedCheckpoint.epoch = epoch → anchorEpoch < epoch →
+      -- If that epoch is after the anchor's, a member of the set signed the checkpoint.
+      --
+      -- It signed before the store's slot.
       (∃ v ∈ voters, ∃ i, (e.world i).time ≤ (e.world k).time ∧ ∃ m ∈ (e.world i).sent,
         ∃ data, (v, data) ∈ statements config checks anchorState anchorBlock m ∧
           data.target = ((e.world k).state w).justifiedCheckpoint ∧ data.slot < slot) ∨
+        -- The reserve reads the call's blocks, so two honest stores may collide instead.
         HonestCollision (e := e) last
 
 /-- The honest count of a call, with the call's pin reserve on top of `margin`.
@@ -98,78 +95,63 @@ def ReservedTargetVotes (margin : ℕ) (u : ValidatorIndex) (n : ℕ) (head : Ro
 
 /-- An earlier call checked the target of a block's epoch.
 
-The block descends from an origin of its epoch.
+The checked-call headlines take the coverage of honest heads from the caller.
 
-The origin is the anchor root, or an earlier call's head descends from it.
-
-That call was up to date at a slot start of the epoch, with the reserved count.
-
-It accepted the current-target test.
-
-Honest heads descend from the origin from that call up to `coveredUntil`.
-
-The checked-call headlines take that coverage from the caller; a run of calls derives it. -/
+A run of calls derives it. -/
 def TargetChecked (margin : ℕ) (anchorRoot : Root) (u : ValidatorIndex) (n : ℕ)
     (epoch : Epoch) (root : Root) (coveredUntil : ℕ) : Prop :=
   ∃ k ≤ n, ∃ origin,
     ((e.world n).state u).getBlockEpoch root = .ok epoch ∧
     ((e.world n).state u).getBlockEpoch origin = .ok epoch ∧
+    -- The block descends from an origin of its epoch.
     ((e.world n).state u).isAncestor ⟨root, .pending⟩ ⟨origin, .pending⟩ = .ok true ∧
+    -- The origin is the anchor root, or an earlier call's head descends from it.
     (origin = anchorRoot ∨ ∃ head,
+      -- That call was up to date at a slot start of the epoch, with the reserved count.
       UpToDate config checks sources (e.world k).time ((e.world k).view u) ((e.world k).state u) ∧
       ((e.world k).state u).getCurrentStoreEpoch config = .ok epoch ∧
       ((e.world k).state u).getHead config = .ok head ∧
+      -- It accepted the current-target test.
       ((e.world k).state u).willCurrentTargetBeJustified config head.root = .ok true ∧
       ((e.world k).state u).isAncestor ⟨head.root, .pending⟩ ⟨origin, .pending⟩ = .ok true ∧
       ReservedTargetVotes (e := e) margin u k head.root ∧
       ∃ slot begin, ((e.world k).state u).getCurrentSlot config = .ok slot ∧
         computeTimeAtSlotMs config genesisTimeMs slot = .ok begin ∧
         (e.world k).time = begin.toNat) ∧
+    -- Honest heads descend from the origin from that call up to the covered time.
     HonestHeadsCover (e := e) origin (e.world k).time coveredUntil
 
 /-- The checkpoint inputs of one call of the rule that confirmed `root` from `start`.
-
-The call accepted its checks, and the root is on the head's chain.
-
-Off the epoch's first slot, the call's count is reserved.
-
-The start's epoch, if it is the call's, was checked by an earlier call.
-
-At the epoch's first slot, the root is of an earlier epoch.
-
-The call's epoch is at least two and after the anchor's epoch.
 
 The rule does not check the reserved count, the first-slot condition or the epoch bounds.
 
 They are assumptions on the run. -/
 def CallCheckpointInputs (margin : ℕ) (anchorRoot : Root) (u : ValidatorIndex) (n : ℕ)
     (fcr : FastConfirmationStore) (head : ForkChoiceNode) (start root : Root) : Prop :=
+  -- The call accepted its checks.
   ((e.world n).state u).FastConfirmationChecked config fcr head.root start root ∧
+  -- The root is on the head's chain.
   ((e.world n).state u).isAncestor ⟨head.root, .pending⟩ ⟨root, .pending⟩ = .ok true ∧
+  -- Off the epoch's first slot, the call's count is reserved.
   (∀ slot, ((e.world n).state u).getCurrentSlot config = .ok slot →
     isStartSlotAtEpoch preset slot = .ok false →
       ReservedTargetVotes (e := e) margin u n head.root) ∧
+  -- The start's epoch, if it is the call's, was checked by an earlier call.
   (∀ epoch, ((e.world n).state u).getCurrentStoreEpoch config = .ok epoch →
     ((e.world n).state u).getBlockEpoch start = .ok epoch →
     TargetChecked (e := e) margin anchorRoot u n epoch start ((e.world n).time + 1)) ∧
+  -- At the epoch's first slot, the root is of an earlier epoch.
   (∀ slot epoch rootEpoch, ((e.world n).state u).getCurrentSlot config = .ok slot →
     isStartSlotAtEpoch preset slot = .ok true →
     ((e.world n).state u).getCurrentStoreEpoch config = .ok epoch →
     ((e.world n).state u).getBlockEpoch root = .ok rootEpoch → rootEpoch ≠ epoch) ∧
+  -- The call's epoch is at least two and after the anchor's epoch.
   (∀ epoch, ((e.world n).state u).getCurrentStoreEpoch config = .ok epoch →
     GENESIS_EPOCH + 1 < epoch ∧ getCurrentEpoch anchorState < epoch)
 
 /-- A pinned justified checkpoint of the target's epoch is the call's target, or a voter signed it.
 
-That voter is outside the committees seen so far, and it signed before the receiver's slot.
-
-Otherwise two honest stores collide.
-
-The pin gives a voter that signed the justified checkpoint.
-
-If that voter was counted for the target, it signed both.
-
-Two honest votes of one target epoch carry one data. -/
+Otherwise two honest stores collide. -/
 private theorem Execution.target_eq_or_unseen_signer (slots : 0 < config.SLOT_DURATION_MS)
     {anchorEpoch : Epoch} {margin first last : ℕ}
     (pins : JustifiedPinned (e := e) anchorEpoch margin first last)
@@ -198,11 +180,13 @@ private theorem Execution.target_eq_or_unseen_signer (slots : 0 < config.SLOT_DU
     (slotOk : ((e.world k).state w).getCurrentSlot config = .ok slot)
     (justifiedEpoch : ((e.world k).state w).justifiedCheckpoint.epoch = epoch) :
     (((e.world k).state w).justifiedCheckpoint = target ∨
+      -- That voter is outside the committees seen so far, and it signed before the receiver's slot.
       ∃ v ∈ voters, v ∉ participants ∧ ∃ i, (e.world i).time ≤ (e.world k).time ∧
         ∃ m ∈ (e.world i).sent, ∃ data,
           (v, data) ∈ statements config checks anchorState anchorBlock m ∧
           data.target = ((e.world k).state w).justifiedCheckpoint ∧ data.slot < slot) ∨
       HonestCollision (e := e) last := by
+  -- The pin gives a voter that signed the justified checkpoint.
   rcases pins u caller n head state total epoch voters nBound headOk stateOk totalOk epochOk target
       anc fin targetOk ancOk finRead finAnchor (fun v hv => ⟨(members v hv).1, (members v hv).2.1⟩)
       quorum w receiver k slot kFirst kLast upToDate slotOk justifiedEpoch afterAnchor with
@@ -210,6 +194,9 @@ private theorem Execution.target_eq_or_unseen_signer (slots : 0 < config.SLOT_DU
   swap
   · exact .inr collision
   refine .inl ?_
+  -- If that voter was counted for the target, it signed both.
+  --
+  -- Two honest votes of one target epoch carry one data, so the two checkpoints are one.
   rcases (members v member).2.2 with ⟨_, _, other, otherSent, otherData, otherSigned, otherTarget⟩ |
     unseen
   · have same := Execution.data_eq_of_signed_of_target_epoch slots sent otherSent signed
@@ -241,7 +228,6 @@ private theorem comparable_of_target_read {sender receiver : Store preset fork}
     (anchorSlot : anchorBlock.slot = anchorState.slot)
     (senderReached : Store.Reachable config anchorState anchorBlock sender)
     (reached : Store.Reachable config anchorState anchorBlock receiver)
-    (before : fork < .glamsterdam)
     (same : ∀ (r : Root) (b c : BeaconBlock preset fork),
       sender.blocks[r]? = some b → receiver.blocks[r]? = some c → b = c)
     {head root : Root} {checkpoint : Checkpoint}
@@ -254,7 +240,7 @@ private theorem comparable_of_target_read {sender receiver : Store preset fork}
       receiver.isAncestor ⟨root, .pending⟩ ⟨checkpoint.root, .pending⟩ = .ok true := by
   obtain ⟨_, block, _, held, _, targetAbove⟩ := Store.isAncestor_of_getCheckpointBlock read
   obtain ⟨rb, rk⟩ := Store.held_of_isAncestor supports
-  rcases Store.comparable_of_ancestors before held rk targetAbove supports with h | h
+  rcases Store.comparable_of_ancestors held rk targetAbove supports with h | h
   · exact .inl (copy_ancestor anchorSlot senderReached reached same checkpointKnown h)
   · exact .inr (copy_ancestor anchorSlot senderReached reached same known h)
 
@@ -272,13 +258,7 @@ private theorem exists_blockState_of_currentTarget {u : ValidatorIndex} {n : ℕ
 
 /-- The state of a held block state's finalized checkpoint, once it is after the anchor epoch.
 
-Before that the anchor state stands in for it.
-
-A finalized checkpoint of a held block state after the anchor epoch names a held block.
-
-Its state root is nonzero, so the checkpoint is not the anchor's zero-root read.
-
-The block of the state reads that finalized block at the checkpoint's epoch. -/
+Before that the anchor state stands in for it. -/
 theorem Store.Reachable.finalizedState_of_blockState {store : Store preset fork}
     (reachable : Store.Reachable config anchorState anchorBlock store)
     (sound : Invariant anchorState) (anchorSlot : anchorBlock.slot = anchorState.slot)
@@ -289,9 +269,11 @@ theorem Store.Reachable.finalizedState_of_blockState {store : Store preset fork}
         store.blockStates[anc.finalizedCheckpoint.root]? = some fin) ∧
       (anc.finalizedCheckpoint.epoch ≤ getCurrentEpoch anchorState → fin = anchorState) ∧
       (getCurrentEpoch anchorState < anc.finalizedCheckpoint.epoch →
+        -- The block of the state reads that finalized block at the checkpoint's epoch.
         store.getCheckpointBlock root anc.finalizedCheckpoint.epoch =
           .ok anc.finalizedCheckpoint.root) := by
   by_cases later : getCurrentEpoch anchorState < anc.finalizedCheckpoint.epoch
+  -- A finalized checkpoint of a held block state after the anchor epoch names a held block.
   · rcases reachable.getCheckpointBlock_of_blockState sound (UInt64.le_of_eq anchorSlot)
         params.slots (by have := params.roots; omega) ancOk (.inl (by simp)) later with
       ⟨read, known⟩ | zero
@@ -299,6 +281,7 @@ theorem Store.Reachable.finalizedState_of_blockState {store : Store preset fork}
       obtain ⟨block, held⟩ := Option.isSome_iff_exists.mp known
       obtain ⟨fin, stored, -⟩ := reachable.blockStatesFromParents held
       exact ⟨fin, fun _ => stored, fun le => absurd later (UInt64.not_lt.mpr le), fun _ => read⟩
+    -- Its state root is nonzero, so the checkpoint is not the anchor's zero-root read.
     · obtain ⟨anchorKey, -, anchorFound⟩ := reachable.anchor_known
       rw [reachable.anchorState_root, Except.ok.injEq] at zero
       exact absurd zero (nonzero anchorKey anchorBlock anchorFound)
@@ -382,7 +365,7 @@ private theorem comparable_of_duty {anchor : Store preset fork}
     (anchored : getForkchoiceStore config anchorState anchorBlock = .ok anchor)
     (start : ∀ w ∈ J, e.start w = anchor) (anchorSlot : anchorBlock.slot = anchorState.slot)
     (anchorBoundary : isStartSlotAtEpoch preset anchorBlock.slot = .ok true)
-    (preGloas : fork < .glamsterdam) {time first T : ℕ}
+    {time first T : ℕ}
     (roots : HeldBlockStateRootsNonzero (e := e) time)
     (agree : ∀ a ∈ J, ∀ b ∈ J, ∀ i j, (e.world i).time ≤ time → (e.world j).time ≤ time →
       ∀ (r : Root) (left right : BeaconBlock preset fork),
@@ -407,8 +390,8 @@ private theorem comparable_of_duty {anchor : Store preset fork}
   have reachedW := e.reachable (fun a ha => (start a ha) ▸ Store.Reachable.anchor anchored) k w
     receiver
   obtain ⟨head, supports, targetRead⟩ := signerHead_of_duty anchored start anchorSlot
-    anchorBoundary preGloas roots covers honest receiver duty low lt k'Bound checkpointKnown
-  exact comparable_of_target_read anchorSlot reachedV reachedW preGloas
+    anchorBoundary roots covers honest receiver duty low lt k'Bound checkpointKnown
+  exact comparable_of_target_read anchorSlot reachedV reachedW
     (agree v honest w receiver k' k k'Bound kBound) known checkpointKnown supports targetRead
 
 /-- An honest duty for a checkpoint places its held block at or before the epoch's boundary.
@@ -462,7 +445,7 @@ private theorem justified_comparable_of_pin {anchor : Store preset fork} {Δ tim
     (anchored : getForkchoiceStore config anchorState anchorBlock = .ok anchor)
     (sound : Invariant anchorState) (anchorSlot : anchorBlock.slot = anchorState.slot)
     (anchorBoundary : isStartSlotAtEpoch preset anchorBlock.slot = .ok true)
-    (start : ∀ w ∈ J, e.start w = anchor) (preGloas : fork < .glamsterdam)
+    (start : ∀ w ∈ J, e.start w = anchor)
     (slots : 0 < config.SLOT_DURATION_MS)
     (fits : DelayFits fork config genesisTimeMs Δ)
     (windows : AssignmentWindowAgreement (e := e) time)
@@ -533,12 +516,8 @@ private theorem justified_comparable_of_pin {anchor : Store preset fork} {Δ tim
   have rr := (forward k w receiver).reachable
   have common := agree u caller w receiver n k nBound kBound
   obtain ⟨checked, onChain, targetVotes, -, -, -⟩ := inputs
-  have pending : head = (⟨head.root, .pending⟩ : ForkChoiceNode) := by
-    have p := Store.getHead_pending preGloas headOk
-    cases head
-    simp_all
   have rootAbove : ((e.world n).state u).isAncestor head ⟨root, .pending⟩ = .ok true := by
-    rw [pending]
+    rw [Store.isAncestor_getHead_root headOk]
     exact onChain
   have callerBase := baseCovers _ le_rfl (by omega) u caller n head rfl upToDate headOk
   have receiverBase := baseCovers (e.world k).time (by omega) (by omega) w receiver k hd rfl ready
@@ -552,12 +531,12 @@ private theorem justified_comparable_of_pin {anchor : Store preset fork} {Δ tim
   obtain ⟨jb, jk⟩ := Store.held_of_isAncestor receiverJ
   obtain ⟨rootBlock, known⟩ := holds w receiver k (by omega) kBound ready
   -- Compare the base with the root before comparing the receiver's justification with the base.
-  rcases Store.comparable_of_ancestors preGloas sk rk callerBase rootAbove with below | above
+  rcases Store.comparable_of_ancestors sk rk callerBase rootAbove with below | above
   · have copied := copy_ancestor anchorSlot sr rr common rsk below
     have supported := Store.isAncestor_trans rsk known receiverBase copied
-    exact Store.comparable_of_ancestors preGloas jk known receiverJ supported
+    exact Store.comparable_of_ancestors jk known receiverJ supported
   have baseBelow := copy_ancestor anchorSlot sr rr common known above
-  rcases Store.comparable_of_ancestors preGloas jk rsk receiverJ receiverBase with aboveJ | belowJ
+  rcases Store.comparable_of_ancestors jk rsk receiverJ receiverBase with aboveJ | belowJ
   swap
   · exact .inr (Store.isAncestor_trans rsk jk baseBelow belowJ)
   by_cases reverse : ((e.world k).state w).isAncestor ⟨base, .pending⟩
@@ -566,10 +545,12 @@ private theorem justified_comparable_of_pin {anchor : Store preset fork} {Δ tim
   -- The justified block strictly descends from the base.
   have baseStrict : sb.slot < jb.slot := by
     by_contra notLt
-    have walk := Store.getAncestor_of_isAncestor_of_lt preGloas rsk aboveJ
-    rw [Store.getAncestor_of_le jk (UInt64.not_lt.mp notLt)] at walk
-    have eq := Except.ok.inj walk
-    exact reverse (eq ▸ Store.isAncestor_self jk)
+    obtain ⟨reached, walk, rooted⟩ := Store.getAncestor_of_isAncestor rsk aboveJ
+    rw [Store.getAncestor_of_le jk (UInt64.not_lt.mp notLt), Except.ok.injEq] at walk
+    rw [← walk] at rooted
+    apply reverse
+    rw [← show ((e.world k).state w).justifiedCheckpoint.root = base from rooted]
+    exact Store.isAncestor_self jk
   obtain ⟨epoch, slot, rootEpoch, baseEpoch, epochOk, slotOk, rootEpochOk, baseEpochOk,
     age, tests⟩ := checked
   have callerEq := Except.ok.inj (callerEpochOk.symm.trans epochOk)
@@ -657,7 +638,7 @@ private theorem justified_comparable_of_pin {anchor : Store preset fork} {Δ tim
       exact jk
     have low' : (e.world n).time ≤ (e.world k').time := by omega
     have lt' : (e.world k').time < T := by omega
-    have result := comparable_of_duty anchored start anchorSlot anchorBoundary preGloas roots agree
+    have result := comparable_of_duty anchored start anchorSlot anchorBoundary roots agree
       covers high honest receiver duty low' lt' kBound known jk'
     rwa [dataTarget] at result
   -- At the epoch's first slot, the justification's own signer votes from the call on.
@@ -710,7 +691,7 @@ private theorem justified_comparable_of_pin {anchor : Store preset fork} {Δ tim
         targetEpoch members quorum currentOk cpEpoch with
       eq | ⟨v, voter, unseen, i, -, m, sent, data, member, dataTarget, dataBefore⟩
     · rw [← eq] at read
-      exact comparable_of_target_read anchorSlot sr rr preGloas common known jk onChain read
+      exact comparable_of_target_read anchorSlot sr rr common known jk onChain read
     · obtain ⟨honest, -, -⟩ := members v voter
       obtain ⟨k', -, duty⟩ := e.exists_maySign_of_signed sent member honest
       have dutyCopy := duty
@@ -756,7 +737,7 @@ private theorem justified_comparable_of_pin {anchor : Store preset fork} {Δ tim
       have same := selected w receiver u caller k n kBound nBound _ _ (.inl rfl) (.inr rfl)
         (by rw [eq, cpEpoch]) cpHorizon
       rw [same, eq] at jk ⊢
-      exact comparable_of_target_read anchorSlot sr rr preGloas common known jk onChain read
+      exact comparable_of_target_read anchorSlot sr rr common known jk onChain read
     · obtain ⟨target', slot', first, last, participants, voters, targetOk, slotOk', targetEpochOk,
         firstOk, lastOk, participantsOk, read, members, bound⟩ :=
         quorum_of_count count stateOk supportOk
@@ -777,7 +758,7 @@ theorem Execution.justified_comparable_of_checked {anchor : Store preset fork} {
     (anchored : getForkchoiceStore config anchorState anchorBlock = .ok anchor)
     (sound : Invariant anchorState) (anchorSlot : anchorBlock.slot = anchorState.slot)
     (anchorBoundary : isStartSlotAtEpoch preset anchorBlock.slot = .ok true)
-    (start : ∀ w ∈ J, e.start w = anchor) (preGloas : fork < .glamsterdam)
+    (start : ∀ w ∈ J, e.start w = anchor)
     (slots : 0 < config.SLOT_DURATION_MS)
     (fits : DelayFits fork config genesisTimeMs Δ)
     (windows : AssignmentWindowAgreement (e := e) time)
@@ -827,7 +808,7 @@ theorem Execution.justified_comparable_of_checked {anchor : Store preset fork} {
       genesis pre heldEarly enough terminal with selected | evidence
   swap
   · exact .inr (.inr evidence)
-  exact .inl (justified_comparable_of_pin anchored sound anchorSlot anchorBoundary start preGloas
+  exact .inl (justified_comparable_of_pin anchored sound anchorSlot anchorBoundary start
     slots fits windows params incrementPositive anchorOk bounded roots agree selected signed caller
     upToDate atSlot headOk callerEpochOk inputs callLe high baseCovers covers holds receiver atTime
     ready hdOk early

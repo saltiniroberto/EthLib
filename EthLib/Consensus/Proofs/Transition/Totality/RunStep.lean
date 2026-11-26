@@ -16,12 +16,6 @@ Fixed conditions on the preset, the configuration and those parameters hold for 
 
 Under them, each epoch and each upgrade succeeds.
 
-The epoch transition succeeds at every fork, from a state within the bounds of its epoch count.
-
-It also needs the draws to end and a bound on the signers of that epoch, which the run assumes.
-
-Each upgrade succeeds too, under the draws of that upgrade.
-
 The conditions are global: they read the start of the run and its last epoch, not each state.
 -/
 
@@ -62,10 +56,8 @@ structure RunConditions (preset : Preset) (config : Config) (start : RunStart)
   members : preset.SYNC_COMMITTEE_SIZE ≠ 0
   /-- The largest effective balances are whole numbers of increments. -/
   aligned : MaxEffectiveBalancesAligned preset
-  /-- The cap before Electra is at most the least balance to activate. -/
-  activation : preset.MAX_EFFECTIVE_BALANCE ≤ preset.MIN_ACTIVATION_BALANCE
-  /-- The least balance to activate is at most the cap of a compounding validator. -/
-  compounding : preset.MIN_ACTIVATION_BALANCE ≤ preset.MAX_EFFECTIVE_BALANCE_ELECTRA
+  /-- The effective-balance caps are in order. -/
+  caps : CapOrder preset
   /-- The least churn is at least one increment. -/
   minimum : preset.EFFECTIVE_BALANCE_INCREMENT ≤ config.MIN_PER_EPOCH_CHURN_LIMIT_ELECTRA
   /-- The largest activation and exit churn is at least one increment. -/
@@ -319,29 +311,33 @@ end Facts
 
 /-- The epoch transition of a bounded run succeeds at every fork.
 
-The state is at the end of an epoch of the run, some epochs after its start, before the last one.
-
-It keeps the invariant of the state transition, the shape, and the facts on pending attestations.
-
-The current epoch plus one plus the longest seed lookahead is at most the exit ceiling.
-
-The signers of the epoch hold at most the active balance, and the draws end.
-
-Before Altair, the epoch is within the epoch limit. -/
+The state is within the bounds of its epoch count. -/
 theorem processEpoch_exists_ok_of_run [NeZero preset.EPOCHS_PER_SLASHINGS_VECTOR.toNat]
     [NeZero preset.EPOCHS_PER_HISTORICAL_VECTOR.toNat]
     {start : RunStart} {budget epochs lastEpoch elapsed : Nat}
     {state : BeaconState preset fork}
     (conditions : RunConditions preset config start budget epochs lastEpoch)
+    -- The state keeps the invariant of the state transition.
     (holds : RunBounded config start budget elapsed state) (invariant : Invariant state)
+    -- It keeps the shape and the facts on pending attestations.
     (shaped : Shaped state) (wellFormed : PendingWellFormed state)
     (resolved : PendingResolved state)
+    -- The state is fewer epochs past the start than the run counts.
     (counted : elapsed < epochs)
+    -- Its epoch is before the last one.
     (ended : (getCurrentEpoch state).toNat < lastEpoch)
+    -- It is at the end of an epoch of the run.
     (last : (state.slot.toNat + 1) % preset.SLOTS_PER_EPOCH.toNat = 0)
+    -- The current epoch plus one plus the longest seed lookahead is at most the exit ceiling.
     (first : (getCurrentEpoch state).toNat + 1 + preset.MAX_SEED_LOOKAHEAD.toNat ≤
       start.ceilingAt preset budget elapsed)
+    -- The signers of the epoch hold at most the active balance.
+    --
+    -- The draws end.
+    --
+    -- The run assumes both.
     (signers : SignersWithinActive state) (draws : EpochDrawsEnd config checks state)
+    -- Before Altair, the epoch is within the epoch limit.
     (limit : fork < .altair → (getCurrentEpoch state).toNat ≤ preset.epochLimitBeforeAltair) :
     ∃ after, processEpoch config checks state = .ok after := by
   have le := Nat.le_of_lt counted
@@ -449,7 +445,7 @@ theorem processEpoch_exists_ok_of_run [NeZero preset.EPOCHS_PER_SLASHINGS_VECTOR
         (by omega) conditions.minimum conditions.maximum exitCarried depositCarried
         (shaped.inside electra) slashedFits slashedProduct halfway
         (by have := holds.summaries capella; omega) (fun _ => conditions.slots)
-        conditions.compounding (loadLe.trans load.2.2)
+        conditions.caps.compounding (loadLe.trans load.2.2)
         (Nat.lt_of_le_of_lt (Nat.mul_le_mul_left _ loadLe) loadRoom.1)
         (fun _ => ⟨Nat.lt_of_le_of_lt (Nat.mul_le_mul_left _ loadLe) loadRoom.2.1,
           Nat.lt_of_le_of_lt (Nat.mul_le_mul_right _ (Nat.mul_le_mul_right _ loadLe))
@@ -507,19 +503,20 @@ theorem RunBounded.of_processEpoch_of_run {start : RunStart}
 
 /-- Before Altair, the flags of each pending attestation of the previous epoch are computed.
 
-Each must target the previous epoch, have its slot in it, and have the previous justified source.
-
-The state must be past its first epoch.
-
-Its slot plus the length of the buffer of block roots must fit in 64 bits.
-
-An epoch must have two slots at least, and the buffer of block roots must reach the epoch before.
-
 The parent slot can be any slot. -/
 theorem getAttestationParticipationFlagIndices_exists_ok_of_voted
     {votes : Set (ValidatorIndex × AttestationData)} {state : BeaconState preset fork}
+    -- An epoch must have two slots at least.
+    --
+    -- The buffer of block roots must reach the epoch before.
     (before : fork < .altair) (roots : preset.RootsReachPreviousEpoch)
+    -- Each attestation must target the previous epoch and have its slot in it.
+    --
+    -- It must also have the previous justified source.
+    --
+    -- The state must be past its first epoch.
     (voted : PendingVoted votes state) (started : 0 < (getCurrentEpoch state).toNat)
+    -- Its slot plus the length of the buffer of block roots must fit in 64 bits.
     (room : state.slot.toNat + preset.SLOTS_PER_HISTORICAL_ROOT.toNat < 2 ^ 64)
     {attestation : PendingAttestation preset}
     (member : attestation ∈ (state.previousEpochAttestations before).data) (parentSlot : Slot) :
@@ -569,24 +566,21 @@ theorem getAttestationParticipationFlagIndices_exists_ok_of_voted
 
 /-- The upgrade from the fork of a bounded state to the next fork succeeds.
 
-The upgrade must be due, so the fork has a next fork.
-
-The state keeps the shape and, before Altair, the pending attestations resolve.
-
-Before Altair, each pending attestation must have the target, slot and source its block checked.
-
-Before Altair, the slot of the state must not be zero.
-
-Its epoch is at most the last one, and the draws of the upgrade end. -/
+The upgrade must be due, so the fork has a next fork. -/
 theorem UpgradeReady.of_run {start : RunStart} {budget epochs lastEpoch elapsed : Nat}
     {forked : ForkedBeaconState preset}
     (conditions : RunConditions preset config start budget epochs lastEpoch)
     (holds : RunBounded config start budget elapsed forked.state)
+    -- The state keeps the shape and, before Altair, the pending attestations resolve.
     (shaped : Shaped forked.state) (resolved : PendingResolved forked.state)
     (counted : elapsed ≤ epochs)
+    -- Its epoch is at most the last one.
     (ended : (getCurrentEpoch forked.state).toNat ≤ lastEpoch)
+    -- The draws of the upgrade end.
     (draws : UpgradeDrawsEnd forked) (due : upgradeDue config forked = true)
+    -- Before Altair, each pending attestation has the target, slot and source its block checked.
     {votes : Set (ValidatorIndex × AttestationData)} (voted : PendingVoted votes forked.state)
+    -- Before Altair, the slot of the state must not be zero.
     (started : forked.fork < .altair → forked.state.slot ≠ 0) :
     UpgradeReady forked := by
   have summedLe := holds.effective_le conditions counted
@@ -661,7 +655,7 @@ theorem UpgradeReady.of_run {start : RunStart} {budget epochs lastEpoch elapsed 
   | pectra =>
     exact ⟨by omega, conditions.lookahead, by omega,
       fun offset within => ⟨sizeLe.trans load.2.2, draws offset within
-        (shaped.le_drawCap_of_electra (by decide) conditions.compounding)
+        (shaped.le_drawCap_of_electra (by decide) conditions.caps.compounding)
         (sizeLe.trans load.2.2)⟩⟩
   | fusaka =>
     have pending : pendingDepositSum pre =
@@ -669,7 +663,7 @@ theorem UpgradeReady.of_run {start : RunStart} {budget epochs lastEpoch elapsed 
       simp only [pendingDepositSum, (by decide : Fork.pectra ≤ .fusaka), ↓reduceDIte]
     refine ⟨by omega, conditions.lookahead, by omega, conditions.positive.slotsPerEpoch,
       fun offset within => ⟨draws offset within
-        (shaped.le_drawCap_of_electra (by decide) conditions.compounding)
+        (shaped.le_drawCap_of_electra (by decide) conditions.caps.compounding)
         (sizeLe.trans load.2.2) (Nat.lt_of_le_of_lt (Nat.mul_le_mul_left _ sizeLe) loadRoom.2.1),
         sizeLe.trans load.2.2,
         Nat.lt_of_le_of_lt (Nat.mul_le_mul_right _ (Nat.mul_le_mul_right _ sizeLe))
@@ -677,20 +671,25 @@ theorem UpgradeReady.of_run {start : RunStart} {budget epochs lastEpoch elapsed 
   | glamsterdam => exact draws
   | _ => simp [upgradeDue, Config.nextFork] at due
 
-/-- The bounds at the start of a run on mainnet, from a given epoch.
-
-They are 36 million ETH of balances and pending deposits, and as much of effective balances.
-
-The registry load is at most `2^22`, and every score is zero.
-
-The history has at most `2^20` entries.
-
-The end of the exit queue and every exit epoch set are at most `2^20` epochs past the given one.
-
-The carried churns and the slashed balances are each at most 36 million ETH. -/
+/-- The bounds at the start of a run on mainnet, from a given epoch. -/
 def RunStart.mainnet (startEpoch : Nat) : RunStart :=
+  -- The balances plus the pending deposits are at most 36 million ETH.
+  --
+  -- The effective balances are at most as much.
+  --
+  -- The registry load is at most `2^22`.
+  --
+  -- Every score is zero.
   { supply := 36 * 10 ^ 15, effective := 36 * 10 ^ 15, load := 2 ^ 22, scores := 0,
+    -- The end of the exit queue is at most `2^20` epochs past the given epoch.
+    --
+    -- So is every exit epoch that is set.
+    --
+    -- The history has at most `2^20` entries.
+    --
+    -- The carried deposit churn is at most 36 million ETH.
     ceiling := startEpoch + 2 ^ 20, history := 2 ^ 20, depositChurn := 36 * 10 ^ 15,
+    -- The carried exit churn and the slashed balances are each at most 36 million ETH.
     exitChurn := 36 * 10 ^ 15, slashed := 36 * 10 ^ 15 }
 
 /-- On mainnet the conditions hold for a supply of 36 million ETH and a budget of `2^57` Gwei.
@@ -711,8 +710,7 @@ theorem runConditions_mainnet {startEpoch : Nat} (early : startEpoch ≤ 2 ^ 40)
     apart := by decide
     members := syncCommitteeSize_ne_zero_presets.1
     aligned := maxEffectiveBalancesAligned_mainnet
-    activation := by decide
-    compounding := by decide
+    caps := CapOrder.mainnet
     minimum := by decide
     maximum := by decide
     slots := by decide

@@ -1,6 +1,9 @@
 module
 
+public import EthLib.Base.Proofs.Hex
+public import EthLib.Base.Proofs.List
 public import EthLib.Networking.Gossip.Topic
+import EthLib.Base.Proofs.Bytes
 
 /-!
 # `Networking.Proofs.Gossip.Topic`
@@ -18,51 +21,32 @@ The parser of topic strings inverts the printer.
 namespace EthLib.Networking.Proofs.Gossip.Topic
 
 open EthLib.Networking.Gossip
-
-/-! ## Prefixes and suffixes -/
-
-/-- A list that starts with a prefix gives back the rest. -/
-theorem dropPrefix?_append (pre rest : List Char) :
-    dropPrefix? pre (pre ++ rest) = some rest := by
-  simp [dropPrefix?]
-
-/-- A list that gives back a rest is the prefix followed by the rest. -/
-theorem eq_append_of_dropPrefix? {pre cs rest : List Char}
-    (h : dropPrefix? pre cs = some rest) : cs = pre ++ rest := by
-  unfold dropPrefix? at h
-  split at h
-  · rename_i hp
-    cases h
-    exact (List.prefix_iff_eq_append.mp (List.isPrefixOf_iff_prefix.mp hp)).symm
-  · cases h
-
-/-- A list that ends with a suffix gives back the start. -/
-theorem dropSuffix?_append (start suf : List Char) :
-    dropSuffix? suf (start ++ suf) = some start := by
-  simp [dropSuffix?]
-
-/-- A list that gives back a start is the start followed by the suffix. -/
-theorem eq_append_of_dropSuffix? {suf cs start : List Char}
-    (h : dropSuffix? suf cs = some start) : cs = start ++ suf := by
-  unfold dropSuffix? at h
-  split at h
-  · rename_i hs
-    cases h
-    exact (List.suffix_iff_eq_append.mp (List.isSuffixOf_iff_suffix.mp hs)).symm
-  · cases h
+open EthLib.Base (dropPrefix?_append eq_append_of_dropPrefix? dropSuffix?_append
+  eq_append_of_dropSuffix? vector_four)
 
 /-! ## The fork digest -/
 
 /-- The hex digit of a value below 16 reads back as that value. -/
 theorem hexDigit?_hexDigitChar : ∀ k : Fin 16, hexDigit? (Base.hexDigitChar k) = some k.val := by
-  decide
+  intro k
+  have := k.isLt
+  simp only [hexDigit?, Base.hexValue?_false_hexDigitChar, Option.map_some, Nat.toUInt8_eq,
+    UInt8.toNat_ofNat', Option.some.injEq]
+  omega
 
 /-- A character that reads as a value is the hex digit of that value, below 16. -/
 theorem hexDigit?_eq_some {c : Char} {k : Nat} (h : hexDigit? c = some k) :
     ∃ hk : k < 16, Base.hexDigitChar ⟨k, hk⟩ = c := by
   unfold hexDigit? at h
-  obtain ⟨i, hi, rfl⟩ := Option.map_eq_some_iff.mp h
-  exact ⟨i.isLt, by simpa using List.find?_some hi⟩
+  obtain ⟨v, hv, rfl⟩ := Option.map_eq_some_iff.mp h
+  -- Uppercase is not allowed, so the character is the lowercase digit of its value.
+  obtain ⟨digit, rfl, hc | ⟨hc, -⟩⟩ := Base.hexValue?_eq_some hv
+  · have hd : digit.val.toUInt8.toNat = digit.val := by
+      have := digit.isLt
+      simp only [Nat.toUInt8_eq, UInt8.toNat_ofNat']
+      omega
+    exact ⟨by omega, by simp only [hd, hc]⟩
+  · cases hc
 
 /-- The two hex digits of a byte read back as that byte. -/
 theorem hexByte?_hexDigitChar (byte : UInt8) :
@@ -92,13 +76,6 @@ theorem hexByte?_eq_some_iff (hi lo : Char) (byte : UInt8) :
   simp only [Base.byteHexDigits, List.cons.injEq, and_true] at h
   obtain ⟨rfl, rfl⟩ := h
   exact hexByte?_hexDigitChar byte
-
-/-- A fork digest is its four bytes. -/
-theorem vector_four (v : Vector UInt8 4) : v = #v[v[0], v[1], v[2], v[3]] := by
-  apply Vector.ext
-  intro i hi
-  match i, hi with
-  | 0, _ | 1, _ | 2, _ | 3, _ => rfl
 
 /-- A fork digest has eight hex digits. -/
 theorem forkDigestChars_length (digest : Vector UInt8 4) :

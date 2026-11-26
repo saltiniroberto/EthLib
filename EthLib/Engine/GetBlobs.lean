@@ -11,40 +11,19 @@ The method `engine_getBlobs`, versions 1 to 4, which reads blobs from the blob p
 
 A step comment names the version of the method, as in version 3, step 4.
 
-The pool is an input: what it holds for each hash, whether it serves, and its request limit.
+Sources, at commit `1ca0818` of execution-apis: versions [1][v1], [2][v2], [3][v3] and [4][v4].
 
-The model trusts the pool: it files each blob under its own versioned hash.
+Version 1 has an [update by Osaka][v1-osaka], and the pool [samples cells][sampling] from Amsterdam.
 
-Each proof and each cell that it holds also belongs to that blob.
+Version 4 takes its bitarray from [EIP-8070][eip8070], section Engine API extensions.
 
-The method checks none of this.
-
-The only fork rule of the source rejects version 1 from Osaka, here Fusaka.
-
-So EthLib answers every version at every other fork.
-
-The consensus layer also writes the parameters as JSON.
-
-The source orders no two checks.
-
-EthLib decodes the parameters first, then checks the fork of version 1, then the request size.
-
-The answer is also written as JSON, and read back as a consensus node reads it.
-
-The method specifications state these rules, at commit `3284ee8` of execution-apis:
-
-- [`engine_getBlobsV1`][v1], and its update by Osaka in [`osaka.md`][v1-osaka]
-- [`engine_getBlobsV2`][v2] and [`engine_getBlobsV3`][v3]
-- [`engine_getBlobsV4`][v4], and the sampling of cells by the pool in [`amsterdam.md`][sampling]
-- the bitarray of version 4 in [EIP-8070, "Engine API extensions"][eip8070]
-
-[v1]: https://github.com/ethereum/execution-apis/blob/3284ee80c3da3e516c53782dde75157cccf1ebdc/src/engine/cancun.md#engine_getblobsv1
-[v1-osaka]: https://github.com/ethereum/execution-apis/blob/3284ee80c3da3e516c53782dde75157cccf1ebdc/src/engine/osaka.md#cancun-api
-[v2]: https://github.com/ethereum/execution-apis/blob/3284ee80c3da3e516c53782dde75157cccf1ebdc/src/engine/osaka.md#engine_getblobsv2
-[v3]: https://github.com/ethereum/execution-apis/blob/3284ee80c3da3e516c53782dde75157cccf1ebdc/src/engine/osaka.md#engine_getblobsv3
-[v4]: https://github.com/ethereum/execution-apis/blob/3284ee80c3da3e516c53782dde75157cccf1ebdc/src/engine/amsterdam.md#engine_getblobsv4
-[sampling]: https://github.com/ethereum/execution-apis/blob/3284ee80c3da3e516c53782dde75157cccf1ebdc/src/engine/amsterdam.md#engine_forkchoiceupdatedv4
-[eip8070]: https://github.com/ethereum/EIPs/blob/46976b2a9bf99f727fb87dc8c809e3a3cdc6b445/EIPS/eip-8070.md#engine-api-extensions
+[v1]: https://github.com/ethereum/execution-apis/blob/1ca0818569467cff85b7f41372f22e728d5daa14/src/engine/cancun.md#engine_getblobsv1
+[v1-osaka]: https://github.com/ethereum/execution-apis/blob/1ca0818569467cff85b7f41372f22e728d5daa14/src/engine/osaka.md#cancun-api
+[v2]: https://github.com/ethereum/execution-apis/blob/1ca0818569467cff85b7f41372f22e728d5daa14/src/engine/osaka.md#engine_getblobsv2
+[v3]: https://github.com/ethereum/execution-apis/blob/1ca0818569467cff85b7f41372f22e728d5daa14/src/engine/osaka.md#engine_getblobsv3
+[v4]: https://github.com/ethereum/execution-apis/blob/1ca0818569467cff85b7f41372f22e728d5daa14/src/engine/amsterdam.md#engine_getblobsv4
+[sampling]: https://github.com/ethereum/execution-apis/blob/1ca0818569467cff85b7f41372f22e728d5daa14/src/engine/amsterdam.md#engine_forkchoiceupdatedv4
+[eip8070]: https://github.com/ethereum/EIPs/blob/d27448e08f60513856bbe228ea7ce04f156209dc/EIPS/eip-8070.md#engine-api-extensions
 -/
 
 @[expose] public section
@@ -57,7 +36,7 @@ open EthLib.Cryptography.Kzg
 open EthLib.Cryptography.Kzg.Constants
 open EthLib.Engine.Json
 open EthLib.Serialization.JsonRpc
-open EthLib.Execution.Rpc (withdrawal)
+open EthLib.Execution.Rpc (withdrawal versionedHash versionedHashJson)
 
 /-- The fewest versioned hashes that every pool must take in one request. -/
 def MIN_BLOBS_REQUEST_LIMIT : Nat := 128
@@ -77,10 +56,15 @@ structure PooledBlob where
   /-- Each cell of the extended blob with its proof, where the pool holds it. -/
   cells : Vector (Option (Cell × KZGProof)) CELLS_PER_EXT_BLOB
 
-/-- The blob pool of an execution layer, as the method reads it. -/
+/-- The blob pool of an execution layer, an input of the method. -/
 structure BlobPool where
+  -- The model trusts the pool: it files each blob under its own versioned hash.
+  --
+  -- Each proof and each cell that it holds also belongs to that blob.
+  --
+  -- The method checks none of this.
   /-- What the pool holds for a versioned hash, if anything. -/
-  lookup : Bytes32 → Option PooledBlob
+  lookup : VersionedHash → Option PooledBlob
   /-- Whether the pool serves its data at all; a syncing node may not. -/
   serving : Bool
   /-- The most versioned hashes that one request may name. -/
@@ -171,7 +155,7 @@ def selectedCells (bits : CellBitarray) : List (Fin CELLS_PER_EXT_BLOB) :=
   -- EIP-8070 gives it no byte order either.
   --
   -- EthLib takes the order of an SSZ bitvector: cell `i` is bit `i mod 8` of byte `i / 8`.
-  let set := Serialization.Ssz.unpackBits bits.toArray CELLS_PER_EXT_BLOB
+  let set := Serialization.Ssz.unpackBits ⟨bits.toArray⟩ CELLS_PER_EXT_BLOB
   -- Version 4, step 1: the indices that the bitarray sets.
   --
   -- The source gives the cells no order, and EthLib takes increasing index.
@@ -184,30 +168,38 @@ def getBlobsParamCount (version : Nat) : Nat :=
 
 /-- The parameters of a version: the versioned hashes, and from version 4 the bitarray. -/
 def getBlobsParams (version : Nat) (params : Json) :
-    Decode (List Bytes32 × Option CellBitarray) := do
+    Decode (List VersionedHash × Option CellBitarray) := do
   let params ← paramsArray params
   let count := getBlobsParamCount version
   match params, decide (count = 2) with
   -- Versions 1 to 3, request: one parameter, an `Array of DATA` of 32 bytes each.
-  | [hashes], false => return (← array "hashes" (fixed "versioned hash" 32) hashes, none)
+  | [hashes], false => return (← array "hashes" (versionedHash "versioned hash") hashes, none)
   -- Version 4, request: that array, then the bitarray of cell indices, `DATA` of 16 bytes.
   | [hashes, bits], true =>
-    return (← array "hashes" (fixed "versioned hash" 32) hashes,
+    return (← array "hashes" (versionedHash "versioned hash") hashes,
       some (← fixed "indices_bitarray" CELL_BITARRAY_BYTES bits))
   -- The source names no error for other parameters, and EthLib gives `-32602`, invalid params.
   | _, _ => invalid s!"params: got {params.length}, expected {count}"
 
 /-- The parameters as JSON: the versioned hashes, then the bitarray when there is one. -/
-def getBlobsParamsJson (hashes : List Bytes32) (bits : Option CellBitarray) : Json :=
+def getBlobsParamsJson (hashes : List VersionedHash) (bits : Option CellBitarray) : Json :=
+  -- The consensus layer also writes the parameters as JSON.
+  --
   -- The request of the version: the array of versioned hashes, then from version 4 the bitarray.
-  .arr (([listJson (dataJson ·.toList) hashes] ++ bits.toList.map (dataJson ·.toList)).toArray)
+  .arr (([listJson versionedHashJson hashes] ++ bits.toList.map (dataJson ·.toList)).toArray)
 
 /-- Version 1 at the active fork of the node: a blob and its proof for each hash, or `null`.
 
 From Fusaka the version is an unsupported fork. -/
-def getBlobsV1 (pool : BlobPool) (fork : Fork) (hashes : List Bytes32) :
+def getBlobsV1 (pool : BlobPool) (fork : Fork) (hashes : List VersionedHash) :
     Except EngineError (List (Option BlobAndProofV1)) := do
+  -- The source orders no two checks.
+  --
+  -- The parameters are decoded before this, then EthLib checks the fork, then the request size.
+  --
   -- The update of Osaka: from Osaka, here Fusaka, the error is `-38005`, unsupported fork.
+  --
+  -- It is the only fork rule of the source, so EthLib answers every version at every other fork.
   if fork ≥ .fusaka then throw (.unsupportedFork (some fork))
   -- Version 1, step 3: more hashes than the pool takes is `-38004`, too large request.
   checkRequestSize pool.maxRequest hashes.length
@@ -219,7 +211,7 @@ def getBlobsV1 (pool : BlobPool) (fork : Fork) (hashes : List Bytes32) :
   return hashes.map fun h => if pool.serving then (pool.lookup h).bind PooledBlob.toV1 else none
 
 /-- Version 2: each blob with its cell proofs, or `null` alone if one is missing. -/
-def getBlobsV2 (pool : BlobPool) (hashes : List Bytes32) :
+def getBlobsV2 (pool : BlobPool) (hashes : List VersionedHash) :
     Except EngineError (Option (List BlobAndProofV2)) := do
   -- Version 2, step 3: more hashes than the pool takes is `-38004`, too large request.
   checkRequestSize pool.maxRequest hashes.length
@@ -233,7 +225,7 @@ def getBlobsV2 (pool : BlobPool) (hashes : List Bytes32) :
   else return none
 
 /-- Version 3: each blob with its cell proofs, with `null` in place of each missing blob. -/
-def getBlobsV3 (pool : BlobPool) (hashes : List Bytes32) :
+def getBlobsV3 (pool : BlobPool) (hashes : List VersionedHash) :
     Except EngineError (Option (List (Option BlobAndProofV2))) := do
   -- Version 3, step 4: more hashes than the pool takes is `-38004`, too large request.
   checkRequestSize pool.maxRequest hashes.length
@@ -249,7 +241,7 @@ def getBlobsV3 (pool : BlobPool) (hashes : List Bytes32) :
 /-- Version 4: for each blob of which the pool holds a cell, the selected cells.
 
 A blob of which the pool holds no cell is `null`. -/
-def getBlobsV4 (pool : BlobPool) (hashes : List Bytes32) (bits : CellBitarray) :
+def getBlobsV4 (pool : BlobPool) (hashes : List VersionedHash) (bits : CellBitarray) :
     Except EngineError (Option (List (Option BlobCellsAndProofsV1))) := do
   -- Version 4, step 5: more hashes than the pool takes is `-38004`, too large request.
   checkRequestSize pool.maxRequest hashes.length
@@ -263,18 +255,22 @@ def getBlobsV4 (pool : BlobPool) (hashes : List Bytes32) (bits : CellBitarray) :
   -- Step 6: `null` when the pool does not serve.
   else return none
 
-/-! ## The answer as JSON -/
+/-!
+## The answer as JSON
+
+The answer is also written as JSON, and read back as a consensus node reads it.
+-/
 
 /-- A blob and its proof as JSON. -/
 def blobAndProofV1Json (x : BlobAndProofV1) : Json :=
   -- `BlobAndProofV1`: `blob` and `proof`, each `DATA`.
-  Json.mkObj [("blob", dataJson x.blob.toList), ("proof", dataJson x.proof.toList)]
+  Json.mkObj [("blob", dataJson x.blob.toList), ("proof", dataJson x.proof.bytes.toList)]
 
 /-- A blob and the proofs of its cells as JSON. -/
 def blobAndProofV2Json (x : BlobAndProofV2) : Json :=
   -- `BlobAndProofV2`: `blob`, `DATA`, and `proofs`, an `Array of DATA` in the order of the cells.
   Json.mkObj [("blob", dataJson x.blob.toList),
-    ("proofs", listJson (dataJson ·.toList) x.proofs.toList)]
+    ("proofs", listJson (dataJson ·.bytes.toList) x.proofs.toList)]
 
 /-- The selected cells of a blob as JSON: the cells, then their proofs, with `null` where absent.
 
@@ -285,7 +281,11 @@ def blobCellsJson (x : BlobCellsAndProofsV1) : Json :=
   -- A proof is `null` where its cell is `null`, by step 4 of version 4.
   Json.mkObj [
     ("blob_cells", listJson (optionJson (dataJson ·.1.toList)) x.cells),
-    ("proofs", listJson (optionJson (dataJson ·.2.toList)) x.cells)]
+    ("proofs", listJson (optionJson (dataJson ·.2.bytes.toList)) x.cells)]
+
+/-- A KZG proof: 48 bytes, not yet checked as a point. -/
+def proofOfJson (j : Json) : Read KZGProof :=
+  KZGProof.mk <$> fixed "proof" 48 j
 
 /-- A blob and its proof: exactly the two fields. -/
 def blobAndProofV1OfJson (j : Json) : Read BlobAndProofV1 := do
@@ -298,7 +298,7 @@ def blobAndProofV1OfJson (j : Json) : Read BlobAndProofV1 := do
     -- The blob is `FIELD_ELEMENTS_PER_BLOB * BYTES_PER_FIELD_ELEMENT = 4096 * 32 = 131072` bytes.
     blob := ← fixed "blob" BYTES_PER_BLOB (← field "blobAndProof" fs "blob")
     -- The proof is a `KZGProof` of 48 bytes.
-    proof := ← fixed "proof" 48 (← field "blobAndProof" fs "proof") }
+    proof := ← proofOfJson (← field "blobAndProof" fs "proof") }
 
 /-- A blob and the proofs of its cells: exactly the two fields, with one proof per cell. -/
 def blobAndProofV2OfJson (j : Json) : Read BlobAndProofV2 := do
@@ -310,7 +310,7 @@ def blobAndProofV2OfJson (j : Json) : Read BlobAndProofV2 := do
   -- The blob is `4096 * 32 = 131072` bytes.
   let blob ← fixed "blob" BYTES_PER_BLOB (← field "blobAndProof" fs "blob")
   -- Each proof is a `KZGProof` of 48 bytes.
-  let proofs ← array "proofs" (fixed "proof" 48) (← field "blobAndProof" fs "proofs")
+  let proofs ← array "proofs" proofOfJson (← field "blobAndProof" fs "proofs")
   -- `proofs` contains exactly `CELLS_PER_EXT_BLOB` cell proofs.
   let proofs ← exactArray CELLS_PER_EXT_BLOB proofs.toArray fun count =>
     s!"proofs: {count}, not {CELLS_PER_EXT_BLOB}"
@@ -333,13 +333,13 @@ def blobCellsOfJson (j : Json) : Read BlobCellsAndProofsV1 := do
   --
   -- Not in the source: EthLib rejects any other member.
   unless hasExactly fs ["blob_cells", "proofs"] do reject "blobCells: not the fields of version 1"
-  -- The Engine API calls a cell a byte array and gives it no size.
+  -- The structure gives each cell 64 field elements of 32 bytes, that is 2048 bytes.
   --
-  -- EthLib takes the size of the cells of its KZG cell proofs, which is 2048 bytes.
+  -- That is the size of the cells of the KZG cell proofs of EthLib.
   let cells ← array "blob_cells" (nullable (fixed "cell" BYTES_PER_CELL))
     (← field "blobCells" fs "blob_cells")
   -- Each proof is a `KZGProof` of 48 bytes, or `null`.
-  let proofs ← array "proofs" (nullable (fixed "proof" 48)) (← field "blobCells" fs "proofs")
+  let proofs ← array "proofs" (nullable proofOfJson) (← field "blobCells" fs "proofs")
   -- Not in the source: the two arrays have one length.
   unless cells.length = proofs.length do reject "blobCells: arrays of two lengths"
   return ⟨← (cells.zip proofs).mapM cellAndProof⟩

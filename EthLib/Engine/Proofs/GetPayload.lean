@@ -11,27 +11,9 @@ import EthLib.Engine.Proofs.NewPayload
 
 A version returns exactly the forks whose fields are its own.
 
-So each fork from Paris to Glamsterdam has a version, and no other fork has one.
-
-An unknown payload ID returns the Engine API's unknown-payload error.
-
-Each other refusal happens when its check fails and every earlier check passes.
-
 A returned payload is the payload form of the stored block, at a fork that its version accepts.
 
-From version 3, the bundle's commitments hash to the block's blob hashes, in order.
-
-Its blob or cell proofs pass the KZG verifier.
-
-Versions 3 and 4 return one proof per blob, and versions 5 and 6 return 128 per blob.
-
-The decoder reads back the parameters that the writer writes.
-
-It reads no JSON value other than what the writer writes.
-
 The result of a response reads back at its version and its fork.
-
-A bundle reads back exactly when it passes the length rules of its version.
 
 The payload of a response, sent back to `engine_newPayload`, passes its checks and gives its block.
 -/
@@ -120,11 +102,13 @@ theorem of_getPayload_eq_ok {config : ChainConfig} {setup : TrustedSetup}
       split at hb <;> simp_all
     · exact ⟨rfl, ‹_›, ‹_›, ‹_›, ‹_›, ‹_›, ok_of_ne_error ‹_›, fun hv => absurd hv ‹_›⟩
 
-/-- From version 3, the bundle has the block's hashes in order, its counts, and verifies. -/
+/-- From version 3, the bundle has the block's hashes in order and its counts.
+
+Its proofs pass the KZG check. -/
 theorem getPayload_bundle {config : ChainConfig} {setup : TrustedSetup}
     {store : PayloadStore} {version : Nat} {id : PayloadId} {r : GetPayloadResponse}
     (h : getPayload config setup store version id = .ok r) (hv : 3 ≤ version) :
-    r.stored.bundle.commitments.map versionedHash =
+    r.stored.bundle.commitments.map kzgCommitmentToVersionedHash =
         ExecutionPayload.blobVersionedHashes r.stored.built.block.transactions ∧
       r.stored.bundle.commitments.length = r.stored.bundle.blobs.length ∧
       r.stored.bundle.proofs.length =
@@ -171,7 +155,10 @@ theorem getPayload_cell_proof_count {config : ChainConfig} {setup : TrustedSetup
   have hc := (getPayload_bundle h (by omega)).2.2.1
   simpa [proofCount, hfork] using hc
 
-/-! ## The other refusals of the method -/
+/-! ## The other refusals of the method
+
+Each refusal happens when its check fails and every earlier check passes.
+-/
 
 variable {config : ChainConfig} {setup : TrustedSetup} {store : PayloadStore} {version : Nat}
   {id : PayloadId} {stored : StoredPayload}
@@ -290,9 +277,9 @@ theorem blobsBundleOfJson_json (version : Nat) (b : BlobsBundle)
     blobsBundleOfJson version (blobsBundleJson b) = .ok b := by
   have hd : [("blobs", Serialization.JsonRpc.listJson (Serialization.JsonRpc.dataJson ·.toList)
       b.blobs), ("commitments", Serialization.JsonRpc.listJson
-      (Serialization.JsonRpc.dataJson ·.toList) b.commitments), ("proofs",
-      Serialization.JsonRpc.listJson (Serialization.JsonRpc.dataJson ·.toList) b.proofs)].Pairwise
-      fun a b => a.1 ≠ b.1 := by simp
+      (Serialization.JsonRpc.dataJson ·.bytes.toList) b.commitments), ("proofs",
+      Serialization.JsonRpc.listJson (Serialization.JsonRpc.dataJson ·.bytes.toList)
+        b.proofs)].Pairwise fun a b => a.1 ≠ b.1 := by simp
   obtain ⟨fs, hfs, hp⟩ := Serialization.JsonRpc.fields_mkObj "blobsBundle" hd
     (by simp [Serialization.JsonRpc.listJson])
   have hex : Serialization.JsonRpc.hasExactly fs blobsBundleFields = true :=
@@ -304,9 +291,27 @@ theorem blobsBundleOfJson_json (version : Nat) (b : BlobsBundle)
     (List.mem_cons_of_mem _ (List.mem_cons_self ..))
   have r3 := Serialization.JsonRpc.field_of_perm (what := "blobsBundle") hp hd
     (List.mem_cons_of_mem _ (List.mem_cons_of_mem _ (List.mem_cons_self ..)))
-  simp only [hfs, hex, r1, r2, r3, Serialization.JsonRpc.array_fixed_listJson, Json.liftM_ok,
-    bind, Except.bind, ite_true, h]
-  rfl
+  -- A commitment is written as its bytes, and read back as the bytes it holds.
+  have commitments : Serialization.JsonRpc.array "commitments"
+      (Serialization.JsonRpc.fixed "commitment" 48)
+      (Serialization.JsonRpc.listJson (Serialization.JsonRpc.dataJson ·.bytes.toList)
+        b.commitments) = .ok (b.commitments.map (·.bytes)) := by
+    have read := Serialization.JsonRpc.array_fixed_listJson "commitments" "commitment"
+      (b.commitments.map (·.bytes))
+    simpa [Serialization.JsonRpc.listJson, Array.map_map, Function.comp_def] using read
+  -- A proof is written as its bytes, and read back as the bytes it holds.
+  have proofs : Serialization.JsonRpc.array "proofs"
+      (Serialization.JsonRpc.fixed "proof" 48)
+      (Serialization.JsonRpc.listJson (Serialization.JsonRpc.dataJson ·.bytes.toList)
+        b.proofs) = .ok (b.proofs.map (·.bytes)) := by
+    have read := Serialization.JsonRpc.array_fixed_listJson "proofs" "proof"
+      (b.proofs.map (·.bytes))
+    simpa [Serialization.JsonRpc.listJson, Array.map_map, Function.comp_def] using read
+  simp only [hfs, hex, r1, r2, r3, Serialization.JsonRpc.array_fixed_listJson, commitments,
+    proofs, Json.liftM_ok, bind, Except.bind, ite_true]
+  simp [List.map_map, Function.comp_def]
+  cases b
+  simp_all [pure, Except.pure]
 
 /-- A payload form of a block holds at most 32 bytes of extra data. -/
 theorem payloadOfBlock_extraData {fork : Fork} {block : Block fork Transaction}
@@ -526,7 +531,7 @@ theorem checkNewPayload_of_getPayload {r : GetPayloadResponse} {version' : Nat}
         (if hf : .glamsterdam ≤ r.stored.fork then
           some (r.stored.built.blockAccessList hf, r.stored.built.block.header.slotNumber hf)
         else none)
-        (r.stored.bundle.commitments.map versionedHash)
+        (r.stored.bundle.commitments.map kzgCommitmentToVersionedHash)
         ((sinceValue r.stored.built.block.header.parentBeaconBlockRoot).getD 0)
         r.stored.built.requests) =
       .ok (.ok ⟨r.stored.fork, accepts, r.stored.built.block⟩) := by
@@ -543,7 +548,7 @@ theorem checkNewPayload_of_getPayload {r : GetPayloadResponse} {version' : Nat}
     (if hf : .glamsterdam ≤ r.stored.fork then
       some (r.stored.built.blockAccessList hf, r.stored.built.block.header.slotNumber hf)
     else none)
-    (r.stored.bundle.commitments.map versionedHash)
+    (r.stored.bundle.commitments.map kzgCommitmentToVersionedHash)
     ((sinceValue r.stored.built.block.header.parentBeaconBlockRoot).getD 0)
     r.stored.built.requests accepts below (payloadOfBlock_extraData hPay)
     (by

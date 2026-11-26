@@ -39,27 +39,13 @@ The new builder fields start empty, and every payload of the recent slots counts
 
 The window of payload committees is computed for the current epoch and the lookahead.
 
-Last, the pending deposits with builder credentials become builders.
-
-A deposit stays in the queue when a validator holds its key or a valid pending deposit names it.
-
-A deposit for a key that is already a builder adds to that builder's balance.
-
-A builder deposit with an invalid signature is dropped.
-
-Every other pending deposit stays in the queue, in its order.
-
-A 64-bit overflow of a builder balance is an error.
+Last, only pending deposits with builder credentials can fund builders, and the others stay queued.
 
 [EIP-7732] adds the fields and the onboarding of builders at the fork.
 
 [EIP-8282] keeps that onboarding and specifies the contract for later builder deposits.
 
-The upgrade to Heze first asserts that the state has processed every deposit of the contract.
-
-That holds when the count of processed deposits equals the index of the first deposit request.
-
-The Heze state then keeps every Gloas field but those that [EIP-8015] removes.
+The Heze state keeps every Gloas field but those that [EIP-8015] removes.
 
 These are the deposit contract data, its votes and the two deposit indices.
 
@@ -67,7 +53,7 @@ The latest bid stays, with the inclusion list bits of [EIP-7805] all unset.
 
 [EIP-7732]: https://eips.ethereum.org/EIPS/eip-7732#specification
 [EIP-8282]: https://eips.ethereum.org/EIPS/eip-8282#fork-transition-onboarding
-[EIP-8015]: https://eips.ethereum.org/EIPS/eip-8015#activation-conditions
+[EIP-8015]: https://eips.ethereum.org/EIPS/eip-8015#beaconstate-modifications
 [EIP-7805]: https://eips.ethereum.org/EIPS/eip-7805#consensus-layer
 -/
 
@@ -368,31 +354,38 @@ def onboardDeposit (config : Config) (checks : SignatureChecks)
     Except TransitionError (BeaconState preset .glamsterdam × Array PendingDeposit) := do
   let (state, kept) := step
   let gloas : Fork.glamsterdam ≤ .glamsterdam := by decide
-  -- A deposit for the key of a validator stays in the queue, as EIP-7732 specifies.
-  if deposit.pubkey ∈ validatorKeys then return (state, kept.push deposit)
+  -- A deposit without the builder prefix stays in the queue, even for the key of a builder.
+  if isBuilderWithdrawalCredential deposit.withdrawalCredentials = false then
+    return (state, kept.push deposit)
   match findBuilderByPubkey state gloas deposit.pubkey with
-  -- A deposit for the key of a builder adds its amount to the balance of that builder.
+  -- A builder deposit for the key of a builder tops up its balance, whatever its signature.
+  --
+  -- A 64-bit overflow of that balance is an error.
   | some index =>
     let _ ← liftAccessor (liftArith (ofNatChecked index.val))
     let builder := (state.builders gloas).data[index]
     let balance ← liftAccessor (liftArith (addChecked builder.balance deposit.amount))
     return (state.putBuilder gloas index index.isLt { builder with balance }, kept)
   | none =>
-    -- A deposit without the builder prefix stays in the queue.
-    if isBuilderWithdrawalCredential deposit.withdrawalCredentials = false then
-      return (state, kept.push deposit)
-    -- So does one whose key has a valid deposit among those kept so far, a pending validator.
-    if ← isPendingValidator config checks kept.toList deposit.pubkey then
-      return (state, kept.push deposit)
     -- A valid signature makes a payload builder, deposited at the slot of the deposit.
     --
-    -- An invalid one drops the deposit.
+    -- That holds even for the key of a validator, since the two registries are apart.
+    --
+    -- EIP-7732 keeps every deposit for the key of a validator in the queue.
+    --
+    -- This step follows the later rule of the consensus layer, which EIPs#12627 brings to the EIP.
     if ← isValidDepositSignature config checks deposit.pubkey deposit.withdrawalCredentials
         deposit.amount deposit.signature then
       let state ← addBuilderToRegistry state gloas deposit.pubkey PAYLOAD_BUILDER_VERSION
         (credentialAddress deposit.withdrawalCredentials) deposit.amount deposit.slot
       return (state, kept)
-    else return (state, kept)
+    -- An invalid one stays in the queue as a top-up of a validator of its key.
+    if deposit.pubkey ∈ validatorKeys then return (state, kept.push deposit)
+    -- It also stays when a deposit kept so far has its key and a valid signature.
+    if ← isPendingValidator config checks kept.toList deposit.pubkey then
+      return (state, kept.push deposit)
+    -- Otherwise it is dropped.
+    return (state, kept)
 
 /-- The state after the pending deposits of builders become builders, at the fork. -/
 def onboardBuildersFromPendingDeposits (config : Config) (checks : SignatureChecks)
@@ -584,19 +577,20 @@ def upgradeHezeFields (config : Config) (pre : BeaconState preset .glamsterdam) 
     payloadExpectedWithdrawals := fun _ => toHezeList (pre.payloadExpectedWithdrawals (by decide))
     ptcWindow := fun _ => pre.ptcWindow (by decide) }
 
-/-- The Heze state of a Gloas state, at the first slot of the fork epoch.
-
-It fails when the count of processed deposits differs from the first deposit request's index.
--/
+/-- The Heze state of a Gloas state, at the first slot of the fork epoch, which never fails. -/
 def upgradeToHeze (config : Config) (pre : BeaconState preset .glamsterdam) :
-    Except TransitionError (BeaconState preset .hegota) := do
-  -- Every deposit of the contract is processed, the activation condition of EIP-8015.
+    Except TransitionError (BeaconState preset .hegota) :=
+  -- The result type is that of the other upgrades, so the fork boundary runs each alike.
   --
-  -- A state that breaks it is an error here, where the EIP only delays the fork.
-  let processed := pre.eth1DepositIndex (by decide)
-  let startIndex := pre.depositRequestsStartIndex (by decide)
-  ensure (processed = startIndex) (.depositIndicesDiffer processed startIndex)
+  -- Unlike the activation condition of EIP-8015, no check compares the two deposit indices.
+  --
+  -- That condition constrains the choice of the fork epoch, not the upgrade.
+  --
+  -- Both indices stopped changing at Fulu, so no such check protects a deposit.
+  --
+  -- A network that starts at Fulu or later never sets the start index of the requests.
+  --
   -- The fields of the deposit contract go, and the others carry over.
-  return upgradeHezeFields config pre
+  pure (upgradeHezeFields config pre)
 
 end EthLib.Consensus

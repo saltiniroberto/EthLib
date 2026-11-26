@@ -12,13 +12,7 @@ The Yellow Paper ([`Paper.tex`][yp], Appendix H.2) defines BLOCKHASH by a walk u
 
 The two agree when the recent blocks are linked and reach back far enough.
 
-Each one is numbered one above the one before, and names the hash of that one as its parent hash.
-
-A chain with enough recent blocks keeps this property through each block that passes its transition.
-
-On such a chain, BLOCKHASH finds the hash of each of the 256 blocks before the current one.
-
-It never falls back to 0 inside that window.
+From Paris, the transition of a block reads only the last 255 recent blocks of its chain.
 
 [yp]: https://github.com/ethereum/yellowpaper/blob/efc5f9a1f356cba376c978eedb63cb0363c2aa85/Paper.tex
 -/
@@ -196,23 +190,20 @@ theorem HistoryOk.eq_of_number {chain : BlockChain} {last : RecentBlock}
 
 /-- BLOCKHASH reads the hash of each of the last 256 blocks before the current one.
 
-On a chain with its history in order, the current block is numbered one above the last recent block.
-
-The entry for `n` is the hash of the last recent block when `n` is its number.
-
-Otherwise it is the parent hash of the recent block numbered `n + 1`.
-
-When a recent block is numbered `n`, the hash is its hash.
-
-The list of hashes is long enough, so the fallback to 0 for a short list is not used. -/
+The chain must have its history in order. -/
 theorem blockHash_ancestor {chain : BlockChain} {hashes : List Hash32} {last : RecentBlock}
     (hok : HistoryOk chain) (hlast : chain.recent.getLast? = some last)
     (hhashes : recentHashes chain.recent = .ok hashes) {n : Nat}
+    -- The current block is numbered one above the last recent block.
     (hlt : n < last.header.number + 1) (hwin : last.header.number + 1 ≤ n + 256) :
+    -- The list of hashes is long enough, so the fallback to 0 for a short list is not used.
     ∃ h, hashes.reverse[last.header.number + 1 - n - 1]? = some h ∧
       blockHash hashes (last.header.number + 1) n = U256.fromBeBytes h ∧
+      -- The entry for `n` is the hash of the last recent block when `n` is its number.
       ((n = last.header.number ∧ last.header.hash = .ok h) ∨
+        -- Otherwise it is the parent hash of the recent block numbered `n + 1`.
         ∃ b ∈ chain.recent, b.header.number = n + 1 ∧ b.header.parentHash = h) ∧
+      -- When a recent block is numbered `n`, the hash is its hash.
       ∀ b ∈ chain.recent, b.header.number = n → b.header.hash = .ok h := by
   obtain ⟨last', hlast', hlen⟩ := hok.2
   obtain rfl : last = last' := (Option.some.inj (hlast'.symm.trans hlast)).symm
@@ -283,22 +274,18 @@ theorem blockHash_ancestor {chain : BlockChain} {hashes : List Hash32} {last : R
 
 /-! ## Along a run of blocks -/
 
-/-- A chain gives BLOCKHASH, in a block numbered `current`, the hash of each of the 256 before it.
-
-For each such block number `n`, the list of hashes has an entry, and BLOCKHASH reads it.
-
-The entry is the hash of the last recent block when `n` is its number.
-
-Otherwise it is the parent hash of the recent block numbered `n + 1`.
-
-When a recent block is numbered `n`, the entry is its hash. -/
+/-- In a block numbered `current`, a chain gives BLOCKHASH the hash of each of the 256 before it. -/
 def Window (chain : BlockChain) (current : Nat) : Prop :=
   ∀ hashes, recentHashes chain.recent = .ok hashes → ∀ n, n < current → current ≤ n + 256 →
+    -- For each such block number `n`, the list of hashes has an entry, and BLOCKHASH reads it.
     ∃ h, hashes.reverse[current - n - 1]? = some h ∧
       blockHash hashes current n = U256.fromBeBytes h ∧
+      -- The entry is the hash of the last recent block when `n` is its number.
       ((∃ last, chain.recent.getLast? = some last ∧ n = last.header.number ∧
           last.header.hash = .ok h) ∨
+        -- Otherwise it is the parent hash of the recent block numbered `n + 1`.
         ∃ b ∈ chain.recent, b.header.number = n + 1 ∧ b.header.parentHash = h) ∧
+      -- When a recent block is numbered `n`, the entry is its hash.
       ∀ b ∈ chain.recent, b.header.number = n → b.header.hash = .ok h
 
 /-- A block that passes its transition on a chain with its history in order has its window. -/
@@ -345,19 +332,16 @@ theorem ChainRun.windows {chain : BlockChain}
 
 /-- A chain with fewer recent blocks than its history asks for gives 0 inside the window.
 
-The last block is numbered `m`, and the chain keeps `k` recent blocks, with `k` below `m` and 255.
-
-In the next block, BLOCKHASH of block `m - k - 1` is inside the window.
-
-The list of hashes holds no entry for it, so BLOCKHASH gives 0.
-
 So the length condition of a history in order is needed. -/
 theorem blockHash_of_short {chain : BlockChain} {hashes : List Hash32} {last : RecentBlock}
     (hlast : chain.recent.getLast? = some last)
     (hhashes : recentHashes chain.recent = .ok hashes)
+    -- The last block is numbered `m`, and the chain keeps `k` recent blocks, with `k < min m 255`.
     (hshort : chain.recent.length < min last.header.number 255) :
+    -- In the next block, BLOCKHASH of block `m - k - 1` is inside the window.
     last.header.number - chain.recent.length - 1 < last.header.number + 1 ∧
       last.header.number + 1 ≤ last.header.number - chain.recent.length - 1 + 256 ∧
+      -- The list of hashes holds no entry for it, so BLOCKHASH gives 0.
       blockHash hashes (last.header.number + 1)
         (last.header.number - chain.recent.length - 1) = 0 := by
   refine ⟨by omega, by omega, blockHash_of_length_lt ?_⟩
@@ -365,5 +349,59 @@ theorem blockHash_of_short {chain : BlockChain} {hashes : List Hash32} {last : R
   · simp [hnil] at hlast
   · rw [hh, List.length_append, List.length_map, List.length_drop, List.length_singleton]
     omega
+
+/-! ## The recent blocks that a transition reads -/
+
+/-- Keeping the last 255 recent blocks twice keeps the same blocks as keeping them once. -/
+private theorem drop_drop_recent (l : List RecentBlock) :
+    (l.drop (l.length - 255)).drop ((l.drop (l.length - 255)).length - 255) =
+      l.drop (l.length - 255) := by
+  rw [List.length_drop, show l.length - (l.length - 255) - 255 = 0 by omega, List.drop_zero]
+
+/-- The recent hashes of the last 255 recent blocks are those of all the recent blocks. -/
+private theorem recentHashes_drop_recent (l : List RecentBlock) :
+    recentHashes (l.drop (l.length - 255)) = recentHashes l := by
+  unfold recentHashes; rw [drop_drop_recent]
+
+/-- From Paris, the checks of a block read the same from the last 255 recent blocks. -/
+private theorem checkBlock_drop_recent (config : ChainConfig) (checkSeal : Bool)
+    (l : List RecentBlock) {fork : Fork} (block : Block fork Transaction)
+    (paris : .paris ≤ fork) :
+    checkBlock config checkSeal (l.drop (l.length - 255)) block =
+      checkBlock config checkSeal l block := by
+  -- The last of the last 255 recent blocks is the last recent block: the parent.
+  have hlast : (l.drop (l.length - 255)).getLast? = l.getLast? := by
+    rw [List.getLast?_drop]
+    split
+    · cases l with
+      | nil => rfl
+      | cons a t => rename_i h; simp only [List.length_cons] at h; omega
+    · rfl
+  -- The ommer checks, which read the other recent blocks, run only before Paris.
+  have hlt : ¬ fork < .paris := Std.not_lt.mpr paris
+  unfold checkBlock
+  simp only [hlast, hlt, ite_false]
+
+/-- The body of a block reads only the last 255 recent blocks of its chain.
+
+It reads them for the hashes that BLOCKHASH gives. -/
+theorem runBody_drop_recent (chain : BlockChain) {fork : Fork} (block : Block fork Transaction)
+    (overrides : BodyOverrides) (blobGasPrice : Option Nat) :
+    runBody { chain with recent := chain.recent.drop (chain.recent.length - 255) } block overrides
+      blobGasPrice = runBody chain block overrides blobGasPrice := by
+  -- The body reads the recent blocks only through their hashes.
+  simp only [runBody, recentHashes_drop_recent]
+
+/-- From Paris, the transition of a block reads only the last 255 recent blocks of its chain.
+
+The parent is the last of them, and a block from Paris has no ommers to check against the others.
+-/
+theorem stateTransition_drop_recent (chain : BlockChain) {fork : Fork}
+    (block : Block fork Transaction) (checkSeal : Bool) (paris : .paris ≤ fork) :
+    stateTransition { chain with recent := chain.recent.drop (chain.recent.length - 255) } block
+      checkSeal = stateTransition chain block checkSeal := by
+  -- The checks read the same parent, and the ommer checks do not run from Paris.
+  have hcheck := checkBlock_drop_recent chain.config checkSeal chain.recent block paris
+  simp only [stateTransition, hcheck, runBody_drop_recent]
 
 end EthLib.Execution.Blocks

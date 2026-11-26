@@ -53,6 +53,21 @@
 #define DOC_bls_decode_g2 \
   "A compressed `G2` point, decoded, checked in the subgroup, and compressed again."
 
+#define DOC_bls_key_validate \
+  "Whether 48 bytes are a valid public key, by key validation of the BLS draft, §2.5."
+
+#define DOC_bls_sk_to_pk \
+  "The public key of a secret key of 32 big-endian bytes, by `SkToPk` of the BLS draft, §2.4."
+
+#define DOC_bls_bytes48_to_g1 \
+  "A compressed `G1` point, decoded without the subgroup check, and compressed again."
+
+#define DOC_bls_g1_add \
+  "The sum of two compressed `G1` points of the curve, compressed, with no subgroup check."
+
+#define DOC_bls_g1_neg \
+  "The negation of a compressed `G1` point of the curve, compressed, with no subgroup check."
+
 #define DOC_bls_expand_message_xmd \
   "The message expansion of [RFC 9380 §5.3.1][xmd], with SHA-256 as `H`."
 
@@ -108,7 +123,7 @@
   "`Ver(pk, m, sigma)` over a hash `H`: whether a signature signs a message under a public key."
 
 #define DOC_xmss_signature_index \
-  "The leaf index a 2404-byte signature carries."
+  "The leaf index that a 2404-byte signature claims, read without verifying the signature."
 
 #define DOC_sphincs_key_gen \
   "The public key `PK.seed | PK.root` of `SK.seed`."
@@ -369,7 +384,7 @@
   "The session keys from the shared secret and the challenge that the recipient sent."
 
 #define DOC_discv5_id_sign \
-  "The ID signature of node A: the 64 bytes `r || s` of an ECDSA signature of the hash."
+  "The ID signature of node A: the 64 bytes `r || s` of an ECDSA signature of the SHA-256 hash."
 
 #define DOC_discv5_id_verify \
   "Whether an ID signature of 64 bytes `r || s` verifies under the public key of node A."
@@ -649,6 +664,9 @@
 
 #define DOC_consensus_relay_submission_bid \
   "The SSZ bytes of the bid that a relay serves from a submission, under a key."
+
+#define DOC_consensus_relay_verify_bid_value \
+  "From Deneb to Fulu: whether the value of a bid is the payment of its builder."
 
 #define DOC_consensus_relay_validators \
   "At Fulu only: the list of validators that a relay serves, as a `list` of `dict`."
@@ -1010,6 +1028,9 @@
 #define DOC_consensus_reqresp_response_bounds \
   "The smallest and the largest length of the payload of a successful response chunk, as a pair."
 
+#define DOC_consensus_reqresp_decode_chunk \
+  "One response chunk at the bounds of its fork, with that fork, the code, context and payload."
+
 #define DOC_consensus_reqresp_response_valid \
   "Whether a response is valid for its request, as a Boolean."
 
@@ -1032,7 +1053,7 @@
   "The most compressed bytes a reader accepts after a declared length `n`: `32 + n + n / 6`."
 
 #define DOC_reqresp_decode_payload \
-  "The SSZ bytes of a payload, given the smallest and the largest encoding of its SSZ type."
+  "The SSZ bytes of a payload, given the payload cap and the encoding bounds of its SSZ type."
 
 #define DOC_reqresp_decode_response_chunk \
   "One response chunk, given the number of context bytes that the method sends."
@@ -1284,7 +1305,7 @@
   "A framed stream that decodes to `data`: the stream identifier, then its chunks."
 
 #define DOC_snappy_masked_crc \
-  "The masked CRC-32C that a data chunk stores (§3)."
+  "The masked CRC-32C that a data chunk stores (§3), at its start."
 
 #define DOC_varint_encode \
   "A 64-bit value as an unsigned protobuf varint."
@@ -1437,10 +1458,10 @@
   "The message ID of a message on a topic of a fork: the first 20 bytes of a SHA-256 digest."
 
 #define DOC_gossip_decode_payload \
-  "The SSZ bytes of the data of a gossip message, given the size bound of its SSZ type."
+  "The SSZ bytes of the data of a gossip message, given the payload cap and the size bound of its type."
 
 #define DOC_gossip_rpc_decode \
-  "The RPC that the bytes encode, under the `StrictNoSign` policy."
+  "The RPC that the bytes encode, under the `StrictNoSign` policy and the size limit of the cap."
 
 #define DOC_gossip_rpc_encode \
   "The bytes of an RPC."
@@ -1561,6 +1582,12 @@
 
 #define DOC_hoodi_active_fork \
   "The name of the active fork of Hoodi at a block, or `None` when none is active."
+
+#define DOC_sepolia_active_fork \
+  "The name of the active fork of Sepolia at a block, or `None` when none is active."
+
+#define DOC_chain_config \
+  "The configuration of a chain that EthLib holds, as a `dict`."
 
 #define DOC_active_fork \
   "The name of the active fork of a configured chain at a block, or `None` when none is active."

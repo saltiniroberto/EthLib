@@ -3,28 +3,15 @@ module
 public import EthLib.Consensus.BeaconApi.LightClient
 public import EthLib.Consensus.Proofs.ForkDigest
 public import EthLib.Consensus.Proofs.LightClient.Containers
-public import EthLib.Base.Proofs.LittleEndian
+public import EthLib.Base.Proofs.ByteOrder
 public import EthLib.Consensus.Proofs.BeaconApi.Responses
+import EthLib.Base.Proofs.MapM
 import EthLib.Consensus.Proofs.BeaconApi.Encoding
 
 /-!
 # Proofs: the light client answers of the Beacon API
 
-The longest answer to an updates request is one that the source accepts.
-
-It holds the known updates of the range from its earliest known period, with no gap, to the limit.
-
-The other accepted answers are its nonempty starts, so none holds more updates.
-
-On a chain whose digests name their forks, the SSZ chunks of updates decode back to the updates.
-
-On such a chain, bytes that decode are the chunks of the updates they give.
-
-Each latest update answer refuses with code 404 exactly when the node knows no update.
-
-It refuses with no other error, so a known update never gets code 500.
-
-That result needs a preset with a nonempty logs bloom and sync committee.
+Which updates a range answer holds, how their SSZ chunks round trip, and when each answer refuses.
 -/
 
 @[expose] public section
@@ -292,7 +279,7 @@ private theorem encodeUpdateChunk_ok {config : Config} {genesisValidatorsRoot : 
     ∃ digest payload, .altair ≤ fork ∧ fork = config.forkAtEpoch (contextEpoch update) ∧
       computeForkDigest config genesisValidatorsRoot (contextEpoch update) = .ok digest ∧
       SszType.serialize update = .ok payload ∧ 4 + payload.size < 2 ^ 64 ∧
-      chunk = ⟨(uintToBytes 8 (4 + payload.size)).toArray⟩ ++ ⟨digest.toArray⟩ ++ payload := by
+      chunk = ⟨(ByteOrder.toLE 8 (4 + payload.size)).toArray⟩ ++ ⟨digest.toArray⟩ ++ payload := by
   by_cases altair : .altair ≤ fork
   · by_cases same : fork = config.forkAtEpoch (contextEpoch update)
     · cases digested : computeForkDigest config genesisValidatorsRoot (contextEpoch update) with
@@ -300,7 +287,6 @@ private theorem encodeUpdateChunk_ok {config : Config} {genesisValidatorsRoot : 
         simp [encodeUpdateChunk, checkUpdateFork, eq_true altair, eq_true same, digested,
           Except.mapError, bind, Except.bind, pure, Except.pure] at encoded
       | ok digest =>
-      have four : (⟨digest.toArray⟩ : ByteArray).size = 4 := by simp [ByteArray.size]
       cases wrote : SszType.serialize update with
       | error fault =>
         simp [encodeUpdateChunk, checkUpdateFork, eq_true altair, eq_true same, digested, wrote,
@@ -308,7 +294,6 @@ private theorem encodeUpdateChunk_ok {config : Config} {genesisValidatorsRoot : 
       | ok payload =>
       simp [encodeUpdateChunk, checkUpdateFork, eq_true altair, eq_true same, digested, wrote,
           Except.mapError, bind, Except.bind] at encoded
-      rw [four] at encoded
       by_cases small : 4 + payload.size < 18446744073709551616
       · rw [ite_eq_left small] at encoded
         refine ⟨digest, payload, altair, same, rfl, rfl, small, ?_⟩
@@ -337,7 +322,7 @@ private theorem ofFn_getElem_append {n : Nat} {data pre tail : ByteArray}
     Vector.ofFn (fun i : Fin n => data[start + i]'(bound i)) = piece := by
   subst split at_start
   ext i inside
-  simp [getElem_append_vector _ _ _ inside]
+  simp only [Vector.getElem_ofFn, getElem_append_vector _ _ _ inside]
 
 /-- The chunk of an update, between any bytes, decodes to the update and then reads on. -/
 private theorem decodeUpdateChunksFrom_chunk {config : Config} {genesisValidatorsRoot : Root}
@@ -361,31 +346,31 @@ private theorem decodeUpdateChunksFrom_chunk {config : Config} {genesisValidator
     rw [same]
     simpa using recovers
   subst fork_eq
-  have eight : (⟨(uintToBytes 8 (4 + payload.size)).toArray⟩ : ByteArray).size = 8 :=
+  have eight : (⟨(ByteOrder.toLE 8 (4 + payload.size)).toArray⟩ : ByteArray).size = 8 :=
     Vector.size_toArray _
   have four : (⟨digest.toArray⟩ : ByteArray).size = 4 := Vector.size_toArray _
   have position : pre.size + 8 + (4 + payload.size) = pre.size +
-      (⟨(uintToBytes 8 (4 + payload.size)).toArray⟩ ++ ⟨digest.toArray⟩ ++ payload).size := by
+      (⟨(ByteOrder.toLE 8 (4 + payload.size)).toArray⟩ ++ ⟨digest.toArray⟩ ++ payload).size := by
     rw [ByteArray.size_append, ByteArray.size_append, eight, four]
     omega
   rw [← position] at next
-  generalize split : pre ++ (⟨(uintToBytes 8 (4 + payload.size)).toArray⟩ ++ ⟨digest.toArray⟩ ++
+  generalize split : pre ++ (⟨(ByteOrder.toLE 8 (4 + payload.size)).toArray⟩ ++ ⟨digest.toArray⟩ ++
       payload) ++ rest = data at next ⊢
   have total : data.size = pre.size + 8 + (4 + payload.size) + rest.size := by
     rw [← split]
     simp only [ByteArray.size_append, eight, four]
     omega
   have length : ∀ bound : ∀ i : Fin 8, pre.size + i < data.size,
-      bytesToUint (Vector.ofFn fun i : Fin 8 => data[pre.size + i]'(bound i)) =
+      ByteOrder.ofLE (Vector.ofFn fun i : Fin 8 => data[pre.size + i]'(bound i)) =
         4 + payload.size := by
     intro bound
-    rw [ofFn_getElem_append (piece := uintToBytes 8 (4 + payload.size))
+    rw [ofFn_getElem_append (piece := ByteOrder.toLE 8 (4 + payload.size))
       (tail := ⟨digest.toArray⟩ ++ payload ++ rest)
-      (by rw [← split]; simp only [ByteArray.append_assoc]) rfl, bytesToUint_uintToBytes,
+      (by rw [← split]; simp only [ByteArray.append_assoc]) rfl, ByteOrder.ofLE_toLE,
       Nat.mod_eq_of_lt small]
   have digest_read : ∀ bound : ∀ i : Fin 4, pre.size + 8 + i < data.size,
       (Vector.ofFn fun i : Fin 4 => data[pre.size + 8 + i]'(bound i)) = digest := fun bound =>
-    ofFn_getElem_append (pre := pre ++ ⟨(uintToBytes 8 (4 + payload.size)).toArray⟩)
+    ofFn_getElem_append (pre := pre ++ ⟨(ByteOrder.toLE 8 (4 + payload.size)).toArray⟩)
       (tail := payload ++ rest) (by rw [← split]; simp only [ByteArray.append_assoc])
       (by simp [eight]) bound
   have payload_read :
@@ -458,7 +443,8 @@ private theorem encodeUpdateChunk_of_read [NeZero preset.BYTES_PER_LOGS_BLOOM.to
     {update : LightClientUpdate preset (config.forkAtEpoch epoch)}
     (identify : digestsIdentify config genesisValidatorsRoot = true)
     (bound8 : ∀ i : Fin 8, start + i < data.size)
-    (read_length : bytesToUint (Vector.ofFn fun i : Fin 8 => data[start + i]'(bound8 i)) = length)
+    (read_length :
+      ByteOrder.ofLE (Vector.ofFn fun i : Fin 8 => data[start + i]'(bound8 i)) = length)
     (bound4 : ∀ i : Fin 4, start + 8 + i < data.size)
     (found : forkOfDigest config genesisValidatorsRoot
       (Vector.ofFn fun i : Fin 4 => data[start + 8 + i]'(bound4 i)) = some epoch)
@@ -475,7 +461,7 @@ private theorem encodeUpdateChunk_of_read [NeZero preset.BYTES_PER_LOGS_BLOOM.to
   have same : config.forkAtEpoch epoch = config.forkAtEpoch (contextEpoch update) := by
     simpa using recovers
   have wrote := SszType.serialize_deserialize read
-  have small : length < 2 ^ 64 := read_length ▸ bytesToUint_lt _
+  have small : length < 2 ^ 64 := read_length ▸ ByteOrder.ofLE_lt _
   have rest_size : ((⟨(Vector.ofFn fun i : Fin 4 => data[start + 8 + i]'(bound4 i)).toArray⟩ :
       ByteArray) ++ data.extract (start + 12) (start + 8 + length)).size = length := by
     have four : (⟨(Vector.ofFn fun i : Fin 4 => data[start + 8 + i]'(bound4 i)).toArray⟩ :
@@ -484,9 +470,9 @@ private theorem encodeUpdateChunk_of_read [NeZero preset.BYTES_PER_LOGS_BLOOM.to
     omega
   simp only [encodeUpdateChunk, checkUpdateFork, eq_true altair, eq_true same, digested, wrote,
     Except.mapError, bind, Except.bind, pure, Except.pure, rest_size, small, ↓reduceIte]
-  have length_bytes : (⟨(uintToBytes 8 length).toArray⟩ : ByteArray) =
+  have length_bytes : (⟨(ByteOrder.toLE 8 length).toArray⟩ : ByteArray) =
       data.extract start (start + 8) := by
-    rw [← read_length, uintToBytes_bytesToUint, ofFn_getElem_eq_extract (by omega) bound8]
+    rw [← read_length, ByteOrder.toLE_ofLE, ofFn_getElem_eq_extract (by omega) bound8]
   rw [length_bytes, ofFn_getElem_eq_extract (by omega) bound4, ByteArray.extract_append_extract,
     Nat.min_eq_left (by omega), Nat.max_eq_right (by omega), ByteArray.extract_append_extract,
     Nat.min_eq_left (by omega), Nat.max_eq_right (by omega)]
@@ -523,7 +509,7 @@ private theorem foldlM_of_decodeUpdateChunksFrom [NeZero preset.BYTES_PER_LOGS_B
     rw [dite_eq_left header] at decoded
     have bound8 : ∀ i : Fin 8, start + i < data.size := fun i => by omega
     obtain ⟨length, read_length⟩ : ∃ length,
-        bytesToUint (Vector.ofFn fun i : Fin 8 => data[start + i]'(bound8 i)) = length :=
+        ByteOrder.ofLE (Vector.ofFn fun i : Fin 8 => data[start + i]'(bound8 i)) = length :=
       ⟨_, rfl⟩
     simp only [read_length] at decoded
     by_cases short : length < 4
@@ -640,6 +626,8 @@ theorem optimisticUpdateResponse_notFound_iff {fork : Fork}
 
 Its error is then the one with code 404 for a missing finality update.
 
+So a known update never gets code 500.
+
 It needs a preset with a nonempty logs bloom and sync committee. -/
 theorem finalityUpdateResponse_eq_error_iff [NeZero preset.BYTES_PER_LOGS_BLOOM.toNat]
     [NeZero preset.SYNC_COMMITTEE_SIZE.toNat] {fork : Fork}
@@ -659,6 +647,8 @@ theorem finalityUpdateResponse_eq_error_iff [NeZero preset.BYTES_PER_LOGS_BLOOM.
 
 Its error is then the one with code 404 for a missing optimistic update.
 
+So a known update never gets code 500.
+
 It needs a preset with a nonempty logs bloom and sync committee. -/
 theorem optimisticUpdateResponse_eq_error_iff [NeZero preset.BYTES_PER_LOGS_BLOOM.toNat]
     [NeZero preset.SYNC_COMMITTEE_SIZE.toNat] {fork : Fork}
@@ -673,5 +663,21 @@ theorem optimisticUpdateResponse_eq_error_iff [NeZero preset.BYTES_PER_LOGS_BLOO
     rw [optimisticUpdateResponse, versioned_eq_error_iff
       fun (optimistic : LightClientOptimisticUpdate preset fork) _ => toApiJson_total optimistic]
     simp
+
+/-- The JSON answer for a range of updates never fails, so it never gets code 500.
+
+It needs a preset with a nonempty logs bloom and sync committee. -/
+theorem updatesJson_exists_ok [NeZero preset.BYTES_PER_LOGS_BLOOM.toNat]
+    [NeZero preset.SYNC_COMMITTEE_SIZE.toNat] (updates : List (AnyLightClientUpdate preset)) :
+    ∃ document, updatesJson updates = .ok document := by
+  unfold updatesJson
+  simp only [bind, Except.bind]
+  split
+  · -- A failed list fails on one update, whose JSON the writer still gives.
+    rename_i fault failed
+    obtain ⟨⟨fork, update⟩, -, refused⟩ := exists_mem_of_mapM_error failed
+    obtain ⟨document, written⟩ := toApiJson_total update
+    simp [apiJsonOr500, written, Except.mapError, pure, Except.pure] at refused
+  · exact ⟨_, rfl⟩
 
 end EthLib.Consensus.BeaconApi

@@ -45,8 +45,8 @@ This library writes each timestamp in decimal, as the example of [`misc.yaml`] d
 Delivered payloads may also be sorted by value, lowest or highest first, as [`misc.yaml`] says.
 
 [submission endpoint]: https://github.com/flashbots/relay-specs/blob/a4e0a50d9d46bfe881fd74cc7e0db366371f4eed/apis/relay/builder/blocks.yaml
-[Deneb relaying rules]: https://github.com/ethereum/builder-specs/blob/ea92eff73ad77c33d3b59a2033ffa02dfae5ee05/specs/deneb/builder.md#bidding
-[Electra bid]: https://github.com/ethereum/builder-specs/blob/ea92eff73ad77c33d3b59a2033ffa02dfae5ee05/specs/electra/builder.md#builderbid
+[Deneb relaying rules]: https://github.com/ethereum/builder-specs/blob/0911550c65b1e4a326fe7fbd7d0ca52ff0b6a4b7/specs/deneb/builder.md#bidding
+[Electra bid]: https://github.com/ethereum/builder-specs/blob/0911550c65b1e4a326fe7fbd7d0ca52ff0b6a4b7/specs/electra/builder.md#builderbid
 [`validators.yaml`]: https://github.com/flashbots/relay-specs/blob/a4e0a50d9d46bfe881fd74cc7e0db366371f4eed/apis/relay/builder/validators.yaml
 [`responses.yaml`]: https://github.com/flashbots/relay-specs/blob/a4e0a50d9d46bfe881fd74cc7e0db366371f4eed/types/responses.yaml
 [EIP-7917]: https://eips.ethereum.org/EIPS/eip-7917#specification
@@ -160,23 +160,6 @@ def scheduledEntries (schedule : Slot → Option ValidatorIndex)
       -- Each entry includes the slot and the validator with the duty.
       some ⟨slot, index, entry⟩
     else none
-
-/-- The key of the validator at an index of a state, if there is one. -/
-def validatorPubkey? (state : BeaconState preset fork) (index : ValidatorIndex) :
-    Option BLSPubkey :=
-  state.validators.data[index.toNat]?.map (·.pubkey)
-
-/-- From Fulu: the proposer of a slot of the current or next epoch, by the lookahead of a state.
-
-Other slots, and slots past the end of the lookahead, have none. -/
-def lookaheadSchedule (state : BeaconState preset fork) (fulu : .fusaka ≤ fork) (slot : Slot) :
-    Option ValidatorIndex :=
-  -- EIP-7917: the lookahead holds the proposers of two epochs, from the current epoch's start.
-  if currentEpochStart state ≤ slot.toNat ∧
-      slot.toNat < currentEpochStart state + 2 * preset.SLOTS_PER_EPOCH.toNat then
-    -- The proposer of slot s is at index s minus the first slot of the current epoch.
-    (state.proposerLookahead fulu)[slot.toNat - currentEpochStart state]?
-  else none
 
 /-- From Fulu: the list of validators that a relay serves, by the lookahead of its state.
 
@@ -411,6 +394,30 @@ def getValidatorRegistration (registry : Registry) (pubkey : Option String) : Re
       | some signed => .found signed
       | none => .notHeld
 
+/-! ## Block scoring -/
+
+/-- From Deneb: the sum of the withdrawals of a payload to an address, in Wei. -/
+def excludedWithdrawals (payload : ExecutionPayload preset fork) (deneb : .dencun ≤ fork)
+    (feeRecipient : ExecutionAddress) : Nat :=
+  let withdrawals := (payload.withdrawals (Nat.le_trans (by decide) deneb)).data.toList
+  -- A withdrawal amount is in Gwei, and one Gwei is `10^9` Wei.
+  ((withdrawals.filter (·.address = feeRecipient)).map (·.amount.toNat * 10 ^ 9)).sum
+
+/-- From Deneb: whether the value of a bid is the payment of its builder to the fee recipient.
+
+The [block scoring] rules define it, with the change of the recipient's balance over the payload.
+
+[block scoring]: https://github.com/ethereum/builder-specs/blob/0911550c65b1e4a326fe7fbd7d0ca52ff0b6a4b7/specs/deneb/builder.md#block-scoring-1
+-/
+def verifyBidValue (payload : ExecutionPayload preset fork) (deneb : .dencun ≤ fork)
+    (feeRecipient : ExecutionAddress) (bidValue balanceDifference : U256) : Bool :=
+  -- The withdrawals of the payload to the fee recipient are not part of the payment.
+  let excluded := excludedWithdrawals payload deneb feeRecipient
+  -- The payment is the balance difference less those withdrawals, as a 256-bit integer.
+  --
+  -- A subtraction below zero raises an error, so the check fails.
+  excluded ≤ balanceDifference.toNat && balanceDifference.toNat - excluded == bidValue.toNat
+
 end RelayApi
 
 /-- From Bellatrix to Fulu: the bid that a relay serves from a submission, under a key.
@@ -430,5 +437,21 @@ def SubmitBlockRequest.bid (request : SubmitBlockRequest preset fork)
     (fun deneb => .ofSszList (request.blobsBundle ⟨deneb, range.2⟩).commitments)
     -- From Electra: the requests of the submission.
     (fun electra => request.executionRequests ⟨electra, range.2⟩)
+
+/-- Whether the block scoring rule lets a relay serve a submission to proposers.
+
+The balance difference is the change of the proposer's fee recipient over the payload.
+
+The relay rules run from Bellatrix to Fulu, and other rules on serving are not checked here. -/
+def SubmitBlockRequest.servable (request : SubmitBlockRequest preset fork)
+    (balanceDifference : U256) : Bool :=
+  -- From Deneb: a submission whose bid value fails the check must not be served.
+  --
+  -- The fee recipient is that of the proposer, in the bid trace.
+  if deneb : .dencun ≤ fork then
+    RelayApi.verifyBidValue request.executionPayload deneb request.message.proposerFeeRecipient
+      request.message.value balanceDifference
+  -- Before Deneb, the source sets no rule on the value.
+  else true
 
 end EthLib.Consensus

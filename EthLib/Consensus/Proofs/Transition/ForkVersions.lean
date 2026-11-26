@@ -27,6 +27,30 @@ open Base
 
 variable {preset : Preset} {config : Config} {checks : SignatureChecks}
 
+/-- Advancing a state by any number of slots keeps its fork versions. -/
+theorem advanceSlots_forkVersions {fork : Fork} :
+    ∀ {count : Nat} {state after : BeaconState preset fork},
+      advanceSlots config checks count state = .ok after → after.forkVersions = state.forkVersions
+  | 0, state, after, computed => by
+    simp only [advanceSlots, pure, Except.pure, Except.ok.injEq] at computed
+    subst computed
+    rfl
+  | count + 1, state, after, computed => by
+    simp only [advanceSlots, bind_ok_iff] at computed
+    obtain ⟨next, nextOk, rest⟩ := computed
+    exact (advanceSlots_forkVersions rest).trans (advanceSlot_kept nextOk).1
+
+/-- The transition of a block keeps the fork versions. -/
+theorem stateTransition_forkVersions {fork : Fork} {engine : ExecutionEngine preset fork}
+    {state after : BeaconState preset fork} {signed : SignedBeaconBlock preset fork}
+    {validateResult : Bool}
+    (computed : stateTransition config checks engine state signed validateResult = .ok after) :
+    after.forkVersions = state.forkVersions := by
+  obtain ⟨advanced, slotsOk, -, -, blockOk, -⟩ := stateTransition_ok computed
+  simp only [processSlots, bind_ok_iff, ensure_ok_iff] at slotsOk
+  obtain ⟨_, -, advancedOk⟩ := slotsOk
+  exact (frame_processBlock blockOk).forkVersions.trans (advanceSlots_forkVersions advancedOk)
+
 /-- One step of a chain keeps a property of the fork and of the fork versions.
 
 It needs each upgrade that is due to keep that property. -/
@@ -75,11 +99,13 @@ theorem chainSteps_forkVersions {property : Fork → ForkVersions → Prop}
 /-- The genesis state that deposits build holds the genesis version twice, from epoch 0. -/
 theorem initializeBeaconStateFromEth1_forkVersions {fork : Fork} {eth1BlockHash : Hash32}
     {eth1Timestamp : UInt64} {deposits : Array Deposit} {state : BeaconState preset fork}
-    (computed : initializeBeaconStateFromEth1 config checks eth1BlockHash eth1Timestamp deposits =
-      .ok state) :
+    {before : fork < .altair}
+    (computed :
+      initializeBeaconStateFromEth1 config checks eth1BlockHash eth1Timestamp deposits before =
+        .ok state) :
     state.forkVersions =
       ⟨config.GENESIS_FORK_VERSION, config.GENESIS_FORK_VERSION, GENESIS_EPOCH⟩ := by
-  obtain ⟨_, _, _, activated, _, frame, rfl⟩ := initializeBeaconStateFromEth1_frame computed
+  obtain ⟨_, _, activated, _, frame, rfl⟩ := initializeBeaconStateFromEth1_frame computed
   exact frame.forkVersions
 
 /-- An upgrade writes the current version before it as the previous version of the state.
@@ -115,7 +141,7 @@ theorem upgradeNext_forkVersions {pre : ForkedBeaconState preset}
   case glamsterdam =>
     simp only [upgradeNext, bind_ok_iff, pure, Except.pure, Except.ok.injEq] at computed
     obtain ⟨_, upgraded, rfl⟩ := computed
-    obtain ⟨-, rfl⟩ := upgradeToHeze_ok_iff.mp upgraded
+    obtain rfl := upgradeToHeze_ok_iff.mp upgraded
     rfl
   all_goals
     simp only [upgradeNext] at computed
@@ -188,13 +214,14 @@ Each upgrade writes the current version before it, the version of its fork, and 
 theorem forkVersions_eq_of_fork {fork0 : Fork} {eth1BlockHash : Hash32} {eth1Timestamp : UInt64}
     {deposits : Array Deposit} {genesis : BeaconState preset fork0}
     {a b : ForkedBeaconState preset}
-    (initialized : initializeBeaconStateFromEth1 config checks eth1BlockHash eth1Timestamp
-      deposits = .ok genesis)
+    {before : fork0 < .altair}
+    (initialized :
+      initializeBeaconStateFromEth1 config checks eth1BlockHash eth1Timestamp deposits before =
+        .ok genesis)
     (toA : Relation.ReflTransGen (ChainStep config checks) ⟨fork0, genesis⟩ a)
     (toB : Relation.ReflTransGen (ChainStep config checks) ⟨fork0, genesis⟩ b)
     (same : a.fork = b.fork) :
     a.state.forkVersions = b.state.forkVersions := by
-  obtain ⟨before, -⟩ := initializeBeaconStateFromEth1_frame initialized
   have start : ForkEntry config fork0 genesis.forkVersions :=
     .inl ⟨before, initializeBeaconStateFromEth1_forkVersions initialized⟩
   have entryA := chainSteps_forkVersions (property := ForkEntry config)
@@ -234,8 +261,9 @@ An upgrade moves the current version to the previous one, and writes the version
 theorem forkVersions_ofConfig_of_genesis_chainSteps {fork : Fork} {eth1BlockHash : Hash32}
     {eth1Timestamp : UInt64} {deposits : Array Deposit} {genesis : BeaconState preset fork}
     {last : ForkedBeaconState preset}
+    {before : fork < .altair}
     (initialized :
-      initializeBeaconStateFromEth1 config checks eth1BlockHash eth1Timestamp deposits =
+      initializeBeaconStateFromEth1 config checks eth1BlockHash eth1Timestamp deposits before =
         .ok genesis)
     (steps : Relation.ReflTransGen (ChainStep config checks) ⟨fork, genesis⟩ last) :
     last.state.forkVersions.OfConfig config := by

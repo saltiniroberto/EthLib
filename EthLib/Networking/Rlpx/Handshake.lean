@@ -1,5 +1,6 @@
 module
 
+public import EthLib.Base.ByteOrder
 public import EthLib.Networking.Rlpx.Ecies
 public import EthLib.Cryptography.Hash.Keccak
 public import EthLib.Cryptography.Secp256k1.Recovery
@@ -79,7 +80,7 @@ def encodePublicKey : Point → Vector UInt8 64
   -- EthLib writes it as 64 zero bytes: `(0, 0)` is off the curve, so no decoder accepts it.
   | .infinity => Vector.replicate 64 0
   -- `x || y`, each coordinate in 32 big-endian bytes.
-  | .affine x y => ⟨(x.toBytes ++ y.toBytes).toArray, by simp [Fp.length_toBytes]⟩
+  | .affine x y => ⟨(x.toBytes ++ y.toBytes).data, by simp [Sec1.fieldToBytes, sec1]⟩
 
 /-- The public key of 64 bytes `x || y`, which must lie on the curve. -/
 def decodePublicKey (bytes : Vector UInt8 64) : Except HandshakeError Point :=
@@ -158,7 +159,7 @@ def decodeBody {α : Type} [Codec α] (body : ByteArray) : Except HandshakeError
 /-! ## Packets -/
 
 /-- `size` as two big-endian bytes. -/
-def sizeBytes (size : Nat) : ByteArray := ⟨#[(size / 256).toUInt8, size.toUInt8]⟩
+def sizeBytes (size : Nat) : ByteArray := ⟨(Base.ByteOrder.toBE 2 size).toArray⟩
 
 /-- The packet `size || ecies.encrypt(recipient, body || padding, size)`. -/
 def sealPacket (recipient : Point) (r : Fn) (iv : Aes.Block) (body padding : ByteArray) :
@@ -186,7 +187,7 @@ def openPacket (key : Fn) (packet : ByteArray) : Except HandshakeError ByteArray
   -- `auth = auth-size || enc-auth-body`, with `auth-size` in 2 big-endian bytes.
   | hi :: lo :: rest =>
     -- EthLib takes one whole packet, so `auth-size` must count exactly the bytes after it.
-    if hi.toNat * 256 + lo.toNat = rest.length then
+    if Base.ByteOrder.ofBE [hi, lo] = rest.length then
       -- The inverse of `ecies.encrypt(recipient-pubk, auth-body || auth-padding, auth-size)`.
       --
       -- It checks the tag over `auth-size` before it decrypts.

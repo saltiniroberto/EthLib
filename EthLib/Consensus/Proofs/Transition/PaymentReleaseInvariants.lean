@@ -10,30 +10,6 @@ From Gloas the builder of a block pays its proposer through a pending payment.
 
 The steps that pay a bid assume a few facts on the state, which each step of a chain keeps.
 
-A latest bid with a value is at the slot of the latest block.
-
-The upgrade to Gloas starts with a latest bid of no value.
-
-A slot keeps the latest bid and the slot of the latest block.
-
-A block makes its own bid the latest one, at its own slot.
-
-A payment with weight has an amount.
-
-The upgrade to Gloas starts with no payment.
-
-Only an attestation adds weight to a payment, and only to a payment with an amount.
-
-The epoch step moves the payments of the second half of the window to the first.
-
-In the genesis epoch, the first half of the window is empty.
-
-A block adds a bid only in the second half, and otherwise empties a payment or weighs one.
-
-The last slot of the genesis epoch leaves it.
-
-The upgrade to Heze carries each fact over.
-
 [EIP-7732] adds the builders, their bids and their payments.
 
 [EIP-7732]: https://eips.ethereum.org/EIPS/eip-7732#beacon-chain-changes
@@ -62,7 +38,7 @@ theorem ValuedBidAtLatestBlock.upgradeToHeze {pre : BeaconState preset .glamster
     {post : BeaconState preset .hegota} (holds : ValuedBidAtLatestBlock pre (by decide))
     (computed : upgradeToHeze config pre = .ok post) :
     ValuedBidAtLatestBlock post (by decide) := by
-  obtain ⟨-, rfl⟩ := upgradeToHeze_ok_iff.mp computed
+  obtain rfl := upgradeToHeze_ok_iff.mp computed
   exact holds
 
 /-- From Gloas, one slot keeps a latest bid with a value at the slot of the latest block. -/
@@ -179,7 +155,7 @@ theorem WeightedPaymentsFunded.upgradeToHeze {pre : BeaconState preset .glamster
     {post : BeaconState preset .hegota} (holds : WeightedPaymentsFunded pre (by decide))
     (computed : upgradeToHeze config pre = .ok post) :
     WeightedPaymentsFunded post (by decide) := by
-  obtain ⟨-, rfl⟩ := upgradeToHeze_ok_iff.mp computed
+  obtain rfl := upgradeToHeze_ok_iff.mp computed
   exact holds
 
 /-- From Gloas, one slot keeps an amount for each payment with weight.
@@ -252,7 +228,7 @@ theorem GenesisFirstHalfEmpty.upgradeToHeze {pre : BeaconState preset .glamsterd
     {post : BeaconState preset .hegota} (holds : GenesisFirstHalfEmpty pre (by decide))
     (computed : upgradeToHeze config pre = .ok post) :
     GenesisFirstHalfEmpty post (by decide) := by
-  obtain ⟨-, rfl⟩ := upgradeToHeze_ok_iff.mp computed
+  obtain rfl := upgradeToHeze_ok_iff.mp computed
   exact holds
 
 /-- From Gloas, one slot keeps the first half of the genesis window empty.

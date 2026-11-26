@@ -149,7 +149,7 @@ source = "https://github.com/ethereum/execution-specs/blob/391d8a05d5cb182542ac7
 [generators."Wycheproof P-256, converted for EIP-7951"]
 computes = "the ECDSA P-256 vectors of Wycheproof, turned into precompile calls in ethereum/EIPs#9833, which names no program"
 version = "the Wycheproof commit not recorded"
-source = "https://github.com/ethereum/EIPs/blob/46976b2a9bf99f727fb87dc8c809e3a3cdc6b445/assets/eip-7951/test-vectors.json"
+source = "https://github.com/ethereum/EIPs/blob/b055feec322fbc37e9d77a393a50b3ff56b31c92/assets/eip-7951/test-vectors.json"
 
 [generators."BLAKE2 genkat-json"]
 computes = "genkat-json.c of the BLAKE2 reference package, linked with its own BLAKE2 code"
@@ -250,23 +250,23 @@ source = "_info.filledwith of each fixture"
 
 [generators."rpctestgen on go-ethereum"]
 computes = "rpctestgen of execution-apis, recording the replies of a go-ethereum node"
-version = "last regenerated at execution-apis ba884e7d with go-ethereum 8a8efd332457, and CI requires no change at the pin"
-source = "https://github.com/ethereum/execution-apis/blob/3284ee80c3da3e516c53782dde75157cccf1ebdc/tools/README.md"
+version = "last regenerated at execution-apis 1a1f8e12 with go-ethereum 2b7829ea6aed, and CI requires no change at the pin"
+source = "https://github.com/ethereum/execution-apis/blob/166e334c73d96ffce916ea84e97addbcd8b3727a/tools/README.md"
 
 [generators."Engine API OpenRPC examples"]
 computes = "nothing: request examples written by the authors of the Engine API specification in its OpenRPC method files"
-version = "execution-apis 3284ee80, read with PyYAML 6.0.2"
-source = "https://github.com/ethereum/execution-apis/tree/3284ee80c3da3e516c53782dde75157cccf1ebdc/src/engine/openrpc/methods"
+version = "execution-apis 166e334c, read with PyYAML 6.0.2"
+source = "https://github.com/ethereum/execution-apis/tree/166e334c73d96ffce916ea84e97addbcd8b3727a/src/engine/openrpc/methods"
 imports = ["yaml"]
 
 [generators."execution-apis error groups"]
 computes = "nothing: the error groups of execution-apis, written by its authors"
-version = "execution-apis 3284ee80c3da3e516c53782dde75157cccf1ebdc"
-source = "https://github.com/ethereum/execution-apis/tree/3284ee80c3da3e516c53782dde75157cccf1ebdc/src/error-groups"
+version = "execution-apis 166e334c73d96ffce916ea84e97addbcd8b3727a"
+source = "https://github.com/ethereum/execution-apis/tree/166e334c73d96ffce916ea84e97addbcd8b3727a/src/error-groups"
 
 [generators."EIP-779 text"]
 computes = "nothing: the list of accounts in the text of EIP-779, copied by its author"
-version = "EIP-779 at EIPs 46976b2a"
+version = "EIP-779 at EIPs b055feec"
 source = "bindings/python/tests/state/dao/eip-779.md.txt"
 
 # The consensus layer.
@@ -352,7 +352,7 @@ generator = "pyspec v1.7.0-beta.4"
 [[directories."tests/consensus/builder_api"]]
 cases = ["**"]
 generator = "not established"
-checked = "builder-specs at ea92eff holds no generator code, and the commits that added the examples (#128, #138, #165) name no tool"
+checked = "builder-specs at 0911550 holds no generator code, and the commits that added the examples (#128, #138, #165) name no tool"
 
 [[directories."tests/consensus/relay_api"]]
 cases = ["**"]
@@ -362,7 +362,7 @@ checked = "relay-specs at a4e0a50d holds no generator code, and its README names
 [[directories."tests/consensus/keymanager_api"]]
 cases = ["**"]
 generator = "not established"
-checked = "keymanager-APIs at 3e7c64e holds no program that writes the OpenAPI document or the types files, and the README names none"
+checked = "keymanager-APIs at 2d8a028 holds no program that writes the OpenAPI document or the types files, and the README names none"
 
 [[directories."tests/consensus/remote_signing_api"]]
 cases = ["**"]
@@ -581,6 +581,16 @@ checked = "the file holds the header, body and receipts of mainnet block 1942658
 cases = ["**"]
 generator = "go-ethereum default genesis"
 
+[[directories."tests/execution/sepolia"]]
+cases = ["genesis.json", "config.yaml"]
+generator = "not established"
+checked = "the configuration files of Sepolia, written by its maintainers; the tests compare the fork times of genesis.json with the meta EIPs, and the fork hashes they give with EIP-7607, and the files record no generating tool"
+
+[[directories."tests/execution/sepolia"]]
+cases = ["terminal_header.rlp"]
+generator = "not established"
+checked = "the header of Sepolia block 1450408, read from the chain; the tests check that its keccak256 is the TERMINAL_BLOCK_HASH of config.yaml"
+
 [[directories."tests/execution/precompiles"]]
 cases = ["prague/**", "msm_up_to_8_pairs.json"]
 generator = "bls12-381-tests eip-2537 branch"
@@ -662,7 +672,7 @@ generator = "rpctestgen on go-ethereum"
 [[directories."bindings/python/tests/rpc/fixtures"]]
 cases = ["bal/*.json"]
 generator = "not established"
-checked = "tools/chain/bal/block-00057.json through block-00060.json at execution-apis 3284ee80 name no generator or version"
+checked = "tools/chain/bal/block-00057.json through block-00060.json at execution-apis 166e334c name no generator or version"
 
 [[directories."bindings/python/tests/rpc/fixtures"]]
 cases = ["error-groups/*.yaml"]

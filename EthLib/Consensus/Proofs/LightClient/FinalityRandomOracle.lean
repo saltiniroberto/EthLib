@@ -10,35 +10,11 @@ import EthLib.Consensus.Proofs.LightClient.Authenticate
 
 An update proves its finalized header by a branch against the attested state root.
 
-The leaf of the branch is the root of the beacon header, or zero bytes at the genesis slot.
-
-An adversary outputs a state root and two beacon headers with a branch each.
-
 The generalized index of the branches is fixed before the run.
-
-The experiment reads both leaves as the check does, and climbs both branches.
-
-Every hash of the experiment is an oracle call.
 
 The adversary wins with two different headers, if both branches pass the check at that index.
 
-A header at the genesis slot has the zero leaf, so such a win also needs two different leaves.
-
-Each win exposes two different queried inputs with one answer, so the birthday bound applies.
-
-The count grows with the depth of the index alone.
-
-An adversary of `q` calls gives a bound of `(q + 14 + 2 * depth)^2 / 2^256`.
-
-The depth of the index is 6 before Electra, 7 from Electra and 9 from Gloas.
-
-With SHA-256 as the node hash, a win is two different headers whose branches the check accepts.
-
-Two updates that prove finality and pass the finality check give a win with SHA-256.
-
-That result needs one attested state root and slot, and two different finalized headers.
-
-It also needs the root of neither finalized header to be zero bytes.
+Every hash of the experiment is an oracle call.
 
 Source: Bellare and Rogaway, "Random Oracles are Practical", CCS 1993, section 2, "Oracles".
 
@@ -83,7 +59,7 @@ structure FinalityOutcome where
 It is zero bytes at the genesis slot, and the root of the header at any later slot. -/
 def finalizedLeafM {m : Type → Type} [Monad m] (hash : ByteArray → m ByteArray)
     (header : BeaconBlockHeader) : m (Except Err Bytes) :=
-  if header.slot = GENESIS_SLOT then pure (.ok zeroBytes32.toArray)
+  if header.slot = GENESIS_SLOT then pure (.ok ⟨ZERO_HASH.toArray⟩)
   else (hashTreeRootM (Hasher.ofHash hash) (SszType.desc BeaconBlockHeader)
     (SszType.toValue header)).run
 
@@ -125,26 +101,26 @@ def FinalityWins (gindex : Nat) (outcome : FinalityOutcome) : Prop :=
 
 /-- The root of a beacon block header is seven hashes.
 
-The slot and the proposer index are their 8 bytes and 24 zero bytes, and share one hash.
-
-The parent and state roots share one hash, and the body root takes one with a zero node.
-
-One hash joins two zero nodes, and three more join those four digests.
+Three of them join the digests of the other four.
 
 It holds for a hash in any lawful monad. -/
 theorem hashTreeRootM_beaconBlockHeader {m : Type → Type} [Monad m] [LawfulMonad m]
     (hash : ByteArray → m ByteArray) (header : BeaconBlockHeader) :
     (hashTreeRootM (Hasher.ofHash hash) (SszType.desc BeaconBlockHeader)
       (SszType.toValue header)).run = (do
-      let indices ← hash ⟨uintBytes 8 header.slot.toNat ++ Array.replicate 24 0 ++
-        (uintBytes 8 header.proposerIndex.toNat ++ Array.replicate 24 0)⟩
+      -- The slot and the proposer index are their 8 bytes and 24 zero bytes, and share one hash.
+      let indices ← hash (uintBytes 8 header.slot.toNat ++ ⟨Array.replicate 24 0⟩ ++
+        (uintBytes 8 header.proposerIndex.toNat ++ ⟨Array.replicate 24 0⟩))
+      -- The parent and state roots share one hash.
       let roots ← hash ⟨header.parentRoot.toArray ++ header.stateRoot.toArray⟩
-      let left ← hash ⟨indices.data ++ roots.data⟩
-      let body ← hash ⟨header.bodyRoot.toArray ++ zeroChunk⟩
-      let zero ← hash ⟨zeroChunk ++ zeroChunk⟩
-      let right ← hash ⟨body.data ++ zero.data⟩
-      let root ← hash ⟨left.data ++ right.data⟩
-      return .ok root.data) := by
+      let left ← hash (indices ++ roots)
+      -- The body root takes one hash with a zero node.
+      let body ← hash (⟨header.bodyRoot.toArray⟩ ++ zeroChunk)
+      -- One hash joins two zero nodes.
+      let zero ← hash (zeroChunk ++ zeroChunk)
+      let right ← hash (body ++ zero)
+      let root ← hash (left ++ right)
+      return .ok root) := by
   -- The roots of the five fields, each stated for its SSZ shape.
   have slot : (hashTreeRootAtM (Hasher.ofHash hash) 1 (.uint 8)
       (.uint header.slot.toNat)).run = _ :=
@@ -153,23 +129,23 @@ theorem hashTreeRootM_beaconBlockHeader {m : Type → Type} [Monad m] [LawfulMon
       (.uint header.proposerIndex.toNat)).run = _ :=
     hashTreeRootM_uint64 (Hasher.ofHash hash) header.proposerIndex
   have parent : (hashTreeRootAtM (Hasher.ofHash hash) 1 (.byteVector 32)
-      (.bytes header.parentRoot.toArray)).run = _ :=
+      (.bytes ⟨header.parentRoot.toArray⟩)).run = _ :=
     hashTreeRootM_bytes32 (Hasher.ofHash hash) header.parentRoot
   have state : (hashTreeRootAtM (Hasher.ofHash hash) 1 (.byteVector 32)
-      (.bytes header.stateRoot.toArray)).run = _ :=
+      (.bytes ⟨header.stateRoot.toArray⟩)).run = _ :=
     hashTreeRootM_bytes32 (Hasher.ofHash hash) header.stateRoot
   have body : (hashTreeRootAtM (Hasher.ofHash hash) 1 (.byteVector 32)
-      (.bytes header.bodyRoot.toArray)).run = _ :=
+      (.bytes ⟨header.bodyRoot.toArray⟩)).run = _ :=
     hashTreeRootM_bytes32 (Hasher.ofHash hash) header.bodyRoot
   show (hashTreeRootAtM (Hasher.ofHash hash) 2 (.container ["slot", "proposer_index",
     "parent_root", "state_root", "body_root"] [.uint 8, .uint 8, .byteVector 32, .byteVector 32,
     .byteVector 32]) (.seq [.uint header.slot.toNat, .uint header.proposerIndex.toNat,
-      .bytes header.parentRoot.toArray, .bytes header.stateRoot.toArray,
-      .bytes header.bodyRoot.toArray])).run = _
+      .bytes ⟨header.parentRoot.toArray⟩, .bytes ⟨header.stateRoot.toArray⟩,
+      .bytes ⟨header.bodyRoot.toArray⟩])).run = _
   unfold hashTreeRootAtM
   simp only [merkleLayout, List.length_cons, List.length_nil, bne_self_eq_false,
     Bool.false_eq_true, ↓reduceIte, liftM_pure, pure_bind, List.zip_cons_cons, List.zip_nil_left,
-    List.map_cons, List.map_nil, MerkleLayout.nesting, layoutChunksAtM, Leaves.count,
+    List.map_cons, List.map_nil, MerkleLayout.nesting, layoutChunksWithM, Leaves.count,
     Option.getD_none, List.drop_zero, Nat.sub_zero, List.take_succ_cons, List.take_zero,
     List.mapM_cons, List.mapM_nil]
   simp only [ExceptT.run_bind, ExceptT.run_pure, bind_assoc, slot, proposer, parent, state, body,
@@ -209,28 +185,33 @@ private theorem collision_or_eq_of_hashTreeRootM_beaconBlockHeader
   obtain ⟨right₂, hright₂, hsecond⟩ := Option.bind_eq_some_iff.mp hsecond
   obtain ⟨top₂, htop₂, hsecond⟩ := Option.bind_eq_some_iff.mp hsecond
   -- Each step: one answer of two hashes gives one message, or a collision of the cache.
-  refine (collision_or_eq_of_queryHash htop₁ htop₂
-    (Except.ok.inj (Option.some.inj (hfirst.trans hsecond.symm)))).elim .inl fun top => ?_
+  refine (collision_or_eq_of_queryHash htop₁ htop₂ (congrArg ByteArray.data
+    (Except.ok.inj (Option.some.inj (hfirst.trans hsecond.symm))))).elim .inl fun top => ?_
+  -- A message is two nodes joined, so its array is the arrays of the two joined.
+  simp only [ByteArray.data_append] at top
   obtain ⟨sameLeft, sameRight⟩ := Array.append_inj top
     ((size_of_queryHash hleft₁).trans (size_of_queryHash hleft₂).symm)
   refine (collision_or_eq_of_queryHash hleft₁ hleft₂ sameLeft).elim .inl fun left => ?_
+  simp only [ByteArray.data_append] at left
   obtain ⟨sameIndices, sameRoots⟩ := Array.append_inj left
     ((size_of_queryHash hindices₁).trans (size_of_queryHash hindices₂).symm)
   refine (collision_or_eq_of_queryHash hindices₁ hindices₂ sameIndices).elim .inl
     fun indices => ?_
   refine (collision_or_eq_of_queryHash hroots₁ hroots₂ sameRoots).elim .inl fun roots => ?_
   refine (collision_or_eq_of_queryHash hright₁ hright₂ sameRight).elim .inl fun right => ?_
+  simp only [ByteArray.data_append] at right
   obtain ⟨sameBody, -⟩ := Array.append_inj right
     ((size_of_queryHash hbody₁).trans (size_of_queryHash hbody₂).symm)
   refine (collision_or_eq_of_queryHash hbody₁ hbody₂ sameBody).elim .inl fun body => ?_
   -- No step collides, so every field of the two headers is equal.
   refine .inr ?_
+  simp only [ByteArray.data_append] at indices body
   obtain ⟨sameSlot, sameProposer⟩ := Array.append_inj indices (by simp [uintBytes_size])
   obtain ⟨sameParent, sameState⟩ := Array.append_inj roots (by simp)
   have slots := uintBytes_injective (by simpa using slot₁.toNat_lt)
-    (by simpa using slot₂.toNat_lt) ((Array.append_left_inj _).mp sameSlot)
+    (by simpa using slot₂.toNat_lt) (ByteArray.ext ((Array.append_left_inj _).mp sameSlot))
   have proposers := uintBytes_injective (by simpa using proposer₁.toNat_lt)
-    (by simpa using proposer₂.toNat_lt) ((Array.append_left_inj _).mp sameProposer)
+    (by simpa using proposer₂.toNat_lt) (ByteArray.ext ((Array.append_left_inj _).mp sameProposer))
   simp only [BeaconBlockHeader.mk.injEq]
   exact ⟨UInt64.toNat_inj.mp slots, UInt64.toNat_inj.mp proposers,
     Vector.toArray_inj.mp sameParent, Vector.toArray_inj.mp sameState,
@@ -296,7 +277,9 @@ private theorem finalizedLeafM_queryBound (header : BeaconBlockHeader) :
 
 /-- The extraction makes at most `14 + 2 * depth` oracle calls, where `depth` is that of the index.
 
-Each leaf takes at most seven calls, and each climb one call per climbed node. -/
+Each leaf takes at most seven calls, and each climb one call per climbed node.
+
+The count grows with the depth of the index alone. -/
 theorem extractFinality_queryBound (gindex : Nat) (claim : FinalityClaim) :
     IsQueryBoundP (extractFinality queryHash gindex claim) (fun _ => True)
       (14 + 2 * Nat.log2 gindex) := by
@@ -326,16 +309,18 @@ A win is two different headers whose branches, past zero front nodes, climb to t
 
 The leaves must also differ, when a header is at the genesis slot.
 
-`Q` bounds the oracle calls of the whole experiment, repeats included, and `N` counts digests.
+`Q` bounds the oracle calls of the whole experiment, repeats included.
 
-The oracle cache starts empty, and the adversary's private sampling is not counted. -/
+`N` counts the digests. -/
 theorem prEvent_finalityWins_le [SampleableType Hash32] (gindex : Nat)
     (adversary : OracleComp (unifSpec + HashOracle) FinalityClaim) {Q : Nat}
     (hQ : IsQueryBoundP (experimentWith (extractFinality queryHash gindex) adversary)
       (fun t => t.isRight = true) Q) :
+    -- The oracle cache starts empty, and the adversary's private sampling is not counted.
     Pr{let z ← (simulateQ HashOracle.romImpl
       (experimentWith (extractFinality queryHash gindex) adversary)).run ∅}[
         FinalityWins gindex z.1] ≤ Q * ((Q : ℝ≥0∞) / Nat.card Hash32) :=
+  -- Each win exposes two different queried inputs with one answer, so the birthday bound applies.
   prEvent_experimentWith_le (extractFinality queryHash gindex) (FinalityWins gindex)
     collision_of_extractFinality adversary hQ
 
@@ -343,7 +328,9 @@ theorem prEvent_finalityWins_le [SampleableType Hash32] (gindex : Nat)
 
 A win has probability at most `(q + 14 + 2 * depth)^2 / 2^256`.
 
-It needs the adversary to make at most `q` oracle calls. -/
+It needs the adversary to make at most `q` oracle calls.
+
+The depth of the index is 6 before Electra, 7 from Electra and 9 from Gloas. -/
 theorem prEvent_finalityWins_le_of_adversary (gindex : Nat)
     (adversary : OracleComp (unifSpec + HashOracle) FinalityClaim) {q : Nat}
     (hq : IsQueryBoundP adversary (fun t => t.isRight = true) q) :
@@ -361,9 +348,9 @@ theorem prEvent_finalityWins_le_of_adversary (gindex : Nat)
 theorem extractFinality_sha256 (gindex : Nat) (claim : FinalityClaim) :
     (extractFinality (m := Id) Cryptography.Hash.Sha256.hash gindex claim).run =
       ⟨claim, match getSubtreeIndex gindex,
-          (if claim.first.slot = GENESIS_SLOT then .ok zeroBytes32
+          (if claim.first.slot = GENESIS_SLOT then .ok ZERO_HASH
             else SszType.hashTreeRoot claim.first),
-          (if claim.second.slot = GENESIS_SLOT then .ok zeroBytes32
+          (if claim.second.slot = GENESIS_SLOT then .ok ZERO_HASH
             else SszType.hashTreeRoot claim.second) with
         | .ok index, .ok firstLeaf, .ok secondLeaf =>
           some (extractBranches (m := Id) Cryptography.Hash.Sha256.hash (Nat.log2 gindex)
@@ -373,11 +360,11 @@ theorem extractFinality_sha256 (gindex : Nat) (claim : FinalityClaim) :
         | _, _, _ => none⟩ := by
   have read : ∀ header : BeaconBlockHeader,
       (finalizedLeafM (m := Id) Cryptography.Hash.Sha256.hash header).run >>= toChunk =
-        if header.slot = GENESIS_SLOT then .ok zeroBytes32 else SszType.hashTreeRoot header := by
+        if header.slot = GENESIS_SLOT then .ok ZERO_HASH else SszType.hashTreeRoot header := by
     intro header
     unfold finalizedLeafM
     split
-    · show toChunk zeroBytes32.toArray = .ok zeroBytes32
+    · show toChunk ⟨ZERO_HASH.toArray⟩ = .ok ZERO_HASH
       exact toChunk_ok_iff.mpr rfl
     · simp only [ofHash_sha256, SszType.hashTreeRoot_eq]
       rfl
@@ -395,9 +382,9 @@ theorem finalityWins_sha256_iff {gindex : Nat} {claim : FinalityClaim} :
     FinalityWins gindex
         (extractFinality (m := Id) Cryptography.Hash.Sha256.hash gindex claim).run ↔
       claim.first ≠ claim.second ∧ ∃ firstLeaf secondLeaf,
-        (if claim.first.slot = GENESIS_SLOT then .ok zeroBytes32
+        (if claim.first.slot = GENESIS_SLOT then .ok ZERO_HASH
           else SszType.hashTreeRoot claim.first) = .ok firstLeaf ∧
-        (if claim.second.slot = GENESIS_SLOT then .ok zeroBytes32
+        (if claim.second.slot = GENESIS_SLOT then .ok ZERO_HASH
           else SszType.hashTreeRoot claim.second) = .ok secondLeaf ∧
         (firstLeaf ≠ secondLeaf ∨
           claim.first.slot ≠ GENESIS_SLOT ∧ claim.second.slot ≠ GENESIS_SLOT) ∧
@@ -414,9 +401,9 @@ theorem finalityWins_sha256_iff {gindex : Nat} {claim : FinalityClaim} :
     fun _ => List.take_of_length_le (by simp only [List.length_drop]; omega)
   have long : ∀ length : Nat, length - (length - Nat.log2 gindex) = Nat.log2 gindex ↔
       Nat.log2 gindex ≤ length := fun _ => by omega
-  generalize (if claim.first.slot = GENESIS_SLOT then (.ok zeroBytes32 : Except Err Bytes32)
+  generalize (if claim.first.slot = GENESIS_SLOT then (.ok ZERO_HASH : Except Err Bytes32)
     else SszType.hashTreeRoot claim.first) = first
-  generalize (if claim.second.slot = GENESIS_SLOT then (.ok zeroBytes32 : Except Err Bytes32)
+  generalize (if claim.second.slot = GENESIS_SLOT then (.ok ZERO_HASH : Except Err Bytes32)
     else SszType.hashTreeRoot claim.second) = second
   by_cases zero : gindex = 0
   · subst zero
@@ -447,8 +434,8 @@ theorem finalityWins_of_validateFinality {fork : Fork} {config : Config}
     (sameRoot : first.attestedHeader.beacon.stateRoot = second.attestedHeader.beacon.stateRoot)
     (sameSlot : first.attestedHeader.beacon.slot = second.attestedHeader.beacon.slot)
     (differ : first.finalizedHeader.beacon ≠ second.finalizedHeader.beacon)
-    (firstNonzero : SszType.hashTreeRoot first.finalizedHeader.beacon ≠ .ok zeroBytes32)
-    (secondNonzero : SszType.hashTreeRoot second.finalizedHeader.beacon ≠ .ok zeroBytes32) :
+    (firstNonzero : SszType.hashTreeRoot first.finalizedHeader.beacon ≠ .ok ZERO_HASH)
+    (secondNonzero : SszType.hashTreeRoot second.finalizedHeader.beacon ≠ .ok ZERO_HASH) :
     ∃ gindex, finalizedRootGindexAtSlot (preset := preset) (fork := fork) config
         first.attestedHeader.beacon.slot = .ok gindex ∧
       FinalityWins gindex (extractFinality (m := Id) Cryptography.Hash.Sha256.hash gindex

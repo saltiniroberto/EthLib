@@ -7,8 +7,6 @@ public import EthLib.Base.Fork
 
 Forks are ordered by their position in the type, and the order is linear.
 
-The comparison agrees with that order, as an ordered map needs.
-
 The timeline pins each position, so a fork moved in the type fails the build.
 
 Each fork reads back from its name, and no two forks share a name.
@@ -38,6 +36,7 @@ instance : IsLinearOrder Fork := by
 instance : LawfulOrderLT Fork where
   lt_iff a b := Nat.lt_iff_le_and_not_ge (m := a.ctorIdx) (n := b.ctorIdx)
 
+-- The comparison agrees with the order, as an ordered map needs.
 instance : LawfulOrderOrd Fork where
   isLE_compare a b := LawfulOrderOrd.isLE_compare a.ctorIdx b.ctorIdx
   isGE_compare a b := LawfulOrderOrd.isGE_compare a.ctorIdx b.ctorIdx
@@ -45,8 +44,8 @@ instance : LawfulOrderOrd Fork where
 /-- Frontier is the first fork. -/
 theorem frontier_le (f : Fork) : frontier ≤ f := Nat.zero_le f.ctorIdx
 
-/-- Hegotá is the last fork. -/
-theorem le_hegota (f : Fork) : f ≤ hegota := by
+/-- The last fork comes at or after every fork. -/
+theorem le_last (f : Fork) : f ≤ last := by
   cases f <;> decide
 
 /-! ## The comparison

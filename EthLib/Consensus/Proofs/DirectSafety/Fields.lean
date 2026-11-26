@@ -67,7 +67,7 @@ The run starts at a genesis built from deposits. -/
 theorem _root_.EthLib.Consensus.Run.pubkeysDistinct {g a : ForkedBeaconState preset}
     (run : Run config checks g a) (genesis : Genesis config checks g) :
     PubkeysDistinct a.state := by
-  obtain ⟨_, _, _, initialized⟩ := genesis
+  obtain ⟨_, _, _, _, initialized⟩ := genesis
   simpa [PubkeysDistinct, validatorKeys] using
     (validatorKeys_prefix_and_distinct_of_genesis_chainSteps initialized run.chainSteps).2
 
@@ -260,16 +260,13 @@ def FinalizationRule {g a : ForkedBeaconState preset} {run : Run config checks g
 
 /-- The keys that a test of the run counts hold two thirds of the active stake at its state.
 
-The keys stay distinct along the run, so each counts once.
-
-The run starts at a genesis built from deposits.
-
-The target is at most `high`.
-
-The stake floor covers epoch calls through the epoch after `high`. -/
+The keys stay distinct along the run, so each counts once. -/
 theorem quorum_count {g a : ForkedBeaconState preset} (run : Run config checks g a)
+    -- The run starts at a genesis built from deposits.
     (genesis : Genesis config checks g)
+    -- The stake floor covers epoch calls through the epoch after `high`.
     {high : Nat} (enough : EnoughStake run high) (call : QuorumCall run)
+    -- The target is at most `high`.
     (within : call.target.epoch.toNat ≤ high) :
     2 * Models.stake (effectiveWeight call.cached) (activeKeys call.cached) ≤
       3 * Models.stake (effectiveWeight call.cached) call.voters :=
@@ -524,30 +521,25 @@ private def EpochCall.ofSlot {g before after : ForkedBeaconState preset}
   weighedOk := weighedOk
   later := later
 
-/-- A slot step keeps the justification of the cached state, or it runs an epoch call.
-
-The state after the step has the justification bits and checkpoints of `weighed`.
-
-Inside an epoch, `weighed` is the cached state and the epoch stays.
-
-At the end of an epoch the epoch moves on by one.
-
-There, in the first two epochs `weighed` is the cached state.
-
-Later, justification takes the cached state to `weighed`. -/
+/-- A slot step keeps the justification of the cached state, or it runs an epoch call. -/
 private theorem slot_step {before after : ForkedBeaconState preset}
     (ok : advanceSlotAcross config checks before = .ok after) :
     ∃ cached weighed : BeaconState preset before.fork,
       processSlot before.state = .ok cached ∧
+      -- The state after the step has the justification bits and checkpoints of `weighed`.
       after.state.justificationBits = weighed.justificationBits ∧
       after.state.previousJustifiedCheckpoint = weighed.previousJustifiedCheckpoint ∧
       after.state.currentJustifiedCheckpoint = weighed.currentJustifiedCheckpoint ∧
       after.state.finalizedCheckpoint = weighed.finalizedCheckpoint ∧
+      -- Inside an epoch, `weighed` is the cached state and the epoch stays.
       ((weighed = cached ∧
           (getCurrentEpoch after.state).toNat = (getCurrentEpoch before.state).toNat) ∨
+        -- At the end of an epoch the epoch moves on by one.
         ((before.state.slot.toNat + 1) % preset.SLOTS_PER_EPOCH.toNat = 0 ∧
           (getCurrentEpoch after.state).toNat = (getCurrentEpoch before.state).toNat + 1 ∧
+          -- There, in the first two epochs `weighed` is the cached state.
           ((getCurrentEpoch cached ≤ GENESIS_EPOCH + 1 ∧ weighed = cached) ∨
+            -- Later, justification takes the cached state to `weighed`.
             (GENESIS_EPOCH + 1 < getCurrentEpoch cached ∧
               processJustificationAndFinalization cached = .ok weighed)))) := by
   obtain ⟨advanced, advancedOk, upgraded⟩ := bind_ok_iff.mp ok
@@ -590,7 +582,7 @@ private theorem run_bits {g a : ForkedBeaconState preset} (run : Run config chec
   -- Between epoch calls, each bit refers to the epoch one position further back.
   induction run generalizing i with
   | nil =>
-    obtain ⟨_, _, _, ok⟩ := genesis
+    obtain ⟨_, _, _, _, ok⟩ := genesis
     have bits := (initializeBeaconStateFromEth1_finality ok).1
     simp [bits] at set
   | @snoc before after pre step ih =>
@@ -672,7 +664,7 @@ private theorem run_zero {g a : ForkedBeaconState preset} (run : Run config chec
   -- Bit zero retains the current-target call and its source after checkpoint rotation.
   induction run with
   | nil =>
-    obtain ⟨_, _, _, ok⟩ := genesis
+    obtain ⟨_, _, _, _, ok⟩ := genesis
     simp [(initializeBeaconStateFromEth1_finality ok).1] at set
   | @snoc before after pre step ih =>
     have old (bits : after.state.justificationBits = before.state.justificationBits)
@@ -738,7 +730,7 @@ theorem justified_fields {g a : ForkedBeaconState preset} (run : Run config chec
     c = ⟨GENESIS_EPOCH, Vector.replicate 32 0⟩ ∨ Nonempty (JustificationHistory run c) := by
   induction run generalizing c with
   | nil =>
-    obtain ⟨_, _, _, ok⟩ := genesis
+    obtain ⟨_, _, _, _, ok⟩ := genesis
     have fields := initializeBeaconStateFromEth1_checkpoints ok
     exact .inl (field.elim (fun h => h.trans fields.2.1) (fun h => h.trans fields.2.2))
   | @snoc before after pre step ih =>
@@ -826,7 +818,7 @@ theorem finalized_field {g a : ForkedBeaconState preset} (run : Run config check
         FinalizationRule call a.state.finalizedCheckpoint := by
   induction run with
   | nil =>
-    obtain ⟨_, _, _, ok⟩ := genesis
+    obtain ⟨_, _, _, _, ok⟩ := genesis
     exact .inl (initializeBeaconStateFromEth1_finality ok).2
   | @snoc before after pre step ih =>
     have keep (same : after.state.finalizedCheckpoint = before.state.finalizedCheckpoint) :

@@ -17,25 +17,7 @@ import EthLib.Base.Proofs.Toolchain.JsonBasic
 
 A submission for the slot of a store replaces the entry of its builder, whatever the values.
 
-No other entry changes, and a submission for another slot changes nothing.
-
 The served bid holds the header, the value, the key and, from Deneb, the commitments of the bundle.
-
-A blinded body that carries the header of that bid unblinds with the payload of the submission.
-
-The JSON that the writer gives for a delivered payload reads back as that payload.
-
-So does the JSON of a received bid, whose reader takes the two timestamps out first.
-
-A filter with no field keeps every entry.
-
-A filter with only a slot keeps exactly the entries of that slot.
-
-A sort by value orders the payloads that it is given, and keeps them all.
-
-From Fulu, each entry of the listed validators names the proposer of its slot.
-
-That proposer is the one that the state gives once the slots of the transition reach that slot.
 -/
 
 @[expose] public section
@@ -188,6 +170,7 @@ theorem ofJson_toJson {entry : BidTraceV2WithTimestamp} {document : Lean.Json}
   have noMs₁ : "timestamp_ms" ∉ m.insert "timestamp" (int64Json entry.timestamp) := by
     rw [Std.TreeMap.Raw.mem_insert wf]
     simpa using noMs
+  -- The reader takes the two timestamps out first, which leaves the object of the bid.
   have first := erase_insert_equiv wf₁ noMs₁ (value := int64Json entry.timestampMs)
   have second :=
     Std.TreeMap.Raw.Equiv.erase (wf₂.erase (a := "timestamp_ms")) wf₁ first "timestamp"
@@ -493,7 +476,7 @@ theorem getValidatorRegistration_insert (registry : Registry)
 theorem getValidatorRegistration_insert_toHex (registry : Registry)
     (signed : SignedValidatorRegistrationV1) :
     getValidatorRegistration (registry.insert signed)
-        (some (Serialization.Ssz.toHex signed.message.pubkey.toArray)) = .found signed :=
+        (some (Serialization.Ssz.toHex ⟨signed.message.pubkey.toArray⟩)) = .found signed :=
   getValidatorRegistration_insert registry signed (Serialization.Ssz.parseHexBytes_toHex _)
 
 /-- After a registration passes and is kept, a request for its key gets 200 with it.
@@ -524,6 +507,27 @@ theorem getValidatorRegistration_notHeld {registry : Registry} {text : String}
     getValidatorRegistration registry (some text) = .notHeld ∧
       (getValidatorRegistration registry (some text)).status = none := by
   simp [getValidatorRegistration, spells, absent, RegistrationAnswer.status]
+
+/-! ## Block scoring -/
+
+/-- A bid value passes exactly when the balance difference is it plus the excluded withdrawals.
+
+All three are in Wei. -/
+theorem verifyBidValue_iff {payload : ExecutionPayload preset fork} {deneb : .dencun ≤ fork}
+    {feeRecipient : ExecutionAddress} {bidValue balanceDifference : U256} :
+    verifyBidValue payload deneb feeRecipient bidValue balanceDifference = true ↔
+      balanceDifference.toNat =
+        bidValue.toNat + excludedWithdrawals payload deneb feeRecipient := by
+  simp only [verifyBidValue, Bool.and_eq_true, decide_eq_true_eq, beq_iff_eq]
+  omega
+
+/-- With no Wei withdrawn to the fee recipient, a bid value passes exactly when it is the change. -/
+theorem verifyBidValue_of_excluded_eq_zero {payload : ExecutionPayload preset fork}
+    {deneb : .dencun ≤ fork} {feeRecipient : ExecutionAddress} {bidValue balanceDifference : U256}
+    (zero : excludedWithdrawals payload deneb feeRecipient = 0) :
+    verifyBidValue payload deneb feeRecipient bidValue balanceDifference = true ↔
+      balanceDifference = bidValue := by
+  rw [verifyBidValue_iff, zero, Nat.add_zero, BitVec.toNat_inj]
 
 end RelayApi
 
@@ -580,5 +584,23 @@ theorem SubmitBlockRequest.bid_unblind {request : SubmitBlockRequest preset fork
     rfl
   simp only [BlindedBeaconBlockBody.unblind, computed, carries, ↓reduceIte]
   exact ⟨_, rfl, rfl⟩
+
+/-- Before Deneb, the block scoring rule sets no condition on a submission. -/
+theorem SubmitBlockRequest.servable_of_lt_deneb (request : SubmitBlockRequest preset fork)
+    (balanceDifference : U256) (before : fork < .dencun) :
+    request.servable balanceDifference = true := by
+  have notDeneb : ¬.dencun ≤ fork := Nat.not_le_of_lt before
+  simp [SubmitBlockRequest.servable, notDeneb]
+
+/-- From Deneb, the block scoring rule lets a submission be served exactly when its value passes.
+
+The change of the proposer's fee recipient is then the value plus the withdrawals to it, in Wei. -/
+theorem SubmitBlockRequest.servable_iff {request : SubmitBlockRequest preset fork}
+    {balanceDifference : U256} (deneb : .dencun ≤ fork) :
+    request.servable balanceDifference = true ↔
+      balanceDifference.toNat = request.message.value.toNat +
+        RelayApi.excludedWithdrawals request.executionPayload deneb
+          request.message.proposerFeeRecipient := by
+  simp only [SubmitBlockRequest.servable, deneb, ↓reduceDIte, RelayApi.verifyBidValue_iff]
 
 end EthLib.Consensus

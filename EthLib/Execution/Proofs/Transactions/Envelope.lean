@@ -85,6 +85,11 @@ instance : LawfulCodec FeeMarketTransaction where
         rfl, y10, rfl, y11, rfl, rfl⟩ := h
       rfl
 
+/-- A versioned hash keeps the laws of the RLP string of its 32 bytes. -/
+instance : LawfulCodec Cryptography.Kzg.VersionedHash :=
+  .wrapper Cryptography.Kzg.VersionedHash.mk Cryptography.Kzg.VersionedHash.bytes
+    (fun _ => rfl) (fun _ => rfl)
+
 instance : LawfulCodec BlobTransaction where
   ofItem_toItem _ := Item.fields_bind_eq_ok.mpr
     ⟨_, rfl, rfl, by simp [Item.field_toItem, bind, Except.bind, pure, Except.pure]⟩
@@ -235,8 +240,8 @@ theorem decodeTransaction_eq_ok_iff (fork : Fork) (bytes : ByteArray) (t : Trans
 theorem encodeTransaction_injective {t u : Transaction} {bytes : ByteArray}
     (ht : encodeTransaction t = .ok bytes) (hu : encodeTransaction u = .ok bytes) : t = u := by
   -- The last fork has every kind, so it decodes both to the same transaction.
-  have := (decodeTransaction_encodeTransaction ht (Fork.le_hegota t.fork)).symm.trans
-    (decodeTransaction_encodeTransaction hu (Fork.le_hegota u.fork))
+  have := (decodeTransaction_encodeTransaction ht (Fork.le_last t.fork)).symm.trans
+    (decodeTransaction_encodeTransaction hu (Fork.le_last u.fork))
   cases this
   rfl
 

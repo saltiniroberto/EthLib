@@ -9,33 +9,20 @@ A walk up a hash chain that ends at an honest chain value started at the honest 
 
 Otherwise some step maps a value that is not honest to the next honest value.
 
-When the honest values form a chain, that step is a second preimage under the step at its position.
-
-The binding itself holds for any honest values, chain or not.
-
-A real step compresses, so second preimages exist.
-
-So the theorem names a search that returns one, and does not just assert one exists.
-
-- The search walks the chain from its start, one position at a time.
-- It returns the first position where a value that is not honest steps to the next honest value.
-- The honest walk runs into no such position.
-
 In WOTS+C, a signature reveals chain `i` at its digit `x_i`, and hides every value below.
 
 A forgery whose digit is lower walks up from that lower position.
 
 If it reaches the honest end, it starts at a hidden value, or it hits a second preimage.
-
-The statements hold for every step function, run in the identity monad.
-
-leanXMSS and leanSPHINCS both walk their chains with it.
 -/
 
 @[expose] public section
 
 namespace EthLib.Cryptography.Wots
 
+-- The statements hold for every step function, run in the identity monad.
+--
+-- leanXMSS and leanSPHINCS both walk their chains with it.
 variable {α : Type} {n : Nat} (step : Fin n → α → Id α)
 
 /-! ## The honest chain -/
@@ -52,18 +39,6 @@ theorem honestValue_succ (c : α) {k : Nat} (hk : k < n) :
     honestValue step c (k + 1) = (step ⟨k, hk⟩ (honestValue step c k)).run := by
   simp only [honestValue, hk, ↓reduceDIte]
 
-/-- A walk of `s + 1` steps is one step, then a walk of `s` steps from the next position. -/
-theorem chain_succ_run (start : Nat) :
-    ∀ (s : Nat) (h : start + (s + 1) ≤ n) (b : α), (chain step start (s + 1) h b).run
-      = (chain step (start + 1) s (by omega) (step ⟨start, by omega⟩ b).run).run
-  | 0, _, _ => rfl
-  | s + 1, h, b => by
-    rw [chain_succ, Id.run_bind, chain_succ_run start s (by omega) b, chain_succ, Id.run_bind]
-    -- The last step leaves `start + (s + 1)`, the same as `start + 1 + s`.
-    have hpos : (⟨start + (s + 1), by omega⟩ : Fin n) = ⟨start + 1 + s, by omega⟩ :=
-      Fin.ext (show start + (s + 1) = start + 1 + s by omega)
-    rw [hpos]
-
 /-- A walk from the honest value at `start` reaches the honest value `steps` positions up. -/
 theorem chain_honestValue (c : α) :
     ∀ (steps start : Nat) (h : start + steps ≤ n),
@@ -74,7 +49,11 @@ theorem chain_honestValue (c : α) :
     rw [chain_succ_run, ← honestValue_succ step c (by omega), chain_honestValue c s (start + 1),
       show start + 1 + s = start + (s + 1) by omega]
 
-/-! ## The search -/
+/-! ## The search
+
+A real step compresses, so second preimages exist.
+
+So the theorem names a search that returns one, and does not just assert one exists. -/
 
 /-- A value offered at position `pos` in place of the honest one. -/
 structure ChainPreimage (α : Type) where
@@ -90,6 +69,8 @@ def ChainPreimage.Valid (honest : Nat → α) (w : ChainPreimage α) : Prop :=
   ∃ h : w.pos < n, w.value ≠ honest w.pos ∧ (step ⟨w.pos, h⟩ w.value).run = honest (w.pos + 1)
 
 /-- The second preimage a walk from position `start` runs into, at the lowest position.
+
+The search walks the chain from its start, one position at a time.
 
 At each position, the walk applies the step to its value.
 
@@ -144,7 +125,13 @@ theorem findChainPreimage_honest [DecidableEq α] (c : α) :
 
 /-- Binding: a walk that reaches the honest value `steps` positions up started at the honest value.
 
-Otherwise the search finds a second preimage, valid by `findChainPreimage_valid`. -/
+Otherwise the search returns a second preimage, and whatever it returns is valid.
+
+When the honest values form a chain, the value it finds is a second preimage.
+
+It is a second preimage under the step at its position.
+
+The binding itself holds for any honest values, chain or not. -/
 theorem chain_binding [DecidableEq α] (honest : Nat → α) :
     ∀ (steps start : Nat) (h : start + steps ≤ n) (b : α),
       (chain step start steps h b).run = honest (start + steps) →

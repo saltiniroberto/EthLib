@@ -8,20 +8,11 @@ public import EthLib.Cryptography.Proofs.Merkle.Binding.Collision
 /-!
 # Proofs: VRF verification
 
-The two properties of a VRF that hold without assumptions on the hash.
-
-- Provability: an opening of an honest tree verifies, with the output of the secret there.
-- Uniqueness: two openings that verify at one index under one root give one output.
-  Otherwise the collision search returns a collision of Keccak-256.
-
-Uniqueness holds for every root, including one the holder built to cheat.
+Provability and uniqueness: the two properties of a VRF that need no model of the hash.
 
 The output also binds its index.
 
-- Index binding: two equal outputs come from one index and one secret.
-  Otherwise their two output inputs, which differ, are a collision of Keccak-256.
-
-The third property, pseudorandomness, needs a model of the hash and is not proved here.
+Pseudorandomness, the third property, needs such a model, and is not proved here.
 
 It could hold only for an honest tree: a holder that chooses its secrets can bias every output.
 
@@ -49,7 +40,9 @@ theorem verify_eq_some_iff {root : Digest} {i : UInt32} {o : Opening} {y : Diges
     verify root i o = some y ↔
       (Merkle.climb treeHash ⟨0, i.toNat⟩ (leafHash o.secret) o.path.toList).run = root ∧
         y = outputHash i o.secret := by
-  unfold verify
+  -- The Keccak-256 check reads its leaf and its output as the leaf and output hashes.
+  change (if (Merkle.climb treeHash ⟨0, i.toNat⟩ (leafHash o.secret) o.path.toList).run = root
+    then some (outputHash i o.secret) else none) = some y ↔ _
   by_cases hp :
       (Merkle.climb treeHash ⟨0, i.toNat⟩ (leafHash o.secret) o.path.toList).run = root <;>
     simp [hp, eq_comm]
@@ -66,56 +59,81 @@ theorem verify_opening (secrets : UInt32 → Digest) (i : UInt32) :
     verify (root secrets) i (opening secrets i) = some (outputHash i (secrets i)) := by
   refine verify_eq_some_iff.mpr ⟨?_, rfl⟩
   -- Leaf `i` of the tree commits to secret `i`.
-  have hleaf : leaves secrets i.toNat = leafHash (secrets i) := by simp [leaves]
+  let leaves := leafWith (m := Id) (fun x => pure (hash x)) secrets
+  have hleaf : leaves i.toNat = leafHash (secrets i) := by
+    simp only [leaves, leafWith, leafHash, UInt32.ofNat_toNat]
+    rfl
   show (Merkle.climb treeHash ⟨0, i.toNat⟩ (leafHash (secrets i))
-    (Merkle.path treeHash (m := Id) (leaves secrets) VRF_TREE_HEIGHT i.toNat).run.toList).run = _
+    (Merkle.path treeHash leaves VRF_TREE_HEIGHT i.toNat).run.toList).run = _
   rw [← hleaf]
-  exact Merkle.climb_path_root treeHash (leaves secrets) i.toNat_lt
+  exact Merkle.climb_path_root treeHash leaves i.toNat_lt
 
 /-! ## Uniqueness -/
 
+/-- Two different inputs with one hash under `H`. -/
+def IsHashCollisionWith (H : ByteArray → Digest) (p : ByteArray × ByteArray) : Prop :=
+  p.1 ≠ p.2 ∧ H p.1 = H p.2
+
 /-- Two different inputs with one Keccak-256 hash. -/
 def IsHashCollision (p : ByteArray × ByteArray) : Prop :=
-  p.1 ≠ p.2 ∧ hash p.1 = hash p.2
+  IsHashCollisionWith hash p
 
-/-- The Keccak-256 collision two openings at index `i` run into, if any.
+/-- The collision two openings at index `i` run into, with `H` in place of Keccak-256, if any.
 
 It is the two node inputs of the Merkle collision search, at the lowest level where one exists.
 
 With none, it is the two leaf inputs, if the secrets differ but their leaves are equal. -/
-def findHashCollision (i : UInt32) (o o' : Opening) : Option (ByteArray × ByteArray) :=
-  match Merkle.findCollision treeHash ⟨0, i.toNat⟩ (leafHash o.secret) (leafHash o'.secret)
-      o.path.toList o'.path.toList with
+def findHashCollisionWith (H : ByteArray → Digest) (i : UInt32) (o o' : Opening) :
+    Option (ByteArray × ByteArray) :=
+  match Merkle.findCollision (m := Id) (fun _ left right => pure (H (nodeInput left right)))
+      ⟨0, i.toNat⟩ (H (leafInput o.secret)) (H (leafInput o'.secret)) o.path.toList
+      o'.path.toList with
   | some c => some (nodeInput c.x.1 c.x.2, nodeInput c.y.1 c.y.2)
   | none =>
-    if o.secret ≠ o'.secret ∧ leafHash o.secret = leafHash o'.secret then
+    if o.secret ≠ o'.secret ∧ H (leafInput o.secret) = H (leafInput o'.secret) then
       some (leafInput o.secret, leafInput o'.secret)
     else none
 
-/-- A collision of the node hash is a collision of Keccak-256. -/
-theorem isHashCollision_of_collision {c : Merkle.Collision Digest} (h : c.Valid treeHash) :
-    IsHashCollision (nodeInput c.x.1 c.x.2, nodeInput c.y.1 c.y.2) := by
+/-- The Keccak-256 collision two openings at index `i` run into, if any. -/
+def findHashCollision (i : UInt32) (o o' : Opening) : Option (ByteArray × ByteArray) :=
+  findHashCollisionWith hash i o o'
+
+/-- A collision of the node hash with `H` gives two different node inputs with one hash. -/
+theorem nodeInput_collision_of_valid {H : ByteArray → Digest} {c : Merkle.Collision Digest}
+    (h : c.Valid fun _ left right => (pure (H (nodeInput left right)) : Id Digest)) :
+    IsHashCollisionWith H (nodeInput c.x.1 c.x.2, nodeInput c.y.1 c.y.2) := by
   obtain ⟨hne, heq⟩ := h
   refine ⟨fun he => hne ?_, heq⟩
   -- A node input determines its two children.
   obtain ⟨h1, h2⟩ := nodeInput_inj.mp he
   exact Prod.ext h1 h2
 
-/-- Every pair that the search returns is a collision of Keccak-256. -/
-theorem findHashCollision_valid {i : UInt32} {o o' : Opening} {p : ByteArray × ByteArray}
-    (h : findHashCollision i o o' = some p) : IsHashCollision p := by
-  unfold findHashCollision at h
+/-- A collision of the node hash is a collision of Keccak-256. -/
+theorem isHashCollision_of_collision {c : Merkle.Collision Digest} (h : c.Valid treeHash) :
+    IsHashCollision (nodeInput c.x.1 c.x.2, nodeInput c.y.1 c.y.2) :=
+  nodeInput_collision_of_valid (H := hash) h
+
+/-- Every pair that the search with `H` returns is two different inputs with one hash. -/
+theorem findHashCollisionWith_valid {H : ByteArray → Digest} {i : UInt32} {o o' : Opening}
+    {p : ByteArray × ByteArray} (h : findHashCollisionWith H i o o' = some p) :
+    IsHashCollisionWith H p := by
+  unfold findHashCollisionWith at h
   split at h
-  · -- A node collision, which `findCollision_valid` proves valid.
+  · -- A node collision, which the Merkle search proves valid.
     next c hc =>
     cases h
-    exact isHashCollision_of_collision (Merkle.findCollision_valid treeHash _ _ _ _ _ c hc).1
+    exact nodeInput_collision_of_valid (Merkle.findCollision_valid _ _ _ _ _ _ c hc).1
   · -- A leaf collision: a leaf input determines its secret, so the two inputs differ.
     split at h
     · next hleaf =>
       cases h
       exact ⟨fun he => hleaf.1 (leafInput_inj.mp he), hleaf.2⟩
     · cases h
+
+/-- Every pair that the search returns is a collision of Keccak-256. -/
+theorem findHashCollision_valid {i : UInt32} {o o' : Opening} {p : ByteArray × ByteArray}
+    (h : findHashCollision i o o' = some p) : IsHashCollision p :=
+  findHashCollisionWith_valid (H := hash) h
 
 /-! ## The output binds its index -/
 
@@ -148,23 +166,23 @@ theorem verify_index_binding {root root' : Digest} {i j : UInt32} (hij : i ≠ j
 
 /-- One opening compared with itself exposes no collision. -/
 theorem findHashCollision_self (i : UInt32) (o : Opening) : findHashCollision i o o = none := by
-  simp only [findHashCollision, Merkle.findCollision_self, ne_eq, not_true_eq_false, false_and,
-    ↓reduceIte]
+  simp only [findHashCollision, findHashCollisionWith, Merkle.findCollision_self, ne_eq,
+    not_true_eq_false, false_and, ↓reduceIte]
 
-/--
-Two openings that verify at one index under one root reveal one secret.
+/-- Two openings at index `i` whose leaves climb to one node with `H` reveal one secret.
 
-Otherwise the collision search returns a collision of Keccak-256.
--/
-theorem verify_secret_unique {root : Digest} {i : UInt32} {o o' : Opening} {y y' : Digest}
-    (h : verify root i o = some y) (h' : verify root i o' = some y') :
-    o.secret = o'.secret ∨ ∃ p, findHashCollision i o o' = some p ∧ IsHashCollision p := by
-  -- Both paths lead to the same root from the same index.
-  have hroot := (verify_eq_some_iff.mp h).1.trans (verify_eq_some_iff.mp h').1.symm
-  have binding := Merkle.climb_binding treeHash _ _ ⟨0, i.toNat⟩ _ _ (by simp) hroot
+Otherwise the collision search with `H` returns two different inputs with one hash. -/
+theorem secret_unique_of_climb_eq {H : ByteArray → Digest} {i : UInt32} {o o' : Opening}
+    (hroot : (Merkle.climb (m := Id) (fun _ left right => pure (H (nodeInput left right)))
+        ⟨0, i.toNat⟩ (H (leafInput o.secret)) o.path.toList).run =
+      (Merkle.climb (m := Id) (fun _ left right => pure (H (nodeInput left right)))
+        ⟨0, i.toNat⟩ (H (leafInput o'.secret)) o'.path.toList).run) :
+    o.secret = o'.secret ∨
+      ∃ p, findHashCollisionWith H i o o' = some p ∧ IsHashCollisionWith H p := by
+  have binding := Merkle.climb_binding _ _ _ ⟨0, i.toNat⟩ _ _ (by simp) hroot
   -- The search succeeds unless the secrets are equal.
-  have found : o.secret = o'.secret ∨ (findHashCollision i o o').isSome := by
-    unfold findHashCollision
+  have found : o.secret = o'.secret ∨ (findHashCollisionWith H i o o').isSome := by
+    unfold findHashCollisionWith
     rcases binding with ⟨hleaf, -⟩ | hfound
     · -- Equal leaves come from equal secrets, or the leaf hash collides.
       by_cases hs : o.secret = o'.secret
@@ -178,15 +196,29 @@ theorem verify_secret_unique {root : Digest} {i : UInt32} {o o' : Opening} {y y'
       obtain ⟨c, hc⟩ := Option.isSome_iff_exists.mp hfound
       rw [hc]
       exact .inr rfl
-  -- What the search returns is a collision of Keccak-256.
+  -- What the search returns is a collision of the hash.
   refine found.imp id fun hsome => ?_
   obtain ⟨p, hp⟩ := Option.isSome_iff_exists.mp hsome
-  exact ⟨p, hp, findHashCollision_valid hp⟩
+  exact ⟨p, hp, findHashCollisionWith_valid hp⟩
+
+/--
+Two openings that verify at one index under one root reveal one secret.
+
+Otherwise the collision search returns a collision of Keccak-256.
+-/
+theorem verify_secret_unique {root : Digest} {i : UInt32} {o o' : Opening} {y y' : Digest}
+    (h : verify root i o = some y) (h' : verify root i o' = some y') :
+    o.secret = o'.secret ∨ ∃ p, findHashCollision i o o' = some p ∧ IsHashCollision p :=
+  -- Both paths lead to the same root from the same index.
+  secret_unique_of_climb_eq (H := hash)
+    ((verify_eq_some_iff.mp h).1.trans (verify_eq_some_iff.mp h').1.symm)
 
 /--
 Uniqueness: two openings that verify at one index under one root give one output.
 
 Otherwise the collision search returns a collision of Keccak-256.
+
+It holds for every root, including one the holder built to cheat.
 
 For a Merkle tree, the same property is usually called position binding.
 

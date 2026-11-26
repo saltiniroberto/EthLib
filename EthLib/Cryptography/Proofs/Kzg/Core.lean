@@ -60,7 +60,7 @@ theorem validateKzgG1Point_ok_valid {b : Bytes48} {p : Bls.G1}
 
 /-- `bytesToKzgCommitment` succeeds exactly on valid bytes, and returns them unchanged. -/
 theorem bytesToKzgCommitment_ok_iff {b : Bytes48} {c : KZGCommitment} :
-    bytesToKzgCommitment b = .ok c ↔ validateKzgG1 b ∧ c = b := by
+    bytesToKzgCommitment b = .ok c ↔ validateKzgG1 b ∧ c = ⟨b⟩ := by
   rw [bytesToKzgCommitment]
   split
   · rename_i h
@@ -79,7 +79,7 @@ theorem bytesToKzgCommitment_ok_iff {b : Bytes48} {c : KZGCommitment} :
 
 /-- `bytesToKzgProof` succeeds exactly on valid bytes, and returns them unchanged. -/
 theorem bytesToKzgProof_ok_iff {b : Bytes48} {p : KZGProof} :
-    bytesToKzgProof b = .ok p ↔ validateKzgG1 b ∧ p = b := by
+    bytesToKzgProof b = .ok p ↔ validateKzgG1 b ∧ p = ⟨b⟩ := by
   rw [bytesToKzgProof]
   split
   · rename_i h

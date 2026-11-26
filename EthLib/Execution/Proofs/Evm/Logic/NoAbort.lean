@@ -1,33 +1,16 @@
 module
 
+public import EthLib.Base.Proofs.ErrorsMeet
 public import EthLib.Execution.Proofs.Evm.Logic.RunMono
 
 /-!
 # Proofs: runs with less gas that never abort
 
-The facts here are for the meter of one counter of gas, the meter of every fork before Glamsterdam.
-
-At a later fork they hold of that meter, not of the meter of the fork.
-
 The loop of the interpreter returns an error only for an error that aborts the whole run.
 
-An error of the state aborts, and so does an opcode with no instruction.
+The steps here come from frames that are monotone in gas.
 
-An encoding error aborts too, and so does a fork with no specification.
-
-So does a number of the environment that no word holds, which an instruction would push.
-
-An instruction that runs out of gas or of stack halts its frame instead.
-
-So do a jump to an invalid destination and a write in a static frame.
-
-That halt is no error of the loop.
-
-A triple over steps from frames monotone in gas says how a run with less gas ends on success.
-
-With less gas, a step may still fail with any error.
-
-The steps here also ask that no step from a frame with less gas fails with an error that aborts.
+The steps here also ask that no step from such a frame with less gas aborts.
 
 Take a specification over these steps from a frame, with every gas from some bound on.
 
@@ -35,52 +18,51 @@ Then a run of the frame never aborts.
 
 With any gas, also below the bound, the loop of the interpreter returns a frame, never an error.
 
-Every instruction of `Logic/RunMono.lean` never aborts, except SSTORE, whose write may fail.
+The facts here are for the meter of one counter of gas, the meter of every fork before Glamsterdam.
+
+At a later fork they hold of that meter, not of the meter of the fork.
 -/
 
 @[expose] public section
 
 namespace EthLib.Execution.Evm.Logic
 
-open EthLib.Base (Fork U256)
+open EthLib.Base (ErrorsMeet Fork U256)
 open GasCosts
 
 variable {fork : Fork}
 
-/-! ## Results that do not abort -/
+/-! ## Results that do not abort
 
-/-- The result `r` is no error that aborts the run. -/
-def NoAbort {α : Type} (r : Except EvmError α) : Prop := ∀ e, r = .error e → e.aborts = false
+Every instruction of `Logic/RunMono.lean` never aborts, except SSTORE and EXTCODESIZE.
+
+The write of SSTORE may fail, and so may the read of code of EXTCODESIZE.
+-/
+
+/-- The result `r` is no error that aborts the whole run. -/
+def NoAbort {α : Type} (r : Except EvmError α) : Prop :=
+  -- The loop of the interpreter returns only such an error.
+  --
+  -- An error of the state aborts, and so does an opcode with no instruction.
+  --
+  -- An encoding error aborts too, and so does a fork with no specification.
+  --
+  -- So does a number from the environment that no word holds, which an instruction would push.
+  ErrorsMeet (·.aborts = false) r
 
 /-- A success does not abort. -/
 theorem NoAbort.ok {α : Type} (a : α) : NoAbort (.ok a : Except EvmError α) :=
-  fun _ h => by cases h
+  ErrorsMeet.ok a
 
 /-- A sequence of two results that do not abort does not abort. -/
 theorem NoAbort.bind {α β : Type} {x : Except EvmError α} {f : α → Except EvmError β}
-    (hx : NoAbort x) (hf : ∀ a, NoAbort (f a)) : NoAbort (x >>= f) := by
-  intro e h
-  cases hx' : x with
-  | error e' =>
-    rw [hx'] at h
-    cases h
-    exact hx _ hx'
-  | ok a =>
-    rw [hx'] at h
-    exact hf a e h
+    (hx : NoAbort x) (hf : ∀ a, NoAbort (f a)) : NoAbort (x >>= f) :=
+  ErrorsMeet.bind hx fun a _ => hf a
 
 /-- A map of a result that does not abort does not abort. -/
 theorem NoAbort.map {α β : Type} {x : Except EvmError α} (f : α → β) (hx : NoAbort x) :
-    NoAbort (f <$> x) := by
-  intro e h
-  cases hx' : x with
-  | error e' =>
-    rw [hx'] at h
-    cases h
-    exact hx _ hx'
-  | ok a =>
-    rw [hx'] at h
-    cases h
+    NoAbort (f <$> x) :=
+  ErrorsMeet.map f hx
 
 /-- A pop fails only with a stack underflow. -/
 theorem noAbort_popWord (evm : Evm fork Nat) : NoAbort (popWord evm) := by
@@ -190,10 +172,16 @@ theorem noAbort_return (evm : Evm fork Nat) : NoAbort (returnStep evm) :=
 /-- STOP never fails. -/
 theorem noAbort_stop (evm : Evm fork Nat) : NoAbort (stopStep evm) := NoAbort.ok _
 
-/-- An error that halts only its frame is no error that aborts. -/
+/-- An error that halts only its frame is no error that aborts.
+
+An instruction that runs out of gas or of stack halts its frame instead.
+
+So do a jump to an invalid destination and a write in a static frame.
+
+That halt is no error of the loop. -/
 theorem NoAbort.error {α : Type} {e : EvmError} (h : e.aborts = false) :
     NoAbort (.error e : Except EvmError α) :=
-  fun _ he => by cases he; exact h
+  ErrorsMeet.error h
 
 /-- A three-operand instruction of the stack fails only out of gas or of stack. -/
 theorem noAbort_ternaryOp (cost : Nat) (f : U256 → U256 → U256 → U256) (evm : Evm fork Nat) :
@@ -277,7 +265,11 @@ theorem noAbort_revert (evm : Evm fork Nat) : NoAbort (revertStep evm) :=
 def NoAbortLow (evm : Evm fork Nat) : Prop :=
   ∀ k low, evm = addGas k low → NoAbort (step fork low)
 
-/-- A step from a frame that is monotone in gas, and from which no step with less gas aborts. -/
+/-- A step from a frame that is monotone in gas, and from which no step with less gas aborts.
+
+A triple over steps monotone in gas says how a run with less gas ends on success.
+
+With less gas, a step may still fail with any error. -/
 def StepGA (fork : Fork) (evm after : Evm fork Nat) : Prop := StepG fork evm after ∧ NoAbortLow evm
 
 /-- A triple over the steps from frames that are monotone in gas and do not abort with less gas. -/

@@ -1,7 +1,8 @@
 module
 
 public import EthLib.Base.Bytes
-public import EthLib.Base.LittleEndian
+public import EthLib.Base.ByteOrder
+public import EthLib.Base.Word32
 public import EthLib.Cryptography.Hash.Pbkdf2
 
 /-!
@@ -11,13 +12,9 @@ public import EthLib.Cryptography.Hash.Pbkdf2
 
 The bounds on the parameters come from [RFC 7914 §2][params].
 
-The ROMix table stores byte arrays, so its payload is `128 * r * N` bytes.
-
 Passwords are secret, and EthLib makes no constant-time claim (SOUNDNESS.md A3).
 
 ROMix reads its table at indices that depend on the password.
-
-Parameters within the bounds can still ask for more memory or time than a machine has.
 
 SOUNDNESS.md D1 says what a caller must bound.
 
@@ -244,7 +241,7 @@ def blockMix (input : ByteArray) (r : Nat) : Except ScryptError ByteArray :=
 /-- `Integerify`: the last 64 bytes of a ROMix value as a little-endian integer, RFC 7914 §5. -/
 def integerify (r : Nat) (x : MixBlock r) : Nat :=
   -- `B[2 * r - 1]`, as the RFC defines `Integerify`.
-  (x.val.extract (128 * r - 64) (128 * r)).data.foldr (fun byte acc => 256 * acc + byte.toNat) 0
+  Base.ByteOrder.ofLE (x.val.extract (128 * r - 64) (128 * r)).data.toVector
 
 /-- Store each `X` before its BlockMix step, RFC 7914 §5, step 2. -/
 def romixFill (r : Nat) (positive : 0 < r) {n : Nat} : (count i : Nat) → i + count = n →
@@ -270,6 +267,8 @@ def romixRead (r : Nat) (positive : 0 < r) (n : Nat) (nonzero : 0 < n)
 /-- ROMix with its input size in the type, RFC 7914 §5. -/
 def romixCore (r : Nat) (positive : 0 < r) (n : Nat) (nonzero : 0 < n)
     (input : MixBlock r) : MixBlock r :=
+  -- The table stores byte arrays, so its payload is `128 * r * N` bytes.
+  --
   -- Steps 1 and 2: `X = B`, then `N` rounds that fill `V`; step 2 overwrites each slot first.
   let (table, x) := romixFill r positive n 0 (by omega) (Vector.replicate n input) input
   -- Steps 3 and 4: `N` rounds that read `V`, and `B' = X`.
@@ -305,6 +304,8 @@ def mixBlocks (input : ByteArray) (n r : Nat) :
     mixBlocks input n r count (offset + 128 * r) (out ++ mixed)
 
 /-- Expand, mix and compress the password, RFC 7914 §6, with the output length in bytes.
+
+Parameters within the bounds can still ask for more memory or time than a machine has.
 
 It holds `128 * r * N` bytes of table, `128 * r * p` bytes per buffer and `length` bytes of key.
 

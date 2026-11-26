@@ -5,32 +5,6 @@ module
 
 A tree of height `h` commits to `2^h` leaves with a single node, its root.
 
-Every node has a position: its level and its index within the level.
-
-- Level 0 holds the leaves, and level `h` holds the root.
-- The index counts the nodes of a level from the left, starting at 0.
-- A node above the leaves at index `j` has its children one level down, at `2j` and `2j + 1`.
-
-```text
-    X_{0,j} = leaves(j)
-    X_{level+1,j} = hash(level + 1, j, X_{level,2j}, X_{level,2j+1})
-```
-
-The node hash receives the position of the node it computes.
-
-- A tree that tweaks every hash by its position reads it, as hash-based signatures do.
-- A tree that hashes every node alike ignores it.
-
-The tree never hashes on its own.
-
-The path of a leaf holds the sibling of each of its ancestors, from the leaf up.
-
-Climbing from the leaf with its path recomputes the root, so a path proves its leaf.
-
-A build computes every node under a position once, and keeps them all.
-
-So one build gives both the node at the position and the path of each leaf below it.
-
 Every definition runs in a monad `m`, so the hash may be an oracle.
 
 A pure tree runs in `Id`.
@@ -47,7 +21,11 @@ The order of the hash calls is fixed, so a proof in the random oracle model can 
 
 namespace EthLib.Cryptography.Merkle
 
-/-! ## Positions -/
+/-! ## Positions
+
+Level 0 holds the leaves, and level `h` holds the root.
+
+A node above the leaves at index `j` has its children one level down, at `2j` and `2j + 1`. -/
 
 /-- The position of a node: its level, counted from the leaves, and its index within the level. -/
 @[ext] structure Position where
@@ -106,9 +84,17 @@ def isLeft (p : Position) : Bool :=
 
 end Position
 
+-- The tree never hashes on its own: the node hash is an argument.
 variable {m : Type → Type} [Monad m] {α : Type} (hash : Position → α → α → m α)
 
-/-! ## Nodes -/
+/-! ## Nodes
+
+```text
+    X_{0,j} = leaves(j)
+    X_{level+1,j} = hash(level + 1, j, X_{level,2j}, X_{level,2j+1})
+```
+
+The node hash receives the position of the node it computes. -/
 
 /-- The recursion behind a node: the node at level `level` and index `j`.
 
@@ -118,6 +104,9 @@ def node.go (leaves : Nat → m α) : (level j : Nat) → m α
   | level + 1, j => do
     let left ← node.go leaves level (2 * j)
     let right ← node.go leaves level (2 * j + 1)
+    -- A tree that tweaks every hash by its position reads it here, as hash-based signatures do.
+    --
+    -- A tree that hashes every node alike ignores the position.
     hash ⟨level + 1, j⟩ left right
 
 /-- The node at a position.
@@ -130,7 +119,11 @@ def node (leaves : Nat → m α) (p : Position) : m α :=
 def root (leaves : Nat → m α) (h : Nat) : m α :=
   node hash leaves ⟨h, 0⟩
 
-/-! ## Built trees -/
+/-! ## Built trees
+
+A build computes every node under a position once, and keeps them all.
+
+So one build gives both the node at the position and the path of each leaf below it. -/
 
 /-- A tree that holds the value of every node: a leaf, or a node above its two subtrees. -/
 inductive Built (β : Type) where
@@ -171,7 +164,9 @@ def Built.path : Built α → (n j : Nat) → Vector α n
     else (right.path n j).push left.value
   | .leaf value, n + 1, _ => Vector.replicate (n + 1) value
 
-/-! ## Paths -/
+/-! ## Paths
+
+The path of a leaf holds the sibling of each of its ancestors, from the leaf up. -/
 
 /-- The siblings of a node and of its next ancestors, `n` nodes from the bottom. -/
 def siblings (leaves : Nat → m α) : (p : Position) → (n : Nat) → m (Vector α n)
@@ -185,7 +180,9 @@ def siblings (leaves : Nat → m α) : (p : Position) → (n : Nat) → m (Vecto
 def path (leaves : Nat → m α) (h j : Nat) : m (Vector α h) :=
   siblings hash leaves ⟨0, j⟩ h
 
-/-! ## Climbing -/
+/-! ## Climbing
+
+Climbing from the leaf with its path recomputes the root, so a path proves its leaf. -/
 
 /-- The two children of a climb step, the left one first.
 

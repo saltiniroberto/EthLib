@@ -6,9 +6,11 @@ import EthLib.Consensus.Proofs.Transition.BalanceDrift
 /-!
 # Proofs: a block raises the validators plus the pending deposits by a bounded amount
 
-A block adds validators and pending deposits through three kinds of operations only.
+A block adds validators and pending deposits through three kinds of operations only:
 
-Before Heze a block carries deposits of the deposit contract.
+- Before Heze, a block carries deposits of the deposit contract.
+- From Electra, a block runs the deposit requests of [EIP-6110].
+- From Electra, a block runs consolidation requests.
 
 Before Electra each such deposit adds a validator or tops one up, so it adds at most one.
 
@@ -18,15 +20,13 @@ A deposit with a known key only adds a pending deposit.
 
 From Fulu a block must carry no such deposit, and from Gloas it applies none.
 
-From Electra a block also runs requests of the execution layer.
-
-In Electra and Fulu they come from the payload of the block itself.
-
-From Gloas they come from the payload of its parent.
-
-[EIP-6110] adds the deposit requests, and each adds at most one pending deposit.
+Each deposit request adds at most one pending deposit.
 
 A consolidation request adds at most one, when it switches a validator to compounding credentials.
+
+In Electra and Fulu the requests come from the payload of the block itself.
+
+From Gloas they come from the payload of its parent.
 
 A withdrawal request and every other operation of a block add no validator and no pending deposit.
 
@@ -48,6 +48,9 @@ variable {preset : Preset} {fork : Base.Fork} {config : Config} {checks : Signat
 
 /-- The number of deposits of the deposit contract that a block applies, before Gloas. -/
 def blockDepositCount (body : BeaconBlockBody preset fork) : Nat :=
+  -- Before Heze a block carries deposits of the deposit contract.
+  --
+  -- From Fulu a block must carry no such deposit, and from Gloas it applies none.
   if before : fork < .glamsterdam then
     (body.deposits (Nat.lt_trans before (by decide))).data.size
   else 0
@@ -271,18 +274,15 @@ private theorem foldlM_registryLoad_le {α ε : Type}
     (each : ∀ s x s', step s x = .ok s' → registryLoad s' ≤ registryLoad s + bound) :
     ∀ (items : List α) {state after : BeaconState preset fork},
       items.foldlM step state = .ok after →
-        registryLoad after ≤ registryLoad state + bound * items.length
-  | [], _, _, computed => by
-    simp only [List.foldlM, pure, Except.pure, Except.ok.injEq] at computed
-    subst computed
-    simp
-  | _ :: rest, _, _, computed => by
-    simp only [List.foldlM, bind_ok_iff] at computed
-    obtain ⟨_, first, tail⟩ := computed
-    have one := each _ _ _ first
-    have more := foldlM_registryLoad_le each rest tail
-    simp only [List.length_cons, Nat.mul_succ]
-    omega
+        registryLoad after ≤ registryLoad state + bound * items.length := by
+  intro items state after computed
+  have raised := foldlM_ok_weighted
+    (fun b c => registryLoad b ≤ registryLoad state + bound * c) (fun _ => 1)
+    (fun b x b' c held ok => by
+      have := each b x b' ok
+      rw [Nat.mul_add, Nat.mul_one]
+      omega) (c := 0) (by simp) computed
+  simpa using raised
 
 /-- A pending deposit added to the queue raises the count by one. -/
 private theorem registryLoad_addPendingDeposit {electra : .pectra ≤ fork}
@@ -321,6 +321,9 @@ private theorem applyDepositElectra_registryLoad_le {electra : .pectra ≤ fork}
     (computed : applyDepositElectra config checks state electra pubkey withdrawalCredentials
       amount signature = .ok after) :
     registryLoad after ≤ registryLoad state + 2 := by
+  -- A deposit with a new key adds a validator and a pending deposit, so at most two.
+  --
+  -- A deposit with a known key only adds a pending deposit.
   unfold applyDepositElectra at computed
   split at computed
   · simp only [bind_ok_iff] at computed
@@ -341,6 +344,7 @@ private theorem applyPendingDeposit_registryLoad_le (early : ¬ .pectra ≤ fork
     {deposit : PendingDeposit}
     (computed : applyPendingDeposit config checks state deposit = .ok after) :
     registryLoad after ≤ registryLoad state + 1 := by
+  -- A deposit adds a validator or tops one up.
   have size := (applyPendingDeposit_validators_size_le_and_mem computed).1
   simp only [registryLoad, early, ↓reduceDIte]
   omega
@@ -362,7 +366,9 @@ private theorem processDeposit_registryLoad_le {before : fork < .hegota} {deposi
     simp only [early, ↓reduceIte]
     exact applyPendingDeposit_registryLoad_le early applied
 
-/-- A deposit request raises the count by at most one. -/
+/-- A deposit request of [EIP-6110] adds at most one pending deposit, so at most one to the count.
+
+[EIP-6110]: https://eips.ethereum.org/EIPS/eip-6110#consensus-layer -/
 private theorem processDepositRequest_registryLoad_le {electra : .pectra ≤ fork}
     {request : DepositRequest}
     (computed : processDepositRequest state electra request = .ok after) :
@@ -407,6 +413,7 @@ private theorem processConsolidationRequest_registryLoad_le {electra : .pectra �
   rcases consolidationRequest_cases computed with
     rfl | ⟨_, _, _, switched⟩ | ⟨_, _, _, _, _, queued⟩
   · omega
+  -- It adds at most one when it switches a validator to compounding credentials.
   · exact switchToCompoundingValidator_registryLoad_le switched
   · exact Nat.le_trans (Nat.le_of_eq (loadKept_queueConsolidation queued).registryLoad_eq)
       (Nat.le_add_right _ _)

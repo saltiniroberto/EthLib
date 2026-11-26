@@ -16,21 +16,17 @@ From Electra an epoch adds validators, one for each pending deposit with a new k
 
 So the size of the registry alone can grow from one slot to the next.
 
-The validators plus the pending deposits cannot, as each case of a pending deposit shows.
+The validators plus the pending deposits cannot, as each case of a pending deposit shows:
 
-A deposit that adds a validator leaves the queue, so the count stays the same.
-
-A top-up leaves the queue and adds no validator, so the count falls by one.
-
-A postponed deposit leaves the queue and enters it again at its end.
+- A deposit that adds a validator leaves the queue, so the count stays the same.
+- A top-up leaves the queue and adds no validator, so the count falls by one.
+- A postponed deposit leaves the queue and enters it again at its end.
 
 No other step of a slot adds a validator or a pending deposit.
 
 So a slot never raises the count, at every fork.
 
-The upgrades between forks have their own statements.
-
-The blocks have their own statements.
+The upgrades between forks and the blocks have their own statements.
 -/
 
 @[expose] public section
@@ -119,20 +115,23 @@ theorem foldlM_validators_size_le {α ε : Type}
     {items : List α} {s t : BeaconState preset fork}
     (ok : items.foldlM action s = .ok t) :
     t.validators.data.size ≤ s.validators.data.size + items.length := by
-  induction items generalizing s with
-  | nil => cases ok; simp
-  | cons a rest ih =>
-    simp only [List.foldlM_cons, bind_ok_iff] at ok
-    obtain ⟨middle, first, last⟩ := ok
-    have one := bound s a middle first
-    have remaining := ih last
-    simp only [List.length_cons]
-    omega
+  simpa using foldlM_ok_weighted
+    (fun b c => b.validators.data.size ≤ s.validators.data.size + c) (fun _ => 1)
+    (fun b x b' c held step => by have := bound b x b' step; omega) (c := 0) (by simp) ok
 
 /-- The pending deposits of an epoch never raise the validators plus the pending deposits. -/
 theorem processPendingDeposits_registryLoad_le {electra : .pectra ≤ fork}
     (computed : processPendingDeposits config checks state electra = .ok after) :
     registryLoad after ≤ registryLoad state := by
+  -- From Electra an epoch adds a validator for each pending deposit with a new key that it applies.
+  --
+  -- So the size of the registry alone can grow from one slot to the next.
+  --
+  -- A deposit that adds a validator leaves the queue, so the count stays the same.
+  --
+  -- A top-up leaves the queue and adds no validator, so the count falls by one.
+  --
+  -- A postponed deposit leaves the queue and enters it again at its end.
   obtain ⟨read, rest, applied, postponed, next, pending, carried, queue, pushed, _, _, _, perm,
     applies, rfl⟩ := processPendingDeposits_applied computed
   have grown := foldlM_validators_size_le
@@ -225,6 +224,7 @@ theorem advanceSlot_registryLoad_le (computed : advanceSlot config checks state 
     registryLoad after ≤ registryLoad state := by
   obtain ⟨next, cached, epoched, _, cachedOk, epochedOk, rfl⟩ := advanceSlot_ok computed
   obtain ⟨_, _, _, _, rfl⟩ := processSlot_ok cachedOk
+  -- No step of a slot other than the pending deposits adds a validator or a pending deposit.
   have slotKept : LoadKept epoched { epoched with slot := next } := ⟨rfl, rfl⟩
   rw [LoadKept.registryLoad_eq slotKept]
   obtain ⟨_, epochedOk⟩ | ⟨_, rfl⟩ := epochIfLast_cases epochedOk

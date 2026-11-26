@@ -3,7 +3,9 @@ module
 public import EthLib.Networking.Rlpx.Frame
 public import EthLib.Networking.Proofs.Rlpx.Handshake
 public import EthLib.Cryptography.Proofs.Hash.Keccak.Hasher
-import EthLib.Base.Proofs.BigEndian
+import EthLib.Base.Proofs.ByteOrder
+import EthLib.Base.Proofs.CodeInjective
+import EthLib.Base.Proofs.Bytes
 
 /-!
 # Proofs: RLPx frames
@@ -25,11 +27,6 @@ open EthLib.Cryptography
 open EthLib.Cryptography.Hash.Keccak
 open EthLib.Cryptography.Secp256k1.Point
 
-/-- The bytes of a byte array, as a list, give back the byte array. -/
-private theorem ByteArray.mk_toArray_toList (b : ByteArray) :
-    (⟨b.data.toList.toArray⟩ : ByteArray) = b := by
-  simp
-
 theorem size_crypt (aesKey : Aes.Key .aes256) (counter : Aes.Block) (data : ByteArray) :
     (crypt aesKey counter data).size = data.size :=
   Aes.size_ctr _ _ _ _
@@ -39,20 +36,108 @@ theorem crypt_crypt (aesKey : Aes.Key .aes256) (counter : Aes.Block) (data : Byt
   Aes.ctr_ctr _ _ _ _
 
 theorem size_header (size : Nat) : (header size).size = BLOCK_SIZE := by
-  simp [header, HEADER_DATA, ByteArray.size, BLOCK_SIZE, Base.natToBytes_length]
+  simp [header, HEADER_DATA, ByteArray.size, BLOCK_SIZE]
 
 theorem readSize_header {size : Nat} (h : size < 2 ^ 24) :
     readSize (header size).data.toList = size := by
   -- The first 3 bytes of the header are the size, written on 3 bytes.
   rw [readSize, header, Array.toList_append, Array.toList_append, List.toList_toArray,
-    List.append_assoc, List.take_left' (Base.natToBytes_length 3 size)]
-  exact Base.bytesToNat_natToBytes_of_lt (lt_of_lt_of_eq h (by decide))
+    List.append_assoc,
+    List.take_left' (by simp : (Base.ByteOrder.toBE 3 size).toArray.toList.length = 3)]
+  exact Base.ByteOrder.ofBE_toBE_of_lt (lt_of_lt_of_eq h (by decide))
 
 theorem size_macBytes (h : Hasher256) : (macBytes h).size = BLOCK_SIZE := by
   simp [macBytes, ByteArray.size, BLOCK_SIZE]
 
 theorem le_paddedSize (size : Nat) : size ≤ paddedSize size := by
   unfold paddedSize; omega
+
+/-- The reader in its form on the list of the input's bytes.
+
+Each part of the frame is cut from that list, and the bytes after the frame are the rest of it. -/
+theorem readFrame_eq (st : FrameState) (input : ByteArray) :
+    readFrame st input =
+      let bytes := input.data.toList
+      if bytes.length < 2 * BLOCK_SIZE then .error (.tooShort (2 * BLOCK_SIZE) bytes.length)
+      else
+        let headerCt := bytes.take BLOCK_SIZE
+        let h1 := macStep st.macKey st.mac headerCt
+        if (bytes.drop BLOCK_SIZE).take BLOCK_SIZE ≠ (macDigest h1).toList then
+          .error .headerMacMismatch
+        else
+          let size := readSize (crypt st.aesKey st.counter ⟨headerCt.toArray⟩).data.toList
+          let n := paddedSize size
+          let needed := 2 * BLOCK_SIZE + n + BLOCK_SIZE
+          if bytes.length < needed then .error (.tooShort needed bytes.length)
+          else
+            let frameCt : ByteArray := ⟨((bytes.drop (2 * BLOCK_SIZE)).take n).toArray⟩
+            let h2 := frameMacStep st.macKey h1 frameCt
+            if (bytes.drop (2 * BLOCK_SIZE + n)).take BLOCK_SIZE ≠ (macDigest h2).toList then
+              .error .frameMacMismatch
+            else
+              let counter := advance 1 st.counter
+              let data := (crypt st.aesKey counter frameCt).data.toList.take size
+              .ok (⟨data.toArray⟩,
+                { st with counter := advance (n / BLOCK_SIZE) counter, mac := h2 },
+                ⟨(bytes.drop needed).toArray⟩) := by
+  -- The input's size is the length of its list of bytes.
+  have hsize : input.size = input.data.toList.length := by
+    simp only [ByteArray.size, Array.length_toList]
+  -- Each cut of the input is the same slice of its list of bytes.
+  have cut (i j : Nat) :
+      (input.extract i j).data.toList = (input.data.toList.drop i).take (j - i) := by
+    simp [ByteArray.data_extract, Array.toList_extract, List.take_drop]
+  have cut' (i j : Nat) :
+      input.extract i j = ⟨((input.data.toList.drop i).take (j - i)).toArray⟩ := by
+    rw [← cut]
+  -- The header, the first MAC, the frame ciphertext and the second MAC cut at their offsets.
+  have c0 : (input.extract 0 BLOCK_SIZE).data.toList = input.data.toList.take BLOCK_SIZE := by
+    rw [cut]; simp
+  have c1 : (input.extract BLOCK_SIZE (2 * BLOCK_SIZE)).data.toList =
+      (input.data.toList.drop BLOCK_SIZE).take BLOCK_SIZE := by
+    rw [cut]; congr 2
+  have c2 (n : Nat) : input.extract (2 * BLOCK_SIZE) (2 * BLOCK_SIZE + n) =
+      ⟨((input.data.toList.drop (2 * BLOCK_SIZE)).take n).toArray⟩ := by
+    rw [cut']; congr 4; omega
+  have c3 (n : Nat) :
+      (input.extract (2 * BLOCK_SIZE + n) (2 * BLOCK_SIZE + n + BLOCK_SIZE)).data.toList =
+        (input.data.toList.drop (2 * BLOCK_SIZE + n)).take BLOCK_SIZE := by
+    rw [cut]; congr 2; omega
+  -- The bytes after the frame are the rest of the list, as the cut stops at the size.
+  have c4 (k : Nat) :
+      input.extract k input.data.toList.length = ⟨(input.data.toList.drop k).toArray⟩ := by
+    rw [cut', List.take_of_length_le (by simp)]
+  -- The reader starts at offset 0, so each cut is the slice of the list at the same place.
+  unfold readFrame readFrameAt
+  simp only [Nat.zero_add, Nat.sub_zero, c0, c1, c2, c3, hsize]
+  -- An error stops the reader; a frame read in full leaves the rest of the list.
+  split_ifs <;> simp only [bind, Except.bind, c4, pure, Except.pure]
+
+/-- A cut of the bytes from an offset is the cut of the input at the shifted offsets. -/
+private theorem extract_extract_size (input : ByteArray) (pos a b : Nat) :
+    (input.extract pos input.size).extract a b = input.extract (pos + a) (pos + b) := by
+  -- The cut stops at the input's size either way.
+  rw [ByteArray.extract_extract]
+  ext1
+  simp only [ByteArray.data_extract, Array.extract_eq_extract_right, ByteArray.size_data]
+  omega
+
+/-- The reader at an offset reads the frame at the start of the input's bytes from there.
+
+It ends at the offset where those bytes end, less the bytes after the frame. -/
+theorem readFrameAt_eq (st : FrameState) (input : ByteArray) (pos : Nat) :
+    readFrameAt st input pos =
+      (readFrame st (input.extract pos input.size)).map
+        fun (data, st', rest) => (data, st', input.size - rest.size) := by
+  -- The bytes from the offset are as many as the input has left there.
+  have hB : (input.extract pos input.size).size = input.size - pos := by simp
+  -- Both sides then compare the same sizes and cut the same parts.
+  unfold readFrame readFrameAt
+  simp only [Nat.zero_add, Nat.add_zero, Nat.sub_zero, hB, extract_extract_size, Nat.add_assoc]
+  split_ifs <;> simp_all [bind, Except.bind, pure, Except.pure, Except.map]
+  -- A frame read in full ends inside the input, so the two end offsets agree.
+  simp only [BLOCK_SIZE] at *
+  omega
 
 /-- The five parts of a frame and the bytes after it, cut at their sizes. -/
 theorem split_frame {α : Type} (a b c d e : List α) (ha : a.length = BLOCK_SIZE)
@@ -108,12 +193,12 @@ theorem readFrame_writeFrame {st st' : FrameState} {frameData frame : ByteArray}
     F.data.toList (macBytes h2).data.toList rest.data.toList hHs (hM h1) (hM h2)
   have hheader : readSize (crypt st.aesKey st.counter ⟨H.data.toList.toArray⟩).data.toList =
       frameData.size := by
-    rw [ByteArray.mk_toArray_toList, hH, crypt_crypt, readSize_header (by omega)]
-  unfold readFrame
+    rw [Base.byteArray_mk_toArray_toList, hH, crypt_crypt, readSize_header (by omega)]
+  rw [readFrame_eq]
   simp only [ByteArray.data_append, Array.toList_append]
   simp only [s1, s2, s6]
   rw [hheader, ← hFs]
-  simp only [s3, s4, s5, ByteArray.mk_toArray_toList]
+  simp only [s3, s4, s5, Base.byteArray_mk_toArray_toList]
   have c1 : ¬ (2 * BLOCK_SIZE + F.data.toList.length + BLOCK_SIZE + rest.data.toList.length <
       2 * BLOCK_SIZE) := by omega
   have c2 : ¬ ((macBytes h1).data.toList ≠
@@ -145,7 +230,7 @@ theorem readFrame_eq_ok {st : FrameState} {input : ByteArray}
       2 * BLOCK_SIZE + n + BLOCK_SIZE ≤ b.length ∧
       (b.drop (2 * BLOCK_SIZE + n)).take BLOCK_SIZE =
         (macDigest (frameMacStep st.macKey h1 frameCt)).toList := by
-  unfold readFrame at h
+  rw [readFrame_eq] at h
   dsimp only at h
   intro b h1 header n frameCt
   split at h
@@ -362,7 +447,7 @@ theorem readFrame_changed {st st' : FrameState} {frameData f : ByteArray}
   -- So the reader reads the honest frame size, and a frame ciphertext of `n` bytes.
   have hsize' : readSize (crypt st.aesKey st.counter ⟨(g.take BLOCK_SIZE).toArray⟩).data.toList =
       frameData.size := by
-    rw [hhead, ByteArray.mk_toArray_toList, hsz]
+    rw [hhead, Base.byteArray_mk_toArray_toList, hsz]
   rw [ht1, hsize', ← hn, ht, macStep_absorb,
     List.drop_append_of_le_length (by rw [hglen]; omega),
     List.drop_append_of_le_length (by rw [hglen]; omega),
@@ -380,7 +465,7 @@ theorem readFrame_changed {st st' : FrameState} {frameData f : ByteArray}
   -- The honest frame MAC is the MAC of the honest frame MAC input.
   have hx2 : (macDigest h2).toList = macOf (frameMacInput st.macKey t n l) := by
     have hFl : F = ⟨((l.drop (2 * BLOCK_SIZE)).take n).toArray⟩ := by
-      rw [p3, ByteArray.mk_toArray_toList]
+      rw [p3, Base.byteArray_mk_toArray_toList]
     rw [hh2, hFl, hh1, ← p1, ht, macStep_absorb, frameMacStep_absorb, macDigest_absorb]
   rw [hx2] at hC
   have hn' : (H ++ macBytes h1 ++ F ++ macBytes h2).size - 3 * BLOCK_SIZE = n := by
@@ -413,9 +498,7 @@ theorem readFrame_changed {st st' : FrameState} {frameData f : ByteArray}
 /-- Two errors with one code come from one constructor. -/
 theorem FrameError.code_injective (e₁ e₂ : FrameError) (h : e₁.code = e₂.code) :
     e₁.ctorIdx = e₂.ctorIdx := by
-  -- Two distinct constructors have two distinct literal codes, which `decide` separates.
-  cases e₁ <;> cases e₂ <;>
-    first | rfl | (simp only [FrameError.code] at h; exact absurd h (by decide))
+  code_injective FrameError.code
 
 /-! ## The two sides of a session -/
 

@@ -3,6 +3,7 @@ module
 public import EthLib.Cryptography.Xmss.TweakableHash
 public import EthLib.Cryptography.Proofs.Xmss.Types
 public import EthLib.Cryptography.Proofs.Hash.Keccak.Lanes
+import EthLib.Cryptography.Proofs.Xmss.Address
 
 /-!
 # Proofs: the leanXMSS tweakable hash
@@ -33,26 +34,62 @@ theorem hash_bytes (input : Array UInt64) :
     (hash input).bytes = Hash.Keccak.keccak256 ⟨(Hash.Keccak.lanesBytes input).toArray⟩ :=
   Hash.Keccak.keccak256Lanes_lanesBytes input
 
-/-- A hash input is the lanes of the parameter, then of the address, then the payload. -/
-theorem thInput_eq_append (pp : PublicParam) (address : Address) (payload : Array UInt64) :
-    thInput pp address payload = pp.toArray ++ address.toArray ++ payload :=
+/-- The scheme's `H` is Keccak-256 of lanes over Keccak-f[1600], in the identity monad.
+
+With another permutation in place of Keccak-f[1600], the same sponge gives the hash of a model. -/
+theorem hashId_eq_keccak256LanesWith :
+    hashId = Hash.Keccak.keccak256LanesWith (fun S => pure (Hash.Keccak.keccakF S)) :=
   rfl
 
-/-- `P | A | M` determines `P`, `A` and `M`. -/
-theorem thInput_inj {pp pp' : PublicParam} {a a' : Address} {m m' : Array UInt64}
-    (h : thInput pp a m = thInput pp' a' m') : pp = pp' ∧ a = a' ∧ m = m' := by
+/-- A hash input is the lanes of the parameter, then of the address, then the payload. -/
+theorem thInput_eq_append (publicParam : PublicParam) (address : Address)
+    (payload : Array UInt64) :
+    thInput publicParam address payload
+      = publicParam.toArray ++ address.encode.toArray ++ payload :=
+  rfl
+
+/-- An input `P | A | M` has `4` lanes before its payload. -/
+theorem size_thInput (publicParam : PublicParam) (A : Address) (payload : Array UInt64) :
+    (thInput publicParam A payload).size = 4 + payload.size := by
+  rw [thInput_eq_append, Array.size_append, Array.size_append]
+  rfl
+
+/-- `Th(P, A, M)` with a hash `f` is the first half of `f` on the lanes `P | A | M`. -/
+theorem th_run (f : Array UInt64 → Lanes4) (publicParam : PublicParam)
+    (address : Address) (payload : Array UInt64) :
+    (th (pureHash f) publicParam address payload).run
+      = halfOf 0 (f (thInput publicParam address payload)) :=
+  rfl
+
+/-- The bytes of `P | A | M` are the 16 bytes of `P`, the 16 bytes of `A`, then those of `M`. -/
+theorem lanesBytes_thInput (publicParam : PublicParam) (address : Address)
+    (payload : Array UInt64) :
+    Hash.Keccak.lanesBytes (thInput publicParam address payload)
+      = publicParam.bytes.toList ++ address.encode.bytes.toList
+        ++ Hash.Keccak.lanesBytes payload := by
+  rw [thInput_eq_append, Hash.Keccak.lanesBytes_append, Hash.Keccak.lanesBytes_append,
+    Hash.Keccak.lanesBytes_lanes2, Hash.Keccak.lanesBytes_lanes2]
+
+/-- `P | A | M` determines `P`, the address whose encoding is `A`, and `M`. -/
+theorem thInput_inj {publicParam publicParam' : PublicParam} {a a' : Address} {m m' : Array UInt64}
+    (h : thInput publicParam a m = thInput publicParam' a' m') : publicParam = publicParam'
+      ∧ a = a' ∧ m = m' := by
   -- The first four lanes are the two fixed-size prefixes, the rest is the payload.
   obtain ⟨hpre, hm⟩ := Array.append_inj h rfl
   simp only [List.toArray, Array.mk.injEq, List.cons.injEq, and_true] at hpre
   obtain ⟨h1, h2, h3, h4⟩ := hpre
-  exact ⟨by cases pp; cases pp'; simp_all, by cases a; cases a'; simp_all, hm⟩
+  -- Distinct addresses have distinct encodings.
+  refine ⟨by cases publicParam; cases publicParam'; simp_all, Address.encode_injective ?_, hm⟩
+  generalize a.encode = x at *
+  generalize a'.encode = y at *
+  cases x; cases y; simp_all
 
 /-- A derivation with an empty suffix hashes `P | A | S`.
 
 The public parameter and the chain starts are halves of such derivations. -/
 theorem seedPrf_empty {m : Type → Type} (H : Array UInt64 → m Lanes4) (s : Seed)
-    (pp : PublicParam) (address : Address) :
-    seedPrf H s pp address #[] = H (thInput pp address s.toArray) := by
+    (publicParam : PublicParam) (address : Address) :
+    seedPrf H s publicParam address #[] = H (thInput publicParam address s.toArray) := by
   simp only [seedPrf, Array.append_empty]
 
 end EthLib.Cryptography.Xmss

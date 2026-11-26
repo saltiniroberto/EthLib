@@ -1,7 +1,7 @@
 module
 
 public import EthLib.Base.Bytes
-public import EthLib.Base.LittleEndian
+public import EthLib.Base.ByteOrder
 public import EthLib.Cryptography.Hash.Keccak
 public import EthLib.Cryptography.HashSig
 public import EthLib.Cryptography.Xmss.Constants
@@ -40,11 +40,6 @@ abbrev Digest := Lanes2
 It makes one key's hash functions independent of another's. -/
 abbrev PublicParam := Lanes2
 
-/-- The address `A` hashed after the public parameter: 16 bytes, as two lanes.
-
-It names the call site of one hash inside one key. -/
-abbrev Address := Lanes2
-
 /-- The randomizer `rho` under which a one-time key's digest is a codeword: 16 bytes.
 
 It is part of the signature. -/
@@ -78,13 +73,6 @@ inductive Layer where
 def Layer.toNat : Layer → Nat
   | .bottom => 0
   | .top => 1
-
-/-! ## Little-endian integers
-
-The conversions `LE_{8k}` and `LE^-1` of the paper are the shared little-endian ones.
--/
-
-export EthLib.Base (uintToBytes bytesToUint)
 
 /-! ## Hash inputs
 

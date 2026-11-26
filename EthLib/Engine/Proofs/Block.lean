@@ -5,6 +5,7 @@ public import EthLib.Engine.Block
 public import EthLib.Execution.Proofs.Blocks.TypedRoots
 public import EthLib.Execution.Proofs.Transactions.Envelope
 public import EthLib.Cryptography.Proofs.Hash.Sha256
+import EthLib.Base.Proofs.Uint64
 
 /-!
 # Proofs: a payload and its block determine each other
@@ -12,14 +13,6 @@ public import EthLib.Cryptography.Proofs.Hash.Sha256
 A payload whose block hash is the hash of its header is the payload of its block.
 
 A block of the shape that a payload gives comes back from its payload.
-
-The shape is fixed by EIP-3675 from Paris, with roots and a requests hash that match the lists.
-
-From Glamsterdam, the block access list of the method must be the RLP form of a block access list.
-
-The header then holds the Keccak-256 hash of its bytes, and the slot number of the method.
-
-Bytes that are not such a form give no block.
 -/
 
 public section
@@ -119,9 +112,6 @@ theorem decodeTransactions_of_encode {index : Nat} {bytes : List ByteArray}
           Except.pure]
 
 /-! ## Payload to block to payload -/
-
-private theorem toNat_toUInt64 {n : Nat} (h : n < 2 ^ 64) : n.toUInt64.toNat = n :=
-  UInt64.toNat_ofNat_of_lt' h
 
 private theorem pure_eq_ok {ε α : Type} {x y : α} : (pure x : Except ε α) = .ok y ↔ x = y := by
   simp [pure, Except.pure]
@@ -227,7 +217,7 @@ theorem toBlock_ofBlock (hParis : .paris ≤ fork)
     have hTime :
         BitVec.ofNat 256 b.header.timestamp.toNat.toUInt64.toNat = b.header.timestamp := by
       apply BitVec.eq_of_toNat_eq
-      rw [BitVec.toNat_ofNat, toNat_toUInt64 hT]
+      rw [BitVec.toNat_ofNat, Uint64.toNat_toUInt64 hT]
       exact Nat.mod_eq_of_lt (BitVec.isLt _)
     have hBase : ∀ x, (BitVec.ofNat 256 (b.header.baseFeePerGas x)).toNat =
         b.header.baseFeePerGas x := fun x => by
@@ -245,8 +235,8 @@ theorem toBlock_ofBlock (hParis : .paris ≤ fork)
         txs, ommers, ws⟩ := b
       dsimp only at *
       subst hOmmersHash hDifficulty hNonce
-      simp only [toNat_toUInt64 hN, toNat_toUInt64 hG, toNat_toUInt64 hU, hTime, hBase,
-        ← hRequests]
+      simp only [Uint64.toNat_toUInt64 hN, Uint64.toNat_toUInt64 hG, Uint64.toNat_toUInt64 hU,
+        hTime, hBase, ← hRequests]
     dsimp only at hHeader
     rw [hHeader]
     simp only [hHash, ite_true]

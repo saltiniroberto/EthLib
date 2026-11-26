@@ -12,13 +12,9 @@ Erasing keeps the answers and the final cache, and can only lower the number of 
 
 This file runs an adversary twice: with oracles that keep a state, and with oracles that keep none.
 
-Take an invariant of the state.
+Under an invariant of the state, the two runs agree in distribution.
 
-From a state that keeps it, each query of the first erases to the same query of the second.
-
-After each query of the first, the new state keeps the invariant.
-
-Then the two runs agree in distribution, and the second makes at most the first's hash calls.
+The second run makes at most the first's hash calls.
 
 The calls are counted by a counter in the oracle's state, as the query bounds do.
 -/
@@ -26,6 +22,7 @@ The calls are counted by a counter in the oracle's state, as the query bounds do
 @[expose] public section
 
 open OracleComp OracleSpec
+open EthLib.Cryptography.SufCma (hashCost)
 
 namespace XmssSecurity.Seeded
 
@@ -59,7 +56,7 @@ theorem run_costWorld_query_bind {α : Type} (input : OracleWorld.Domain)
     (cost : Nat) :
     (simulateQ W (liftM (OracleWorld.query input) >>= next)).run (cache, cost) =
       (romImpl input).run cache >>= fun step =>
-        (simulateQ W (next step.1)).run (step.2, cost + queryCost input) := by
+        (simulateQ W (next step.1)).run (step.2, cost + hashCost input) := by
   rw [simulateQ_bind, simulateQ_spec_query, StateT.run_bind, run_costQuery, bind_map_left]
 
 /-- **A computation makes at least the hash calls of the one it erases to.**
@@ -95,7 +92,8 @@ theorem Erases.costWorld_le {α : Type} {known : QueryCache HashSpec}
       have hrun : (romImpl (.inr input)).run cache = Pure.pure (answer, cache) :=
         QueryImpl.withCaching_run_some _ hc
       obtain ⟨x, hx, h1, h2, h3⟩ := ih cache hcache cost y hy
-      refine ⟨(x.1, x.2.1, x.2.2 + queryCost (.inr input)), ?_, h1, h2, h3.trans le_self_add⟩
+      refine ⟨(x.1, x.2.1, x.2.2 + hashCost (hs := HashSpec) (.inr input)), ?_, h1, h2,
+        h3.trans le_self_add⟩
       rw [run_costWorld_query_bind, hrun, pure_bind]
       exact mem_support_costWorld_shift _ _ _ _ hx
   | cached input answer hknown left right _ ih =>
@@ -176,9 +174,13 @@ theorem run_simulateQ_query_bind {α : Type} (q : spec.Domain)
   simp only [simulateQ_bind, simulateQ_spec_query, WriterT.run_bind']
   rfl
 
+-- Take an invariant of the state.
+--
+-- From a state that keeps it, each query of the first erases to the same query of the second.
 variable (hstep : ∀ q s, Inv s →
     Erases (worldKnown known) (forgetState <$> ((implL q).run s).run)
       (translateLog g <$> (implR q).run))
+  -- After each query of the first, the new state keeps the invariant.
   (hinv : ∀ q s cache, Inv s → known ≤ cache →
     ∀ x ∈ support ((simulateQ romImpl ((implL q).run s).run).run cache), Inv x.1.1.2)
 

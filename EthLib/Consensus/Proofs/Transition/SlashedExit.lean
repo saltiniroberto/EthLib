@@ -14,7 +14,7 @@ import EthLib.Consensus.Proofs.Transition.Withdrawals
 
 A slashing assigns an exit epoch, so every slashed validator has one.
 
-Each step before Gloas keeps it, and a slashed validator stays slashed.
+Each step keeps it, and a slashed validator stays slashed.
 
 Its withdrawable epoch never decreases.
 
@@ -147,20 +147,18 @@ theorem processConsolidationRequest_slashed_exit_assigned {f : Fork}
   · exact queueConsolidation_slashed_exit_assigned (getValidator_eq_ok_iff.mpr accepted.sourceAt)
       accepted.sourceStays queued held
 
-/-- Along a run from genesis before Gloas, every slashed validator has an assigned exit.
+/-- Along a run from genesis, every slashed validator has an assigned exit.
 
 The withdrawal delay must be positive, so a slashing assigns an exit. -/
 theorem run_slashed_exit_assigned {g x : ForkedBeaconState preset}
     (run : Run config checks g x)
     (genesis : Genesis (config := config) (checks := checks) g)
-    (activation : preset.MAX_EFFECTIVE_BALANCE ≤ preset.MIN_ACTIVATION_BALANCE)
-    (compounding : preset.MIN_ACTIVATION_BALANCE ≤ preset.MAX_EFFECTIVE_BALANCE_ELECTRA)
-    (early : x.fork < .glamsterdam)
+    (caps : CapOrder preset)
     (delay : 0 < config.MIN_VALIDATOR_WITHDRAWABILITY_DELAY.toNat)
     (i : Nat) (w : Validator) (found : x.state.validators.data[i]? = some w)
     (slashed : w.slashed = true) : w.exitEpoch ≠ FAR_FUTURE_EPOCH := by
-  have kept := (CapStep.run run activation compounding early).1
-  obtain ⟨_, _, _, initialized⟩ := genesis
+  have kept := (CapStep.run run caps).1
+  obtain ⟨_, _, _, _, initialized⟩ := genesis
   have clean := initializeBeaconStateFromEth1_unslashed initialized
   by_cases inside : i < g.state.validators.data.size
   · have before : g.state.validators.data[i]? = some g.state.validators.data[i] :=
@@ -172,23 +170,21 @@ theorem run_slashed_exit_assigned {g x : ForkedBeaconState preset}
 /-- Before the epoch sentinel, a slashed validator has an assigned activation epoch. -/
 theorem Run.slashed_activation_assigned {g x : ForkedBeaconState preset}
     (run : Run config checks g x) (genesis : Genesis (config := config) (checks := checks) g)
-    (activation : preset.MAX_EFFECTIVE_BALANCE ≤ preset.MIN_ACTIVATION_BALANCE)
-    (compounding : preset.MIN_ACTIVATION_BALANCE ≤ preset.MAX_EFFECTIVE_BALANCE_ELECTRA)
+    (caps : CapOrder preset)
     (aligned : MaxEffectiveBalancesAligned preset) (early : x.fork < .glamsterdam)
     (finite : getCurrentEpoch x.state < FAR_FUTURE_EPOCH)
     (i : Nat) (v : Validator) (found : x.state.validators.data[i]? = some v)
     (slashed : v.slashed = true) : v.activationEpoch ≠ FAR_FUTURE_EPOCH := by
   intro pending
-  have unslashed := ((run_unassigned_eligible_balance run genesis activation compounding
+  have unslashed := ((run_unassigned_eligible_balance run genesis caps
     aligned early finite) i v found pending).2.2
   simp [slashed] at unslashed
 
 /-- A newly slashed key that had exited at the start was not yet withdrawable there. -/
 theorem Run.newly_slashed_initial_exited_unwithdrawable {x y : ForkedBeaconState preset}
     (run : Run config checks x y)
-    (activation : preset.MAX_EFFECTIVE_BALANCE ≤ preset.MIN_ACTIVATION_BALANCE)
-    (compounding : preset.MIN_ACTIVATION_BALANCE ≤ preset.MAX_EFFECTIVE_BALANCE_ELECTRA)
-    (early : y.fork < .glamsterdam) (i : Nat) (v w : Validator)
+    (caps : CapOrder preset)
+    (i : Nat) (v w : Validator)
     (before : x.state.validators.data[i]? = some v)
     (after : y.state.validators.data[i]? = some w)
     (unslashed : v.slashed = false) (slashed : w.slashed = true)
@@ -196,7 +192,7 @@ theorem Run.newly_slashed_initial_exited_unwithdrawable {x y : ForkedBeaconState
     getCurrentEpoch x.state < v.withdrawableEpoch := by
   apply UInt64.not_le.mp
   intro withdrawn
-  have flag := ((CapStep.run run activation compounding early).1.retired
+  have flag := ((CapStep.run run caps).1.retired
     i v w before after exited unslashed withdrawn).1
   simp [slashed] at flag
 
@@ -205,9 +201,7 @@ theorem Run.newly_slashed_initial_exited_unwithdrawable {x y : ForkedBeaconState
 Its exit epoch is assigned. -/
 theorem Run.newly_slashed_withdrawableEpoch {x y : ForkedBeaconState preset}
     (run : Run config checks x y)
-    (activation : preset.MAX_EFFECTIVE_BALANCE ≤ preset.MIN_ACTIVATION_BALANCE)
-    (compounding : preset.MIN_ACTIVATION_BALANCE ≤ preset.MAX_EFFECTIVE_BALANCE_ELECTRA)
-    (early : y.fork < .glamsterdam)
+    (caps : CapOrder preset)
     (delay : 0 < config.MIN_VALIDATOR_WITHDRAWABILITY_DELAY.toNat)
     (i : Nat) (v w : Validator)
     (before : x.state.validators.data[i]? = some v)
@@ -216,7 +210,7 @@ theorem Run.newly_slashed_withdrawableEpoch {x y : ForkedBeaconState preset}
     w.exitEpoch ≠ FAR_FUTURE_EPOCH ∧
       (getCurrentEpoch x.state).toNat + preset.EPOCHS_PER_SLASHINGS_VECTOR.toNat ≤
         w.withdrawableEpoch.toNat :=
-  ((CapStep.run run activation compounding early).1.withdrawal i v w before after).2
+  ((CapStep.run run caps).1.withdrawal i v w before after).2
     delay unslashed slashed
 
 /-- Before the slashings stage, a slashed validator with an assigned exit keeps that exit.
@@ -262,9 +256,7 @@ theorem Run.slashed_withdrawableEpoch_mono_epoch
     {x outer : ForkedBeaconState preset} {s t : BeaconState preset outer.fork}
     {stages : List EpochStage}
     (run : Run config checks x outer)
-    (activation : preset.MAX_EFFECTIVE_BALANCE ≤ preset.MIN_ACTIVATION_BALANCE)
-    (compounding : preset.MIN_ACTIVATION_BALANCE ≤ preset.MAX_EFFECTIVE_BALANCE_ELECTRA)
-    (early : outer.fork < .glamsterdam)
+    (caps : CapOrder preset)
     (cached : processSlot outer.state = .ok s)
     (trace : EpochTrace (EpochStage.action config checks) stages s t)
     (i : Nat) (v w : Validator)
@@ -272,7 +264,7 @@ theorem Run.slashed_withdrawableEpoch_mono_epoch
     (slashed : v.slashed = true) (assigned : v.exitEpoch ≠ FAR_FUTURE_EPOCH) :
     w.slashed = true ∧ w.exitEpoch ≠ FAR_FUTURE_EPOCH ∧
       v.withdrawableEpoch ≤ w.withdrawableEpoch := by
-  have runStep := (CapStep.run run activation compounding early).1
+  have runStep := (CapStep.run run caps).1
   -- The cache step keeps the registry, the slot and the proposer lookahead.
   have cacheStep : CapStep config outer.state s := by
     obtain ⟨_, _, _, _, rfl⟩ := processSlot_ok cached
@@ -288,14 +280,13 @@ It stays slashed.
 A slashing sets the withdrawable epoch once, so a validator that is already slashed keeps it. -/
 theorem Run.slashed_withdrawable_eq {x y : ForkedBeaconState preset}
     (run : Run config checks x y)
-    (activation : preset.MAX_EFFECTIVE_BALANCE ≤ preset.MIN_ACTIVATION_BALANCE)
-    (compounding : preset.MIN_ACTIVATION_BALANCE ≤ preset.MAX_EFFECTIVE_BALANCE_ELECTRA)
-    (early : y.fork < .glamsterdam) (i : Nat) (v w : Validator)
+    (caps : CapOrder preset)
+    (i : Nat) (v w : Validator)
     (before : x.state.validators.data[i]? = some v)
     (after : y.state.validators.data[i]? = some w)
     (slashed : v.slashed = true) (assigned : v.exitEpoch ≠ FAR_FUTURE_EPOCH) :
     w.slashed = true ∧ w.withdrawableEpoch = v.withdrawableEpoch := by
-  obtain ⟨flag, -, same⟩ := ((CapStep.run run activation compounding early).1.withdrawal i v w
+  obtain ⟨flag, -, same⟩ := ((CapStep.run run caps).1.withdrawal i v w
     before after).1 slashed assigned
   exact ⟨flag, same⟩
 
@@ -315,28 +306,20 @@ private theorem slot_slashedFlag {m n : ForkedBeaconState preset}
 
 /-- From Electra, a key that a step newly slashes was activated by the epoch of its start.
 
-The key is unslashed at the start, or absent from the registry there.
-
-A step can assign an exit only to a key already activated by its starting epoch.
-
-A key that has begun to exit at the start is activated there, by `exited`.
-
-A block appends its new keys unassigned, so it does not append a slashed key.
-
-A slot step sets no flag. -/
+The key is unslashed at the start, or absent from the registry there. -/
 theorem Step.slashed_activated {a b : ForkedBeaconState preset} (step : Step config checks a b)
     (electra : .pectra ≤ a.fork) (early : b.fork < .glamsterdam)
-    (activation : preset.MAX_EFFECTIVE_BALANCE ≤ preset.MIN_ACTIVATION_BALANCE)
-    (compounding : preset.MIN_ACTIVATION_BALANCE ≤ preset.MAX_EFFECTIVE_BALANCE_ELECTRA)
+    (caps : CapOrder preset)
     (delay : 0 < config.MIN_VALIDATOR_WITHDRAWABILITY_DELAY.toNat)
     (finite : getCurrentEpoch a.state < FAR_FUTURE_EPOCH) (i : Nat)
+    -- A key that has begun to exit at the start is activated there.
     (exited : ∀ v, a.state.validators.data[i]? = some v → v.exitEpoch ≠ FAR_FUTURE_EPOCH →
       v.activationEpoch ≤ getCurrentEpoch a.state)
     (flip : (!(a.state.validators.data[i]?.map (·.slashed)).getD false &&
       (b.state.validators.data[i]?.map (·.slashed)).getD false) = true) :
     ∃ v, a.state.validators.data[i]? = some v ∧ v.activationEpoch ≠ FAR_FUTURE_EPOCH ∧
       v.activationEpoch.toNat ≤ (getCurrentEpoch a.state).toNat := by
-  have capped := (CapStep.run (Run.nil.snoc step) activation compounding early).1
+  have capped := (CapStep.run (Run.nil.snoc step) caps).1
   have chain := step.chainStep
   obtain ⟨before, after⟩ : (a.state.validators.data[i]?.map (·.slashed)).getD false = false ∧
       (b.state.validators.data[i]?.map (·.slashed)).getD false = true := by
@@ -346,12 +329,14 @@ theorem Step.slashed_activated {a b : ForkedBeaconState preset} (step : Step con
     | none => simp [found] at after
     | some w => exact ⟨w, rfl, by simpa [found] using after⟩
   cases step with
+  -- A slot step sets no flag.
   | slot ok =>
     have := slot_slashedFlag ok i
     simp only [slashedFlagAt, before, after] at this
     cases this
   | @block fork s t engine signed due ok =>
     cases found : s.validators.data[i]? with
+    -- A block appends its new keys unassigned, so it does not append a slashed key.
     | none =>
       have outside := Array.getElem?_eq_none_iff.mp found
       have assigned := capped.appended delay i w outside later slashed
@@ -371,7 +356,9 @@ theorem Step.slashed_activated {a b : ForkedBeaconState preset} (step : Step con
       have set := ((capped.withdrawal i v w found later).2 delay unslashed slashed).1
       have reached : v.activationEpoch ≤ getCurrentEpoch s := by
         by_cases unset : v.exitEpoch = FAR_FUTURE_EPOCH
+        -- A step can assign an exit only to a key already activated by its starting epoch.
         · exact chain.exit_assigned_activated electra found later unset set
+        -- A key that has begun to exit at the start is activated there, by the hypothesis.
         · exact exited v found unset
       have bound : (getCurrentEpoch s).toNat < FAR_FUTURE_EPOCH.toNat :=
         UInt64.lt_iff_toNat_lt.mp finite

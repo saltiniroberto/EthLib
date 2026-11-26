@@ -447,6 +447,141 @@
    "docstring":
    "A compressed `G2` point, decoded, checked in the subgroup, and compressed again."},
   {"summary":
+   "Whether 48 bytes are a valid public key, by key validation of the BLS draft, §2.5.",
+   "signature": "(pubkey: bytes) -> bool",
+   "operation": "EthLib.Cryptography.Bls.Exports.keyValidateExport",
+   "method": "bls_key_validate",
+   "errors":
+   [{"type": "EthLib.Cryptography.Bls.BlsError",
+     "codes":
+     [{"constructor": "emptyPubkeyList", "code": 1},
+      {"constructor": "badPubkeySize", "code": 2},
+      {"constructor": "invalidPubkey", "code": 3},
+      {"constructor": "invalidG1Point", "code": 4},
+      {"constructor": "invalidG2Point", "code": 5},
+      {"constructor": "pointAtInfinity", "code": 6},
+      {"constructor": "notInSubgroup", "code": 7},
+      {"constructor": "nonCanonicalFieldElement", "code": 8},
+      {"constructor": "notASquare", "code": 9},
+      {"constructor": "expandMessageOutputTooLong", "code": 10},
+      {"constructor": "expandMessageTooManyBlocks", "code": 11},
+      {"constructor": "emptySignatureList", "code": 12},
+      {"constructor": "invalidSecretKey", "code": 13},
+      {"constructor": "keyGenIkmTooShort", "code": 14},
+      {"constructor": "keyGenNoKey", "code": 15},
+      {"constructor": "keyGenHkdf", "code": 16}]}],
+   "error_class": "BlsError",
+   "docstring":
+   "Whether 48 bytes are a valid public key, by key validation of the BLS draft, §2.5.\n\nThe point at infinity, a point off the curve and a point outside the subgroup are not valid.\n\nAn input of another length is not a public key, so it is not valid either."},
+  {"summary":
+   "The public key of a secret key of 32 big-endian bytes, by `SkToPk` of the BLS draft, §2.4.",
+   "signature": "(secret_key: bytes) -> bytes",
+   "operation": "EthLib.Cryptography.Bls.Exports.skToPkExport",
+   "method": "bls_sk_to_pk",
+   "errors":
+   [{"type": "EthLib.Cryptography.Bls.BlsError",
+     "codes":
+     [{"constructor": "emptyPubkeyList", "code": 1},
+      {"constructor": "badPubkeySize", "code": 2},
+      {"constructor": "invalidPubkey", "code": 3},
+      {"constructor": "invalidG1Point", "code": 4},
+      {"constructor": "invalidG2Point", "code": 5},
+      {"constructor": "pointAtInfinity", "code": 6},
+      {"constructor": "notInSubgroup", "code": 7},
+      {"constructor": "nonCanonicalFieldElement", "code": 8},
+      {"constructor": "notASquare", "code": 9},
+      {"constructor": "expandMessageOutputTooLong", "code": 10},
+      {"constructor": "expandMessageTooManyBlocks", "code": 11},
+      {"constructor": "emptySignatureList", "code": 12},
+      {"constructor": "invalidSecretKey", "code": 13},
+      {"constructor": "keyGenIkmTooShort", "code": 14},
+      {"constructor": "keyGenNoKey", "code": 15},
+      {"constructor": "keyGenHkdf", "code": 16}]}],
+   "error_class": "BlsError",
+   "docstring":
+   "The public key of a secret key of 32 big-endian bytes, by `SkToPk` of the BLS draft, §2.4.\n\nThe key must lie in `[1, r - 1]`.\n\nThe key is secret, and this function does not run in constant time."},
+  {"summary":
+   "A compressed `G1` point, decoded without the subgroup check, and compressed again.",
+   "signature": "(point: bytes) -> bytes",
+   "operation": "EthLib.Cryptography.Bls.Exports.bytes48ToG1Export",
+   "method": "bls_bytes48_to_g1",
+   "errors":
+   [{"type": "EthLib.Cryptography.Bls.BlsError",
+     "codes":
+     [{"constructor": "emptyPubkeyList", "code": 1},
+      {"constructor": "badPubkeySize", "code": 2},
+      {"constructor": "invalidPubkey", "code": 3},
+      {"constructor": "invalidG1Point", "code": 4},
+      {"constructor": "invalidG2Point", "code": 5},
+      {"constructor": "pointAtInfinity", "code": 6},
+      {"constructor": "notInSubgroup", "code": 7},
+      {"constructor": "nonCanonicalFieldElement", "code": 8},
+      {"constructor": "notASquare", "code": 9},
+      {"constructor": "expandMessageOutputTooLong", "code": 10},
+      {"constructor": "expandMessageTooManyBlocks", "code": 11},
+      {"constructor": "emptySignatureList", "code": 12},
+      {"constructor": "invalidSecretKey", "code": 13},
+      {"constructor": "keyGenIkmTooShort", "code": 14},
+      {"constructor": "keyGenNoKey", "code": 15},
+      {"constructor": "keyGenHkdf", "code": 16}]}],
+   "error_class": "BlsError",
+   "docstring":
+   "A compressed `G1` point, decoded without the subgroup check, and compressed again.\n\nAn input that is not the 48-byte compressed encoding of a point of the curve is invalid.\n\nThe point at infinity is accepted only in its canonical encoding."},
+  {"summary":
+   "The sum of two compressed `G1` points of the curve, compressed, with no subgroup check.",
+   "signature": "(lhs: bytes, rhs: bytes) -> bytes",
+   "operation": "EthLib.Cryptography.Bls.Exports.g1AddExport",
+   "method": "bls_g1_add",
+   "errors":
+   [{"type": "EthLib.Cryptography.Bls.BlsError",
+     "codes":
+     [{"constructor": "emptyPubkeyList", "code": 1},
+      {"constructor": "badPubkeySize", "code": 2},
+      {"constructor": "invalidPubkey", "code": 3},
+      {"constructor": "invalidG1Point", "code": 4},
+      {"constructor": "invalidG2Point", "code": 5},
+      {"constructor": "pointAtInfinity", "code": 6},
+      {"constructor": "notInSubgroup", "code": 7},
+      {"constructor": "nonCanonicalFieldElement", "code": 8},
+      {"constructor": "notASquare", "code": 9},
+      {"constructor": "expandMessageOutputTooLong", "code": 10},
+      {"constructor": "expandMessageTooManyBlocks", "code": 11},
+      {"constructor": "emptySignatureList", "code": 12},
+      {"constructor": "invalidSecretKey", "code": 13},
+      {"constructor": "keyGenIkmTooShort", "code": 14},
+      {"constructor": "keyGenNoKey", "code": 15},
+      {"constructor": "keyGenHkdf", "code": 16}]}],
+   "error_class": "BlsError",
+   "docstring":
+   "The sum of two compressed `G1` points of the curve, compressed, with no subgroup check.\n\nAn input that is not the 48-byte compressed encoding of a point of the curve is invalid."},
+  {"summary":
+   "The negation of a compressed `G1` point of the curve, compressed, with no subgroup check.",
+   "signature": "(point: bytes) -> bytes",
+   "operation": "EthLib.Cryptography.Bls.Exports.g1NegExport",
+   "method": "bls_g1_neg",
+   "errors":
+   [{"type": "EthLib.Cryptography.Bls.BlsError",
+     "codes":
+     [{"constructor": "emptyPubkeyList", "code": 1},
+      {"constructor": "badPubkeySize", "code": 2},
+      {"constructor": "invalidPubkey", "code": 3},
+      {"constructor": "invalidG1Point", "code": 4},
+      {"constructor": "invalidG2Point", "code": 5},
+      {"constructor": "pointAtInfinity", "code": 6},
+      {"constructor": "notInSubgroup", "code": 7},
+      {"constructor": "nonCanonicalFieldElement", "code": 8},
+      {"constructor": "notASquare", "code": 9},
+      {"constructor": "expandMessageOutputTooLong", "code": 10},
+      {"constructor": "expandMessageTooManyBlocks", "code": 11},
+      {"constructor": "emptySignatureList", "code": 12},
+      {"constructor": "invalidSecretKey", "code": 13},
+      {"constructor": "keyGenIkmTooShort", "code": 14},
+      {"constructor": "keyGenNoKey", "code": 15},
+      {"constructor": "keyGenHkdf", "code": 16}]}],
+   "error_class": "BlsError",
+   "docstring":
+   "The negation of a compressed `G1` point of the curve, compressed, with no subgroup check.\n\nAn input that is not the 48-byte compressed encoding of a point of the curve is invalid."},
+  {"summary":
    "The message expansion of [RFC 9380 §5.3.1][xmd], with SHA-256 as `H`.",
    "signature": "(message: bytes, dst: bytes, length: int) -> bytes",
    "operation": "EthLib.Cryptography.Bls.HashToCurve.expandMessageXmd",
@@ -958,7 +1093,7 @@
       {"constructor": "badMessageSize", "code": 5}]}],
    "error_class": "XmssError",
    "docstring":
-   "`Sig(sk, idx, m)` over a hash `H`: sign a message at a leaf index.\n\nIt returns the signature and the updated key.\n\n1. The bottom key `idx` signs the message.\n2. Bottom tree `b = floor(idx / 2^16)` gives the key's path, and its top signature.\n   The tree comes from the key, or is built and kept.\n\nWhen the bottom search succeeds, the updated key keeps tree `b`.\n\nA failed bottom search returns the key unchanged.\n\nA key that key generation and signing give signs as the note's signer does, by a theorem.\n\n# Warning\n\nNever sign two different messages at one leaf index with one secret key.\n\nThe top key `b` signs only the root of bottom tree `b`.\n\nSo it signs one message, however many leaf indices of that tree are used.\n\nEach trial of a randomizer search hashes its input with `H`.\n\n# Errors\n\n- Either layer's one-time signature finds no codeword."},
+   "`Sig(sk, idx, m)` over a hash `H`: sign a message at a leaf index.\n\nIt returns the signature and the updated key.\n\nA key that key generation and signing give signs as the note's signer does, by a theorem.\n\n# Warning\n\nNever sign two different messages at one leaf index with one secret key.\n\nTheir two codewords would reveal every chain at the smaller of their two positions.\n\nThe top key `b` signs only the root of bottom tree `b`.\n\nSo it signs one message, however many leaf indices of that tree are used.\n\n# Errors\n\n- Either layer's one-time signature finds no codeword."},
   {"summary":
    "`Ver(pk, m, sigma)` over a hash `H`: whether a signature signs a message under a public key.",
    "signature": "(public_key: bytes, message: bytes, signature: bytes) -> bool",
@@ -974,8 +1109,9 @@
       {"constructor": "badMessageSize", "code": 5}]}],
    "error_class": "XmssError",
    "docstring":
-   "`Ver(pk, m, sigma)` over a hash `H`: whether a signature signs a message under a public key.\n\nA yes or a no, never a reason.\n\nWhich step rejected a well-formed signature carries no consensus meaning."},
-  {"summary": "The leaf index a 2404-byte signature carries.",
+   "`Ver(pk, m, sigma)` over a hash `H`: whether a signature signs a message under a public key.\n\nA yes or a no, never a reason.\n\nWhich step rejected a well-formed signature carries no consensus meaning.\n\nIt costs 186 permutations of Keccak-f[1600], whatever the message.\n\nThat fixed count keeps the aggregation circuit a fixed size."},
+  {"summary":
+   "The leaf index that a 2404-byte signature claims, read without verifying the signature.",
    "signature": "(signature: bytes) -> int",
    "operation": "EthLib.Cryptography.Xmss.signatureIndex",
    "method": "xmss_signature_index",
@@ -989,7 +1125,7 @@
       {"constructor": "badMessageSize", "code": 5}]}],
    "error_class": "XmssError",
    "docstring":
-   "The leaf index a 2404-byte signature carries.\n\nIt reads only the first 4 bytes.\n\nIt does not verify the signature, so the index is only what the signer claims.\n\nA caller can use it to require a given leaf before verifying.\n\nFor example, a proof of possession requires leaf 0."},
+   "The leaf index that a 2404-byte signature claims, read without verifying the signature.\n\nA caller can require a given leaf before verifying; a proof of possession requires leaf 0."},
   {"summary": "The public key `PK.seed | PK.root` of `SK.seed`.",
    "signature": "(seed: bytes) -> bytes",
    "operation": "EthLib.Cryptography.Sphincs.Exports.keyGenExport",
@@ -1019,7 +1155,7 @@
       {"constructor": "badMessageSize", "code": 5}]}],
    "error_class": "SphincsError",
    "docstring":
-   "`Sign(SK, M)`: sign a message.\n\n1. The randomizer and the message give the digest: the index and one leaf per FORS tree.\n2. FORS instance `idx` opens those leaves.\n3. Each layer's key signs what the layer below gives, with its path.\n\n# Warning\n\nNever sign more than `2^30` messages with one secret key.\n\n# Errors\n\n- A one-time signature finds no codeword."},
+   "`Sign(SK, M)`: sign a message.\n\n1. The randomizer and the message give the digest: the index and one leaf per FORS tree.\n2. The FORS instance at that index opens those leaves.\n3. Each layer's key signs what the layer below gives, with its path.\n\n# Warning\n\nNever sign more than `2^30` messages with one secret key.\n\nThe digest picks the FORS instance at random, and each reuse weakens it.\n\n# Errors\n\n- A one-time signature finds no codeword."},
   {"summary":
    "`Ver(PK, M, sigma)`: whether a signature signs a message under a public key.",
    "signature": "(public_key: bytes, message: bytes, signature: bytes) -> bool",
@@ -1071,7 +1207,7 @@
    "errors": [],
    "error_class": "EthashError",
    "docstring":
-   "The bytes in the cache of the epoch of a block: `c_size` of the Yellow Paper, J.2.\n\nThe search starts one hash below the linear size."},
+   "The bytes in the cache of the epoch of a block: `c_size` of the Yellow Paper, J.2.\n\nThe search for a prime count of items starts one hash, 64 bytes, below the linear size."},
   {"summary":
    "The bytes in the dataset of the epoch of a block: `d_size` of the Yellow Paper, J.2.",
    "signature": "(block_number: int) -> int",
@@ -1080,7 +1216,7 @@
    "errors": [],
    "error_class": "EthashError",
    "docstring":
-   "The bytes in the dataset of the epoch of a block: `d_size` of the Yellow Paper, J.2.\n\nThe search starts one mix below the linear size."},
+   "The bytes in the dataset of the epoch of a block: `d_size` of the Yellow Paper, J.2.\n\nThe search for a prime count of items starts one mix, 128 bytes, below the linear size."},
   {"summary":
    "The seed of the epoch of a block: `C_seedhash` of the Yellow Paper, J.3.1.",
    "signature": "(block_number: int) -> bytes",
@@ -1107,7 +1243,7 @@
    "errors": [],
    "error_class": "EthashError",
    "docstring":
-   "The dataset item at an index, from the cache: `E_datasetitem` of the Yellow Paper, J.3.3.\n\nThe mix starts as the Keccak-512 digest of a cache item whose first word is XORed with the index.\n\nEach of 256 parents is a cache item that the index and the mix choose, and FNV folds it in.\n\nThe item is the Keccak-512 digest of the last mix.\n\nThe appendix reads the cache by its size in bytes, and the specification by its count of items.\n\nThe definition follows the specification.\n\nThe index is below `2^32` while the dataset has fewer than `2^32` items."},
+   "The dataset item at an index, from the cache: `E_datasetitem` of the Yellow Paper, J.3.3.\n\nThe mix starts as the Keccak-512 digest of a cache item whose first word is XORed with the index.\n\nEach of 256 parents is a cache item that the index and the mix choose, and FNV folds it in.\n\nThe item is the Keccak-512 digest of the last mix.\n\nThe appendix reads the cache by its size in bytes, and the specification by its count of items.\n\nThe definition follows the Ethash specification of the Ethereum Foundation.\n\nThe index is below `2^32` while the dataset has fewer than `2^32` items."},
   {"summary":
    "The 32-byte mix digest and the 32-byte result of the proof-of-work function, from a cache.",
    "signature":
@@ -1251,7 +1387,7 @@
    "errors": [],
    "error_class": "VrfError",
    "docstring":
-   "An output mixed with randomness: the value a selection compares with its threshold.\n\nThe randomness must become known only after the root is registered.\n\nOtherwise the holder can choose secrets whose mixed values pass."},
+   "An output mixed with randomness: the value a selection compares with its threshold.\n\nThe randomness must become known only after the root is registered.\n\nOtherwise the holder can choose secrets whose mixed values pass.\n\nThe holder must not be able to bias that randomness either."},
   {"summary":
    "The four digest bytes of CRC-32: the highest power of each byte at its least significant bit.",
    "signature": "(data: bytes) -> bytes",
@@ -1497,7 +1633,7 @@
       {"constructor": "pbkdf2", "code": 7}]}],
    "error_class": "ScryptError",
    "docstring":
-   "Expand, mix and compress the password, RFC 7914 §6, with the output length in bytes.\n\nIt holds `128 * r * N` bytes of table, `128 * r * p` bytes per buffer and `length` bytes of key.\n\nSo a caller must bound `r * N`, `r * p` and `length` first, as a keystore gives them."},
+   "Expand, mix and compress the password, RFC 7914 §6, with the output length in bytes.\n\nParameters within the bounds can still ask for more memory or time than a machine has.\n\nIt holds `128 * r * N` bytes of table, `128 * r * p` bytes per buffer and `length` bytes of key.\n\nSo a caller must bound `r * N`, `r * p` and `length` first, as a keystore gives them."},
   {"summary":
    "X25519 scalar multiplication of two 32-byte inputs, RFC 7748 §5.",
    "signature": "(scalar: bytes, u: bytes) -> bytes",
@@ -1679,10 +1815,12 @@
       {"constructor": "badSignatureSize", "code": 12},
       {"constructor": "badRecoveryId", "code": 13},
       {"constructor": "badPrivateKeySize", "code": 14},
-      {"constructor": "privateKeyTooLarge", "code": 15}]}],
+      {"constructor": "privateKeyTooLarge", "code": 15},
+      {"constructor": "noRootOfParity", "code": 16},
+      {"constructor": "notInSubgroup", "code": 17}]}],
    "error_class": "Secp256k1Error",
    "docstring":
-   "Whether `(r, s)` is a valid signature on `hash` under the public key `q`, by SEC 1 v2 §4.1.4.\n\n`q` must be a valid public key, as SEC 1 v2 §3.2.2.1 checks: on the curve, and not `O`.\n\nA key from the decoder always is.\n\nThe key `O` would accept any `r` that some `u1 G` hits, so it is rejected here too."},
+   "Whether `(r, s)` is a valid signature on `hash` under the public key `q`, by SEC 1 v2 §4.1.4.\n\n`q` must be a valid public key, as SEC 1 v2 §3.2.2.1 checks: on the curve, and not `O`.\n\nA key from the decoder always is, and verification rejects any other."},
   {"summary": "The low-s rule of EIP-2: `s` is at most `n / 2`, rounded down.",
    "signature": "(signature: bytes) -> bool",
    "operation": "EthLib.Cryptography.Secp256k1.Ecdsa.isLowS",
@@ -1704,10 +1842,12 @@
       {"constructor": "badSignatureSize", "code": 12},
       {"constructor": "badRecoveryId", "code": 13},
       {"constructor": "badPrivateKeySize", "code": 14},
-      {"constructor": "privateKeyTooLarge", "code": 15}]}],
+      {"constructor": "privateKeyTooLarge", "code": 15},
+      {"constructor": "noRootOfParity", "code": 16},
+      {"constructor": "notInSubgroup", "code": 17}]}],
    "error_class": "Secp256k1Error",
    "docstring":
-   "The low-s rule of EIP-2: `s` is at most `n / 2`, rounded down.\n\nExactly one of `s` and `n - s` passes it, since `n` is odd."},
+   "The low-s rule of EIP-2: `s` is at most `n / 2`, rounded down.\n\nExactly one of `s` and `n - s` passes it, since `n` is odd.\n\nThe rule is not part of ECDSA, and the `ecrecover` precompile does not apply it.\n\nSo it is a separate test."},
   {"summary":
    "The public key whose signature on `hash` is `(r, s)`, by SEC 1 v2 §4.1.6.",
    "signature":
@@ -1731,7 +1871,9 @@
       {"constructor": "badSignatureSize", "code": 12},
       {"constructor": "badRecoveryId", "code": 13},
       {"constructor": "badPrivateKeySize", "code": 14},
-      {"constructor": "privateKeyTooLarge", "code": 15}]}],
+      {"constructor": "privateKeyTooLarge", "code": 15},
+      {"constructor": "noRootOfParity", "code": 16},
+      {"constructor": "notInSubgroup", "code": 17}]}],
    "error_class": "Secp256k1Error",
    "docstring":
    "The public key whose signature on `hash` is `(r, s)`, by SEC 1 v2 §4.1.6.\n\nThe recovery id gives the parity of the `y` of `R`."},
@@ -1757,7 +1899,9 @@
       {"constructor": "badSignatureSize", "code": 12},
       {"constructor": "badRecoveryId", "code": 13},
       {"constructor": "badPrivateKeySize", "code": 14},
-      {"constructor": "privateKeyTooLarge", "code": 15}]}],
+      {"constructor": "privateKeyTooLarge", "code": 15},
+      {"constructor": "noRootOfParity", "code": 16},
+      {"constructor": "notInSubgroup", "code": 17}]}],
    "error_class": "Secp256k1Error",
    "docstring":
    "The signature `(r, s)` of a 32-byte hash, with its recovery bit, by SEC 1 v2 §4.1.3 and RFC 6979.\n\nThe low-s rule of EIP-2 replaces `s` by `n - s` when `s > n / 2`.\n\nThat signature rebuilds `-R`, so the recovery bit flips with it.\n\nThe key is secret, and this function makes no constant-time claim."},
@@ -1783,7 +1927,9 @@
       {"constructor": "badSignatureSize", "code": 12},
       {"constructor": "badRecoveryId", "code": 13},
       {"constructor": "badPrivateKeySize", "code": 14},
-      {"constructor": "privateKeyTooLarge", "code": 15}]}],
+      {"constructor": "privateKeyTooLarge", "code": 15},
+      {"constructor": "noRootOfParity", "code": 16},
+      {"constructor": "notInSubgroup", "code": 17}]}],
    "error_class": "Secp256k1Error",
    "docstring":
    "The shared secret of the private key `sk` and the public key `pk`, as 32 big-endian bytes.\n\nThe public key must be on the curve and not `O`, as SEC 1 v2 §3.2.2.1 checks.\n\nStep 2 rejects the point `O`, which a zero key gives.\n\nThe key is secret, and this function makes no constant-time claim."},
@@ -1808,7 +1954,9 @@
       {"constructor": "badSignatureSize", "code": 12},
       {"constructor": "badRecoveryId", "code": 13},
       {"constructor": "badPrivateKeySize", "code": 14},
-      {"constructor": "privateKeyTooLarge", "code": 15}]}],
+      {"constructor": "privateKeyTooLarge", "code": 15},
+      {"constructor": "noRootOfParity", "code": 16},
+      {"constructor": "notInSubgroup", "code": 17}]}],
    "error_class": "Secp256k1Error",
    "docstring":
    "The 20-byte Ethereum address of a private key.\n\nIt is the last 20 bytes of the Keccak-256 hash of the 64 bytes of `d G`.\n\nThe private key is secret, and EthLib makes no constant-time claim (SOUNDNESS.md A3)."},
@@ -1827,7 +1975,7 @@
       {"constructor": "badSignatureSize", "code": 4}]}],
    "error_class": "Secp256r1Error",
    "docstring":
-   "Whether `(r, s)` is a valid signature on the hash integer `e` under the public key `q`.\n\nIt is the verifying operation of SEC 1 v2 §4.1.4.\n\n`e` acts mod `n`, like every scalar.\n\nThe signature is valid when `R = (e / s) G + (r / s) q` is not `O` and its `x` is `r` mod `n`."},
+   "Whether `(r, s)` is a valid signature on the hash integer `e` under the public key `q`.\n\nIt is the verifying operation of SEC 1 v2 §4.1.4, that of every curve of cofactor 1.\n\n`e` acts mod `n`, like every scalar.\n\nThe signature is valid when `R = (e / s) G + (r / s) q` is not `O` and its `x` is `r` mod `n`."},
   {"summary": "The record of a text form.",
    "signature": "(text: str) -> bytes",
    "operation": "EthLib.Networking.Enr.fromText",
@@ -1865,7 +2013,7 @@
    "errors": [],
    "error_class": "NoiseError",
    "docstring":
-   "Initialize the raw XX state with explicit private keys and prologue, Noise §5.3."},
+   "Initialize the raw XX state with explicit private keys and prologue, Noise §5.3.\n\nUse a fresh ephemeral private key for each handshake."},
   {"summary":
    "Write the next raw XX message and return the updated state, Noise §5.3.",
    "signature":
@@ -1965,7 +2113,7 @@
       {"constructor": "savedRemote", "code": 13}]}],
    "error_class": "NoiseError",
    "docstring":
-   "Encrypt with a cipher state and associated data, returning its next state, Noise §5.1."},
+   "Encrypt with a cipher state and associated data, returning its next state, Noise §5.1.\n\nDo not reuse a cipher state after a successful operation; use its returned state instead."},
   {"summary":
    "Authenticate and decrypt, advancing the nonce only on success, Noise §5.1.",
    "signature":
@@ -2120,7 +2268,7 @@
       {"constructor": "savedRemote", "code": 13}]}],
    "error_class": "NoiseError",
    "docstring":
-   "Return the authenticated peer and transport keys only after completion."},
+   "Return the authenticated peer and transport keys only after completion.\n\nIt does not verify the signature of the remote again.\n\nThe state carries the remote's extensions; use them only from this result."},
   {"summary": "The sequence number of a record.",
    "signature": "(record: bytes) -> int",
    "operation": "EthLib.Networking.Enr.Exports.seqExport",
@@ -2388,7 +2536,7 @@
    "docstring":
    "The session keys from the shared secret and the challenge that the recipient sent.\n\nThe initiator is node A, and the recipient is node B, which sent the challenge."},
   {"summary":
-   "The ID signature of node A: the 64 bytes `r || s` of an ECDSA signature of the hash.",
+   "The ID signature of node A: the 64 bytes `r || s` of an ECDSA signature of the SHA-256 hash.",
    "signature":
    "(static_key: bytes, challenge_data: bytes, ephemeral_pubkey: bytes, node_id_b: bytes) -> bytes",
    "operation": "EthLib.Networking.Discv5.idSign",
@@ -2396,7 +2544,7 @@
    "errors": [],
    "error_class": "Discv5Error",
    "docstring":
-   "The ID signature of node A: the 64 bytes `r || s` of an ECDSA signature of the hash.\n\nThe signature is deterministic, with the nonces of RFC 6979, and its `s` is at most `n / 2`."},
+   "The ID signature of node A: the 64 bytes `r || s` of an ECDSA signature of the SHA-256 hash.\n\nThe signature is deterministic, with the nonces of RFC 6979, and its `s` is at most `n / 2`."},
   {"summary":
    "Whether an ID signature of 64 bytes `r || s` verifies under the public key of node A.",
    "signature":
@@ -4117,7 +4265,6 @@
       {"constructor": "bidRepeatsParentHash", "code": 30},
       {"constructor": "bidWrongParentRoot", "code": 31},
       {"constructor": "bidWrongRandao", "code": 32},
-      {"constructor": "depositIndicesDiffer", "code": 33},
       {"constructor": "attestationTargetNotRecent", "code": 34},
       {"constructor": "attestationTargetNotSlotEpoch", "code": 35},
       {"constructor": "attestationTooEarly", "code": 36},
@@ -4806,7 +4953,6 @@
       {"constructor": "bidRepeatsParentHash", "code": 30},
       {"constructor": "bidWrongParentRoot", "code": 31},
       {"constructor": "bidWrongRandao", "code": 32},
-      {"constructor": "depositIndicesDiffer", "code": 33},
       {"constructor": "attestationTargetNotRecent", "code": 34},
       {"constructor": "attestationTargetNotSlotEpoch", "code": 35},
       {"constructor": "attestationTooEarly", "code": 36},
@@ -4989,7 +5135,6 @@
       {"constructor": "bidRepeatsParentHash", "code": 30},
       {"constructor": "bidWrongParentRoot", "code": 31},
       {"constructor": "bidWrongRandao", "code": 32},
-      {"constructor": "depositIndicesDiffer", "code": 33},
       {"constructor": "attestationTargetNotRecent", "code": 34},
       {"constructor": "attestationTargetNotSlotEpoch", "code": 35},
       {"constructor": "attestationTooEarly", "code": 36},
@@ -5085,7 +5230,6 @@
       {"constructor": "bidRepeatsParentHash", "code": 30},
       {"constructor": "bidWrongParentRoot", "code": 31},
       {"constructor": "bidWrongRandao", "code": 32},
-      {"constructor": "depositIndicesDiffer", "code": 33},
       {"constructor": "attestationTargetNotRecent", "code": 34},
       {"constructor": "attestationTargetNotSlotEpoch", "code": 35},
       {"constructor": "attestationTooEarly", "code": 36},
@@ -5496,7 +5640,7 @@
   {"summary":
    "From Gloas: the failed checks of a request that submits preferences, by name, in order.",
    "signature":
-   "(name: str, fork: str, config: dict[str, Any] | None, agreed: bytes, current_slot: int, pubkey: bytes, version_header: str | None, data: bytes) -> list[str]",
+   "(name: str, fork: str, config: dict[str, Any] | None, agreed: bytes, current_slot: int, state: bytes | None, pubkey: bytes, version_header: str | None, data: bytes) -> list[str]",
    "operation": "EthLib.Consensus.Exports.builderPreferencesFailuresExport",
    "method": "consensus_builder_preferences_failures",
    "errors":
@@ -5580,7 +5724,7 @@
       {"constructor": "notUtf8", "code": 76}]}],
    "error_class": "SszError",
    "docstring":
-   "From Gloas: the failed checks of a request that submits preferences, by name, in order.\n\nThe arguments are the name of the preset and of the configuration, the fork and replacements.\n\nThen come the agreed data, the builder's current slot, the key of the path and the version header.\n\nThen come the SSZ bytes of the request."},
+   "From Gloas: the failed checks of a request that submits preferences, by name, in order.\n\nThe arguments are the preset and configuration name, the fork, replacements and the agreed data.\n\nThen come the builder's current slot and state, the key of the path, the header and the request."},
   {"summary":
    "The default data that a proposer and a builder agree, from the builder's URL.",
    "signature": "(url: str) -> bytes",
@@ -5685,6 +5829,94 @@
    "error_class": "SszError",
    "docstring":
    "The SSZ bytes of the bid that a relay serves from a submission, under a key.\n\nThe arguments are the name of the preset, the fork, the SSZ bytes of the submission and the key."},
+  {"summary":
+   "From Deneb to Fulu: whether the value of a bid is the payment of its builder.",
+   "signature":
+   "(name: str, fork: str, payload: bytes, fee_recipient: bytes, bid_value: int, balance_difference: int) -> bool",
+   "operation": "EthLib.Consensus.Exports.relayVerifyBidValueExport",
+   "method": "consensus_relay_verify_bid_value",
+   "errors":
+   [{"type": "EthLib.Serialization.Ssz.Err",
+     "codes":
+     [{"constructor": "typeMismatch", "code": 1},
+      {"constructor": "overLimit", "code": 2},
+      {"constructor": "scope", "code": 3},
+      {"constructor": "scopeTooSmall", "code": 4},
+      {"constructor": "scopeUndivided", "code": 5},
+      {"constructor": "scopeWidthless", "code": 6},
+      {"constructor": "firstOffset", "code": 7},
+      {"constructor": "offsetUnordered", "code": 8},
+      {"constructor": "offsetPastScope", "code": 9},
+      {"constructor": "offsetUnaligned", "code": 10},
+      {"constructor": "offsetBelowTable", "code": 11},
+      {"constructor": "truncated", "code": 12},
+      {"constructor": "notABit", "code": 13},
+      {"constructor": "count", "code": 14},
+      {"constructor": "paddingBits", "code": 15},
+      {"constructor": "emptyEncoding", "code": 16},
+      {"constructor": "noDelimiter", "code": 17},
+      {"constructor": "trailingZeros", "code": 18},
+      {"constructor": "noSelector", "code": 19},
+      {"constructor": "unknownSelector", "code": 20},
+      {"constructor": "badDeclaration", "code": 21},
+      {"constructor": "notAPosition", "code": 22},
+      {"constructor": "notEntitled", "code": 23},
+      {"constructor": "undeclared", "code": 24},
+      {"constructor": "capacityNegative", "code": 25},
+      {"constructor": "layoutNotBits", "code": 26},
+      {"constructor": "notAGindex", "code": 27},
+      {"constructor": "rootHasNoBranch", "code": 28},
+      {"constructor": "emptyRequest", "code": 29},
+      {"constructor": "repeatedIndex", "code": 30},
+      {"constructor": "nestedIndex", "code": 31},
+      {"constructor": "branchLength", "code": 32},
+      {"constructor": "leafCount", "code": 33},
+      {"constructor": "proofLength", "code": 34},
+      {"constructor": "proofIncomplete", "code": 35},
+      {"constructor": "pathIntoMixin", "code": 36},
+      {"constructor": "pathIntoPacked", "code": 37},
+      {"constructor": "pathIntoGap", "code": 38},
+      {"constructor": "pathPastSpine", "code": 39},
+      {"constructor": "noParts", "code": 40},
+      {"constructor": "noPartsMixin", "code": 41},
+      {"constructor": "noMixin", "code": 42},
+      {"constructor": "noChunkCount", "code": 43},
+      {"constructor": "notSteppable", "code": 44},
+      {"constructor": "noSuchField", "code": 45},
+      {"constructor": "noSuchOption", "code": 46},
+      {"constructor": "noSuchPosition", "code": 47},
+      {"constructor": "merkleizeLimit", "code": 48},
+      {"constructor": "zeroTreeWidth", "code": 49},
+      {"constructor": "vectorEmpty", "code": 50},
+      {"constructor": "layoutWidth", "code": 51},
+      {"constructor": "layoutTrailingGap", "code": 52},
+      {"constructor": "layoutTooWide", "code": 53},
+      {"constructor": "layoutFieldCount", "code": 54},
+      {"constructor": "unionEmpty", "code": 55},
+      {"constructor": "unionSelectorRange", "code": 56},
+      {"constructor": "unionIncompatible", "code": 57},
+      {"constructor": "unionSelectorRepeated", "code": 58},
+      {"constructor": "uintWidth", "code": 59},
+      {"constructor": "offsetOverflow", "code": 60},
+      {"constructor": "containerEmpty", "code": 61},
+      {"constructor": "hexPrefix", "code": 62},
+      {"constructor": "hexDigits", "code": 63},
+      {"constructor": "hexLength", "code": 64},
+      {"constructor": "bitfieldPadding", "code": 65},
+      {"constructor": "bitfieldDelimiter", "code": 66},
+      {"constructor": "bitfieldTrailingZeros", "code": 67},
+      {"constructor": "uintRange", "code": 68},
+      {"constructor": "documentOverLimit", "code": 69},
+      {"constructor": "elementKind", "code": 70},
+      {"constructor": "noDefault", "code": 71},
+      {"constructor": "undeclaredField", "code": 72},
+      {"constructor": "missingField", "code": 73},
+      {"constructor": "structNotAnObject", "code": 74},
+      {"constructor": "undeclaredSelector", "code": 75},
+      {"constructor": "notUtf8", "code": 76}]}],
+   "error_class": "SszError",
+   "docstring":
+   "From Deneb to Fulu: whether the value of a bid is the payment of its builder.\n\nThe arguments are the preset, the fork, the SSZ bytes of the payload and the fee recipient.\n\nThen come the value of the bid and the change of the recipient's balance, both in Wei."},
   {"summary":
    "At Fulu only: the list of validators that a relay serves, as a `list` of `dict`.",
    "signature":
@@ -6631,7 +6863,6 @@
       {"constructor": "bidRepeatsParentHash", "code": 30},
       {"constructor": "bidWrongParentRoot", "code": 31},
       {"constructor": "bidWrongRandao", "code": 32},
-      {"constructor": "depositIndicesDiffer", "code": 33},
       {"constructor": "attestationTargetNotRecent", "code": 34},
       {"constructor": "attestationTargetNotSlotEpoch", "code": 35},
       {"constructor": "attestationTooEarly", "code": 36},
@@ -6727,7 +6958,6 @@
       {"constructor": "bidRepeatsParentHash", "code": 30},
       {"constructor": "bidWrongParentRoot", "code": 31},
       {"constructor": "bidWrongRandao", "code": 32},
-      {"constructor": "depositIndicesDiffer", "code": 33},
       {"constructor": "attestationTargetNotRecent", "code": 34},
       {"constructor": "attestationTargetNotSlotEpoch", "code": 35},
       {"constructor": "attestationTooEarly", "code": 36},
@@ -6823,7 +7053,6 @@
       {"constructor": "bidRepeatsParentHash", "code": 30},
       {"constructor": "bidWrongParentRoot", "code": 31},
       {"constructor": "bidWrongRandao", "code": 32},
-      {"constructor": "depositIndicesDiffer", "code": 33},
       {"constructor": "attestationTargetNotRecent", "code": 34},
       {"constructor": "attestationTargetNotSlotEpoch", "code": 35},
       {"constructor": "attestationTooEarly", "code": 36},
@@ -6919,7 +7148,6 @@
       {"constructor": "bidRepeatsParentHash", "code": 30},
       {"constructor": "bidWrongParentRoot", "code": 31},
       {"constructor": "bidWrongRandao", "code": 32},
-      {"constructor": "depositIndicesDiffer", "code": 33},
       {"constructor": "attestationTargetNotRecent", "code": 34},
       {"constructor": "attestationTargetNotSlotEpoch", "code": 35},
       {"constructor": "attestationTooEarly", "code": 36},
@@ -7014,7 +7242,6 @@
       {"constructor": "bidRepeatsParentHash", "code": 30},
       {"constructor": "bidWrongParentRoot", "code": 31},
       {"constructor": "bidWrongRandao", "code": 32},
-      {"constructor": "depositIndicesDiffer", "code": 33},
       {"constructor": "attestationTargetNotRecent", "code": 34},
       {"constructor": "attestationTargetNotSlotEpoch", "code": 35},
       {"constructor": "attestationTooEarly", "code": 36},
@@ -7110,7 +7337,6 @@
       {"constructor": "bidRepeatsParentHash", "code": 30},
       {"constructor": "bidWrongParentRoot", "code": 31},
       {"constructor": "bidWrongRandao", "code": 32},
-      {"constructor": "depositIndicesDiffer", "code": 33},
       {"constructor": "attestationTargetNotRecent", "code": 34},
       {"constructor": "attestationTargetNotSlotEpoch", "code": 35},
       {"constructor": "attestationTooEarly", "code": 36},
@@ -7206,7 +7432,6 @@
       {"constructor": "bidRepeatsParentHash", "code": 30},
       {"constructor": "bidWrongParentRoot", "code": 31},
       {"constructor": "bidWrongRandao", "code": 32},
-      {"constructor": "depositIndicesDiffer", "code": 33},
       {"constructor": "attestationTargetNotRecent", "code": 34},
       {"constructor": "attestationTargetNotSlotEpoch", "code": 35},
       {"constructor": "attestationTooEarly", "code": 36},
@@ -7302,7 +7527,6 @@
       {"constructor": "bidRepeatsParentHash", "code": 30},
       {"constructor": "bidWrongParentRoot", "code": 31},
       {"constructor": "bidWrongRandao", "code": 32},
-      {"constructor": "depositIndicesDiffer", "code": 33},
       {"constructor": "attestationTargetNotRecent", "code": 34},
       {"constructor": "attestationTargetNotSlotEpoch", "code": 35},
       {"constructor": "attestationTooEarly", "code": 36},
@@ -7398,7 +7622,6 @@
       {"constructor": "bidRepeatsParentHash", "code": 30},
       {"constructor": "bidWrongParentRoot", "code": 31},
       {"constructor": "bidWrongRandao", "code": 32},
-      {"constructor": "depositIndicesDiffer", "code": 33},
       {"constructor": "attestationTargetNotRecent", "code": 34},
       {"constructor": "attestationTargetNotSlotEpoch", "code": 35},
       {"constructor": "attestationTooEarly", "code": 36},
@@ -7494,7 +7717,6 @@
       {"constructor": "bidRepeatsParentHash", "code": 30},
       {"constructor": "bidWrongParentRoot", "code": 31},
       {"constructor": "bidWrongRandao", "code": 32},
-      {"constructor": "depositIndicesDiffer", "code": 33},
       {"constructor": "attestationTargetNotRecent", "code": 34},
       {"constructor": "attestationTargetNotSlotEpoch", "code": 35},
       {"constructor": "attestationTooEarly", "code": 36},
@@ -9263,7 +9485,6 @@
       {"constructor": "bidRepeatsParentHash", "code": 30},
       {"constructor": "bidWrongParentRoot", "code": 31},
       {"constructor": "bidWrongRandao", "code": 32},
-      {"constructor": "depositIndicesDiffer", "code": 33},
       {"constructor": "attestationTargetNotRecent", "code": 34},
       {"constructor": "attestationTargetNotSlotEpoch", "code": 35},
       {"constructor": "attestationTooEarly", "code": 36},
@@ -11116,7 +11337,9 @@
      "codes":
      [{"constructor": "notAtFork", "code": 301},
       {"constructor": "noRequest", "code": 302},
-      {"constructor": "topicNotAtFork", "code": 303}]}],
+      {"constructor": "topicNotAtFork", "code": 303},
+      {"constructor": "unknownDigest", "code": 305},
+      {"constructor": "unscheduledDigest", "code": 306}]}],
    "error_class": "ConsensusError",
    "docstring":
    "The smallest and the largest length of a request payload, as a pair.\n\nThe arguments are the name of the preset and the configuration, the fork and the protocol ID."},
@@ -11131,10 +11354,41 @@
      "codes":
      [{"constructor": "notAtFork", "code": 301},
       {"constructor": "noRequest", "code": 302},
-      {"constructor": "topicNotAtFork", "code": 303}]}],
+      {"constructor": "topicNotAtFork", "code": 303},
+      {"constructor": "unknownDigest", "code": 305},
+      {"constructor": "unscheduledDigest", "code": 306}]}],
    "error_class": "ConsensusError",
    "docstring":
    "The smallest and the largest length of the payload of a successful response chunk, as a pair.\n\nThe arguments are the name of the preset and the configuration, the fork of the chunk and the ID.\n\nThat fork is the one that the context bytes of the chunk name, and it must define the protocol."},
+  {"summary":
+   "One response chunk at the bounds of its fork, with that fork, the code, context and payload.",
+   "signature":
+   "(name: str, config: dict[str, Any] | None, genesis_validators_root: bytes, fork: str, protocol: str, data: bytes) -> tuple[str, int, bytes, bytes]",
+   "operation": "EthLib.Consensus.Exports.reqRespDecodeChunkExport",
+   "method": "consensus_reqresp_decode_chunk",
+   "errors":
+   [{"type": "EthLib.Consensus.BoundsError",
+     "codes":
+     [{"constructor": "notAtFork", "code": 301},
+      {"constructor": "noRequest", "code": 302},
+      {"constructor": "topicNotAtFork", "code": 303},
+      {"constructor": "unknownDigest", "code": 305},
+      {"constructor": "unscheduledDigest", "code": 306}]},
+    {"type": "EthLib.Networking.ReqResp.ReqRespError",
+     "codes":
+     [{"constructor": "varint", "code": 1},
+      {"constructor": "lengthOutOfBounds", "code": 2},
+      {"constructor": "lengthBelowMinimum", "code": 9},
+      {"constructor": "arith", "code": 3},
+      {"constructor": "compressedTooLong", "code": 4},
+      {"constructor": "frame", "code": 5},
+      {"constructor": "lengthMismatch", "code": 6},
+      {"constructor": "missingCode", "code": 7},
+      {"constructor": "contextTruncated", "code": 8},
+      {"constructor": "trailingBytes", "code": 10}]}],
+   "error_class": "ConsensusError",
+   "docstring":
+   "One response chunk at the bounds of its fork, with that fork, the code, context and payload.\n\nThe configuration of the name holds, with the replacements that a `dict` gives."},
   {"summary": "Whether a response is valid for its request, as a Boolean.",
    "signature":
    "(name: str, fork: str, protocol: str, request: bytes, items: list[tuple[int | bytes, ...]], committee: list[int], genesis_validators_root: bytes | None) -> bool",
@@ -11145,7 +11399,9 @@
      "codes":
      [{"constructor": "notAtFork", "code": 301},
       {"constructor": "noRequest", "code": 302},
-      {"constructor": "topicNotAtFork", "code": 303}]},
+      {"constructor": "topicNotAtFork", "code": 303},
+      {"constructor": "unknownDigest", "code": 305},
+      {"constructor": "unscheduledDigest", "code": 306}]},
     {"type": "EthLib.Serialization.Ssz.Err",
      "codes":
      [{"constructor": "typeMismatch", "code": 1},
@@ -11236,7 +11492,9 @@
      "codes":
      [{"constructor": "notAtFork", "code": 301},
       {"constructor": "noRequest", "code": 302},
-      {"constructor": "topicNotAtFork", "code": 303}]}],
+      {"constructor": "topicNotAtFork", "code": 303},
+      {"constructor": "unknownDigest", "code": 305},
+      {"constructor": "unscheduledDigest", "code": 306}]}],
    "error_class": "ConsensusError",
    "docstring":
    "The largest length of the payload of a gossip topic at a fork."},
@@ -11330,8 +11588,9 @@
    "docstring":
    "The most compressed bytes a reader accepts after a declared length `n`: `32 + n + n / 6`.\n\nIt is the worst-case size of a Snappy block of `n` bytes, from `snappy.cc` of `google/snappy`:\n<https://github.com/google/snappy/blob/32ded457c0b1fe78ceb8397632c416568d6714a0/snappy.cc#L218>\n\nThe sum is a 64-bit integer, so a value of 2^64 or more is an error."},
   {"summary":
-   "The SSZ bytes of a payload, given the smallest and the largest encoding of its SSZ type.",
-   "signature": "(type_min: int, type_bound: int, data: bytes) -> bytes",
+   "The SSZ bytes of a payload, given the payload cap and the encoding bounds of its SSZ type.",
+   "signature":
+   "(max_payload_size: int, type_min: int, type_bound: int, data: bytes) -> bytes",
    "operation": "EthLib.Networking.ReqResp.decodePayload",
    "method": "reqresp_decode_payload",
    "errors":
@@ -11349,11 +11608,11 @@
       {"constructor": "trailingBytes", "code": 10}]}],
    "error_class": "ReqRespError",
    "docstring":
-   "The SSZ bytes of a payload, given the smallest and the largest encoding of its SSZ type.\n\nThe caller deserializes the bytes, since it knows their SSZ type."},
+   "The SSZ bytes of a payload, given the payload cap and the encoding bounds of its SSZ type.\n\nThe caller deserializes the bytes, since it knows their SSZ type.\n\nThe reader of a payload stops at the chunk that completes the declared length.\n\nAny byte after that chunk makes the payload invalid."},
   {"summary":
    "One response chunk, given the number of context bytes that the method sends.",
    "signature":
-   "(context_bytes: int, type_min: int, type_bound: int, data: bytes) -> tuple[int, bytes, bytes]",
+   "(max_payload_size: int, context_bytes: int, type_min: int, type_bound: int, data: bytes) -> tuple[int, bytes, bytes]",
    "operation": "EthLib.Networking.ReqResp.decodeResponseChunk",
    "method": "reqresp_decode_response_chunk",
    "errors":
@@ -11371,7 +11630,7 @@
       {"constructor": "trailingBytes", "code": 10}]}],
    "error_class": "ReqRespError",
    "docstring":
-   "One response chunk, given the number of context bytes that the method sends.\n\nA success carries that many context bytes, and its payload has the bounds of the message type.\n\nAn error carries no context bytes, and its payload is an error message of at most 256 bytes."},
+   "One response chunk, given the number of context bytes that the method sends.\n\nA success carries that many context bytes, and its payload has the bounds of the message type.\n\nBoth payloads are also at most the payload cap.\n\nAn error carries no context bytes, and its payload is an error message of at most 256 bytes.\n\nA chunk is a response code, then context bytes, then a payload."},
   {"summary":
    "A payload that decodes to `data`: its length as a varint, then a stream that compresses.",
    "signature": "(ssz_bytes: bytes) -> bytes",
@@ -12678,7 +12937,7 @@
       {"constructor": "rlp", "code": 7}]}],
    "error_class": "Discv4Error",
    "docstring":
-   "What a node knows of the sender of a packet after it receives it, and what it sends back.\n\nThe arguments are the time, the sender's IP and UDP port, and what the node knows of it.\n\nThat is the hash of the node's last Ping there, and the time of the last Pong that carried it.\n\nThen come the packet and the expiration of the answers.\n\nLast come the node's record sequence number, its record and the nodes it gives for any target.\n\nThe record and the list of nodes are RLP bytes.\n\nThe result is the new hash and time, and the content of each packet that the node sends."},
+   "What a node knows of the sender of a packet after it receives it, and what it sends back.\n\nThe arguments are the time, the sender's IP and UDP port, and what the node knows of it.\n\nThat is the hash of the node's last Ping to it, and the time of the last Pong that carried it.\n\nThen come the packet and the expiration of the answers.\n\nLast come the node's record sequence number, its record and the nodes it gives for any target.\n\nThe record and the list of nodes are RLP bytes.\n\nThe result is the new hash and time, and the content of each packet that the node sends."},
   {"summary":
    "Whether an ENRResponse packet answers an ENRRequest packet that the node sent.",
    "signature": "(request: bytes, response: bytes) -> bool",
@@ -12866,7 +13125,7 @@
    "errors": [],
    "error_class": "ForkIdError",
    "docstring":
-   "The RLP schedule `[genesis-hash, genesis-time, merge-fork, forks]` of a chain.\n\nThe arguments are the genesis hash, the genesis time, the merge fork block or `None`, and the forks.\n\nEach fork is its name, its kind, 0 for a block and 1 for a time, and its block or time."},
+   "The RLP schedule `[genesis-hash, genesis-time, merge-fork, forks]` of a chain.\n\nThe arguments are the genesis hash, the genesis time, the merge fork block or `None`, and the forks.\n\nEach fork is its name, its kind, 0 for a block and 1 for a time, and its block or time.\n\nIt and the encoder of a fork identifier write RLP from typed Python values."},
   {"summary":
    "The RLP fork identifier `[FORK_HASH, FORK_NEXT]`, from its 4-byte hash and its next fork.",
    "signature": "(fork_hash: bytes, fork_next: int) -> bytes",
@@ -13306,7 +13565,7 @@
       {"constructor": "reservedUnskippable", "code": 109}]}],
    "error_class": "SnappyError",
    "docstring":
-   "The bytes a framed stream decodes to, or why it is not a valid stream."},
+   "The bytes a framed stream decodes to, or why it is not a valid stream.\n\nThe decoder reads the whole stream at once."},
   {"summary":
    "A framed stream that decodes to `data`: the stream identifier, then uncompressed chunks.",
    "signature": "(data: bytes) -> bytes",
@@ -13315,7 +13574,7 @@
    "errors": [],
    "error_class": null,
    "docstring":
-   "A framed stream that decodes to `data`: the stream identifier, then uncompressed chunks.\n\nIt is the inverse that proofs, tests and bindings use, not a compressor."},
+   "A framed stream that decodes to `data`: the stream identifier, then uncompressed chunks.\n\nIt is the inverse that proofs, tests and bindings use, not a compressor.\n\nThe encoder writes uncompressed chunks only."},
   {"summary":
    "A framed stream that decodes to `data`: the stream identifier, then its chunks.",
    "signature": "(data: bytes) -> bytes",
@@ -13325,13 +13584,14 @@
    "error_class": null,
    "docstring":
    "A framed stream that decodes to `data`: the stream identifier, then its chunks.\n\nA chunk is compressed when that makes it shorter."},
-  {"summary": "The masked CRC-32C that a data chunk stores (§3).",
+  {"summary": "The masked CRC-32C that a data chunk stores (§3), at its start.",
    "signature": "(data: bytes) -> int",
    "operation": "EthLib.Networking.Snappy.maskedCrc",
    "method": "snappy_masked_crc",
    "errors": [],
    "error_class": null,
-   "docstring": "The masked CRC-32C that a data chunk stores (§3)."},
+   "docstring":
+   "The masked CRC-32C that a data chunk stores (§3), at its start."},
   {"summary": "A 64-bit value as an unsigned protobuf varint.",
    "signature": "(value: int) -> bytes",
    "operation": "EthLib.Networking.Encoding.Varint.encode",
@@ -13354,7 +13614,7 @@
       {"constructor": "nonMinimal", "code": 5}]}],
    "error_class": "VarintError",
    "docstring":
-   "The 64-bit value a varint denotes, or why it is not a valid varint."},
+   "The 64-bit value a varint denotes, or why it is not a valid varint.\n\nA req/resp message starts with the length of its payload, written as a varint.\n\nThe consensus layer sets three rules for the length prefix:\n\n- It SHOULD be minimally encoded.\n- It MUST NOT exceed 10 bytes.\n- It MUST decode into a type that holds every `Uint64` value."},
   {"summary": "The unsigned varint of a value below `2^63`.",
    "signature": "(value: int) -> bytes",
    "operation": "EthLib.Networking.Encoding.Uvarint.Exports.encodeExport",
@@ -13829,7 +14089,7 @@
       {"constructor": "rangeTooLarge", "code": 11}]}],
    "error_class": "QuicError",
    "docstring":
-   "Select the shortest packet-number length bits, zero through three, under RFC 9000 §17.1.\n\nAny acknowledgement must be for this sender in the same connection and packet-number space.\n\nWith no acknowledgement, the selected bytes hold the full number.\n\nOtherwise the byte window exceeds twice the gap from the largest acknowledged number.\n\nAn acknowledged number that is not earlier raises code 10.\n\nA range needing more than four bytes raises code 11."},
+   "Select the shortest packet-number length bits, zero through three, under RFC 9000 §17.1.\n\nAny acknowledgement must be for this sender in the same connection and packet-number space.\n\nWith no acknowledgement, the selected bytes hold the full number.\n\nOtherwise the selected bytes hold more than twice the gap from the largest acknowledged number.\n\nAn acknowledged number that is not earlier raises code 10.\n\nA range needing more than four bytes raises code 11."},
   {"summary": "Write the low packet-number bytes (RFC 9000 §17.1).",
    "signature": "(width: int, number: int) -> bytes",
    "operation": "EthLib.Networking.Quic.Exports.packetNumberEncodeExport",
@@ -14178,10 +14438,11 @@
    "errors": [],
    "error_class": "GossipError",
    "docstring":
-   "The message ID of a message on a topic of a fork: the first 20 bytes of a SHA-256 digest.\n\nA missing topic or data field of the protobuf message is the empty byte string."},
+   "The message ID of a message on a topic of a fork: the first 20 bytes of a SHA-256 digest.\n\nA missing topic or data field of the protobuf message is the empty byte string.\n\nGossipsub, the consensus publish-subscribe protocol, drops a message whose ID is in its seen cache.\n\nSo a second copy of the same data on one topic gets the same ID and is dropped."},
   {"summary":
-   "The SSZ bytes of the data of a gossip message, given the size bound of its SSZ type.",
-   "signature": "(type_bound: int, data: bytes) -> bytes",
+   "The SSZ bytes of the data of a gossip message, given the payload cap and the size bound of its type.",
+   "signature":
+   "(max_payload_size: int, type_bound: int, data: bytes) -> bytes",
    "operation": "EthLib.Networking.Gossip.decodePayload",
    "method": "gossip_decode_payload",
    "errors":
@@ -14193,9 +14454,10 @@
       {"constructor": "payloadTooLong", "code": 4}]}],
    "error_class": "GossipError",
    "docstring":
-   "The SSZ bytes of the data of a gossip message, given the size bound of its SSZ type.\n\nThe caller deserializes the bytes, since it knows their SSZ type."},
-  {"summary": "The RPC that the bytes encode, under the `StrictNoSign` policy.",
-   "signature": "(data: bytes) -> dict[str, Any]",
+   "The SSZ bytes of the data of a gossip message, given the payload cap and the size bound of its type.\n\nThe caller deserializes the bytes, since it knows their SSZ type."},
+  {"summary":
+   "The RPC that the bytes encode, under the `StrictNoSign` policy and the size limit of the cap.",
+   "signature": "(max_payload_size: int, data: bytes) -> dict[str, Any]",
    "operation": "EthLib.Networking.Gossip.Exports.rpcDecodeExport",
    "method": "gossip_rpc_decode",
    "errors":
@@ -14205,10 +14467,12 @@
       {"constructor": "signed", "code": 102},
       {"constructor": "missingTopic", "code": 103},
       {"constructor": "wireType", "code": 104},
-      {"constructor": "utf8", "code": 105}]}],
+      {"constructor": "utf8", "code": 105},
+      {"constructor": "tooLong", "code": 106},
+      {"constructor": "arith", "code": 107}]}],
    "error_class": "GossipError",
    "docstring":
-   "The RPC that the bytes encode, under the `StrictNoSign` policy."},
+   "The RPC that the bytes encode, under the `StrictNoSign` policy and the size limit of the cap."},
   {"summary": "The bytes of an RPC.",
    "signature": "(rpc: dict[str, Any]) -> bytes",
    "operation": "EthLib.Networking.Gossip.Rpc.encode",
@@ -14235,7 +14499,7 @@
    "errors": [],
    "error_class": "GossipError",
    "docstring":
-   "What the router does with one RPC, with its client choices given as tables.\n\nThe arguments come in this order.\n\n- The name of a fork, whose rule gives the ID of every message, whatever the digest of its topic.\n- The gossipsub parameters, then the two durations in milliseconds that the router takes.\n- The standing of some peers; any other peer has every flag false.\n- The validation result of some message IDs; any other message is ignored.\n- The time in milliseconds, the peer that sent the RPC, the RPC and the state.\n\nIn each table, the first entry for a key counts.\n\nOne rule for every message fits a router whose topics all carry digests of forks with that rule.\n\nPhase 0 has one rule, and every fork from Altair on has another."},
+   "What the router does with one RPC, with its client choices given as tables.\n\nThe arguments come in this order.\n\n- The name of a fork, whose rule gives the ID of every message, whatever the digest of its topic.\n- The gossipsub parameters, then the two durations in milliseconds that the router takes.\n- The standing of some peers.\n- The validation result of some message IDs.\n- The time in milliseconds, the peer that sent the RPC, the RPC and the state.\n\nA peer outside the standings has every flag false.\n\nA message whose ID has no validation result is ignored.\n\nIn each table, the first entry for a key counts.\n\nOne rule for every message fits a router whose topics all carry digests of forks with that rule.\n\nPhase 0 has one rule, and every fork from Altair on has another."},
   {"summary":
    "The router after this node joins a topic, and the GRAFTs it sends.",
    "signature":
@@ -15165,6 +15429,23 @@
    "error_class": "ChainError",
    "docstring":
    "The name of the active fork of Hoodi at a block, or `None` when none is active.\n\nThe arguments are the block number and the timestamp."},
+  {"summary":
+   "The name of the active fork of Sepolia at a block, or `None` when none is active.",
+   "signature": "(number: int, timestamp: int) -> str | None",
+   "operation": "EthLib.Base.ChainConfig.Exports.sepoliaActiveForkExport",
+   "method": "sepolia_active_fork",
+   "errors": [],
+   "error_class": "ChainError",
+   "docstring":
+   "The name of the active fork of Sepolia at a block, or `None` when none is active.\n\nThe arguments are the block number and the timestamp."},
+  {"summary": "The configuration of a chain that EthLib holds, as a `dict`.",
+   "signature": "(name: str) -> dict[str, Any]",
+   "operation": "EthLib.Base.ChainConfig.Exports.chainConfigExport",
+   "method": "chain_config",
+   "errors": [],
+   "error_class": "ChainError",
+   "docstring":
+   "The configuration of a chain that EthLib holds, as a `dict`.\n\nThe argument is the name of the chain: `mainnet`, `hoodi` or `sepolia`."},
   {"summary":
    "The name of the active fork of a configured chain at a block, or `None` when none is active.",
    "signature":

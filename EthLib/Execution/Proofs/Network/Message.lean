@@ -7,6 +7,7 @@ public import EthLib.Execution.Proofs.Network.Receipts
 public import EthLib.Execution.Proofs.Network.Snap
 public import EthLib.Execution.Proofs.Network.Status
 public import EthLib.Execution.Proofs.Network.Transactions
+import EthLib.Base.Proofs.CodeInjective
 
 /-!
 # Proofs: the messages of the eth capability
@@ -15,27 +16,7 @@ Each message reads back from its ID and its RLP item, on every version that uses
 
 The decoder reads no other ID or item, so it takes no field more or less than the writer writes.
 
-Each transaction and header that the decoder reads keeps the bytes of its own encoding.
-
-The reader of an envelope reads only that envelope, with or without its part.
-
-eth/68 rejects BlockRangeUpdate.
-
-A version rejects every ID from its count of IDs on as unknown, but not the ID just below it.
-
-Every version rejects an announcement whose lists differ in length.
-
 A response answers a request only when it repeats the request ID.
-
-A BlockHeaders or a PooledTransactions that passes the check of its request answers it.
-
-A Cells response passes its check exactly when it repeats the request ID and its cells pass.
-
-A BlockAccessLists response passes exactly when it repeats the ID and its entries pass.
-
-It must hold one entry for each expected hash.
-
-Each entry must be the empty string, or its RLP encoding must hash to the expected hash there.
 -/
 
 @[expose] public section
@@ -137,25 +118,26 @@ theorem readWithPart_eq_ok_iff {α β : Type} [Codec α] [LawfulCodec α] [Codec
   · rintro ⟨hv, rfl⟩
     exact readWithPart_withPart i part x hv
 
-/-- A message has the form of a version.
-
-Status and announcements have the form of their version.
-
-An announcement has as many types and sizes as hashes.
-
-BlockRangeUpdate exists from eth/69 on, and the receipt messages carry their part from eth/70 on.
-
-The other messages have one form at every version. -/
+/-- A message has the form of a version. -/
 def FitsVersion (version : EthVersion) : Message → Prop
+  -- Status has the form of its version.
   | .status (.eth68 ..) => version = .eth68
   | .status (.eth69 ..) => version ≠ .eth68
+  -- BlockRangeUpdate exists from eth/69 on.
   | .blockRangeUpdate _ => EthVersion.eth69 ≤ version
+  -- An announcement has the form of its version.
+  --
+  -- It has as many types and sizes as hashes.
   | .newPooledTransactionHashes a@(.eth68 ..) => version < .eth72 ∧ a.lengthsAgree
   | .newPooledTransactionHashes a@(.eth72 ..) => version = .eth72 ∧ a.lengthsAgree
+  -- The receipt messages carry their part from eth/70 on.
   | .getReceipts _ k _ => (k.isSome ↔ EthVersion.eth70 ≤ version)
   | .receipts _ b _ => (b.isSome ↔ EthVersion.eth70 ≤ version)
+  -- The access list messages exist from eth/71 on.
   | .getBlockAccessLists .. | .blockAccessLists .. => EthVersion.eth71 ≤ version
+  -- The cell messages exist from eth/72 on.
   | .getCells .. | .cells .. => EthVersion.eth72 ≤ version
+  -- The other messages have one form at every version.
   | _ => True
 
 /-- Each transaction, header or access list of a message keeps the bytes of its own encoding. -/
@@ -480,6 +462,31 @@ theorem kept_of_decode {version : EthVersion} {id : Nat} {data : ByteArray} {m :
     -- The data is the encoding of the item, so the reader pairs each one with its encoding.
     exact ((ofItem_eq_ok_iff (encode_decode data _ hd)).mp h).2.2.2
 
+/-- A message of the form of a version reads back from its ID and the bytes of its encoding.
+
+Its transactions, headers and access lists must keep the bytes of their own encodings. -/
+theorem decode_encode {version : EthVersion} {m : Message} {data : ByteArray}
+    (hm : m.FitsVersion version) (hk : m.Kept) (h : m.encode = .ok data) :
+    decode version m.id data = .ok m := by
+  -- The encoder writes the RLP item of the message, so the RLP decoder reads that item back.
+  have hd : Serialization.Rlp.encode m.toItem = .ok data := by
+    unfold encode at h
+    cases he : Serialization.Rlp.encode m.toItem <;> simp_all [Except.mapError]
+  simp [decode, Serialization.Rlp.decode_encode _ _ hd, ofItem_toItem hm hk hd, Except.mapError,
+    bind, Except.bind]
+
+/-- Two messages of the form of a version, with one ID and one encoding, are the same message.
+
+The transactions, headers and access lists of each must keep the bytes of their own encodings. -/
+theorem eq_of_encode_eq {version : EthVersion} {m₁ m₂ : Message} {data : ByteArray}
+    (hm₁ : m₁.FitsVersion version) (hk₁ : m₁.Kept) (h₁ : m₁.encode = .ok data)
+    (hm₂ : m₂.FitsVersion version) (hk₂ : m₂.Kept) (h₂ : m₂.encode = .ok data)
+    (hid : m₁.id = m₂.id) : m₁ = m₂ := by
+  -- Both decode from the same ID and the same bytes, and decoding is a function.
+  have e₂ := decode_encode hm₂ hk₂ h₂
+  rw [← hid, decode_encode hm₁ hk₁ h₁] at e₂
+  exact Except.ok.inj e₂
+
 /-- eth/68 rejects BlockRangeUpdate, which eth/69 adds. -/
 theorem ofItem_blockRangeUpdate_eth68 (item : Item) (data : ByteArray) :
     ofItem .eth68 BLOCK_RANGE_UPDATE_ID item data = .error (.unknownId BLOCK_RANGE_UPDATE_ID) := by
@@ -602,17 +609,16 @@ theorem checkCellsResponse_eq_ok_iff {blobs : List Nat} {request response : Mess
 
 /-- A response passes the check of access lists exactly when three conditions hold.
 
-The request is GetBlockAccessLists, and the response is BlockAccessLists with its request ID.
-
-The response has one entry for each expected hash.
-
-Each entry is the empty string, or the bytes it was read from hash to the expected hash there.
-
-A decoded response keeps the encoding of each entry as those bytes. -/
+A decoded response keeps the encoding of each entry as the bytes it was read from. -/
 theorem accessListsResponse_eq_true_iff {expected : List Hash32} {request response : Message} :
     accessListsResponse expected request response = true ↔
+      -- The request is GetBlockAccessLists.
       ∃ i hashes lists, request = getBlockAccessLists i hashes ∧
+        -- The response is BlockAccessLists with its request ID.
+        --
+        -- It has one entry for each expected hash.
         response = blockAccessLists i lists ∧ lists.length = expected.length ∧
+          -- Each entry is the empty string, or its bytes hash to the expected hash there.
           ∀ (k : Nat) (hk : k < lists.length) (he : k < expected.length),
             lists[k].item = .bytes .empty ∨
               Cryptography.Hash.Keccak.keccak256 lists[k].bytes = expected[k] := by
@@ -636,7 +642,6 @@ end Message
 /-- Two errors with one code come from one constructor. -/
 theorem EthError.code_injective (e₁ e₂ : EthError) (h : e₁.code = e₂.code) :
     e₁.ctorIdx = e₂.ctorIdx := by
-  cases e₁ <;> cases e₂ <;>
-    first | rfl | (simp only [EthError.code] at h; exact absurd h (by decide))
+  code_injective EthError.code
 
 end EthLib.Execution.Network

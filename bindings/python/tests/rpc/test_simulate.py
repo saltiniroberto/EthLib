@@ -1,5 +1,6 @@
 """The simulated blocks of eth_simulateV1, its checks, and the overrides of its accounts."""
 
+import dataclasses
 import json
 from collections.abc import Mapping
 from pathlib import Path
@@ -11,7 +12,14 @@ from ethlib.execution import rpc
 from ethlib.state import state_root
 from raising import raises
 
-from .chain import FIXTURES, genesis_state, read_fixture, replay_chain
+from .chain import (
+    FIXTURES,
+    block_hash,
+    genesis_block,
+    genesis_state,
+    read_fixture,
+    replay_chain,
+)
 
 # The vendored fixtures of the method.
 SIMULATE: Final = sorted((FIXTURES / "eth_simulateV1").glob("*.io"))
@@ -61,21 +69,66 @@ def _request(payload: Mapping[str, Any], *block: str) -> str:
 
 def test_every_fixture_is_vendored() -> None:
     """The suite holds every fixture of the method at the pinned commit."""
-    assert len(SIMULATE) == 95
+    assert len(SIMULATE) == 103
 
 
 @pytest.mark.parametrize("path", SIMULATE, ids=lambda path: path.stem)
 def test_fixture(path: Path) -> None:
-    """The view answers the code or the blocks of the fixture; the source fixes no message."""
-    (exchange,) = read_fixture(path).exchanges
-    (text,) = replay_chain().serve([exchange.request])
+    """The view answers the code or the blocks of each request; the source fixes no message."""
+    exchanges = read_fixture(path).exchanges
+    texts = replay_chain().serve([exchange.request for exchange in exchanges])
+    for exchange, text in zip(exchanges, texts, strict=True):
+        assert text is not None
+        response = json.loads(text)
+        if "error" in exchange.response:
+            assert response["error"]["code"] == exchange.response["error"]["code"]
+        else:
+            assert "result" in response, response.get("error")
+            assert _blocks(response) == _blocks(exchange.response)
+
+
+# The identity precompile, an address that it can move to, and code that returns the word 42.
+# The sender of the calls, which needs no balance without validation.
+CALLER: Final = f"0x{0xC0:040x}"
+IDENTITY: Final = f"0x{4:040x}"
+MOVED: Final = f"0x{0xC2:040x}"
+RETURN_42: Final = "0x602a60005260206000f3"
+WORD_42: Final = f"0x{42:064x}"
+
+
+def _return_data(overrides: Mapping[str, Any], targets: list[str]) -> list[str]:
+    """The data that a call with the input 0x1234 to each target returns, after the overrides."""
+    calls = [{"from": CALLER, "to": target, "input": "0x1234"} for target in targets]
+    payload = {"blockStateCalls": [{"stateOverrides": overrides, "calls": calls}]}
+    (text,) = replay_chain().serve([_request(payload)])
     assert text is not None
-    response = json.loads(text)
-    if "error" in exchange.response:
-        assert response["error"]["code"] == exchange.response["error"]["code"]
-    else:
-        assert "result" in response, response.get("error")
-        assert _blocks(response) == _blocks(exchange.response)
+    return [call["returnData"] for call in json.loads(text)["result"][0]["calls"]]
+
+
+# The state override schema moves a precompile before it sets code, and code replaces it.
+PRECOMPILE_CODE = [
+    pytest.param({}, ["0x1234", "0x"], id="no-override"),
+    pytest.param({IDENTITY: {"code": RETURN_42}}, [WORD_42, "0x"], id="code"),
+    pytest.param({IDENTITY: {"code": "0x"}}, ["0x", "0x"], id="empty-code"),
+    pytest.param({IDENTITY: {"balance": "0x1"}}, ["0x1234", "0x"], id="balance-only"),
+    pytest.param({IDENTITY: {"movePrecompileToAddress": MOVED}}, ["0x", "0x1234"], id="move"),
+    pytest.param(
+        {IDENTITY: {"movePrecompileToAddress": MOVED, "code": RETURN_42}},
+        [WORD_42, "0x1234"],
+        id="move-then-code",
+    ),
+    pytest.param(
+        {IDENTITY: {"movePrecompileToAddress": MOVED}, MOVED: {"code": RETURN_42}},
+        ["0x", WORD_42],
+        id="code-at-destination",
+    ),
+]
+
+
+@pytest.mark.parametrize(("overrides", "data"), PRECOMPILE_CODE)
+def test_precompile_code(overrides: Mapping[str, Any], data: list[str]) -> None:
+    """Calls to the identity address and to its destination run the code or the precompile."""
+    assert _return_data(overrides, [IDENTITY, MOVED]) == data
 
 
 # Requests that pass every check before the execution, and requests that fail one.
@@ -137,6 +190,33 @@ CHECKS = [
 def test_checks(payload: Mapping[str, Any], code: int | None) -> None:
     """A request on the head gets the code of the first check that it fails."""
     assert _answer_codes([_request(payload)]) == [code]
+
+
+def test_item_cap_with_validation() -> None:
+    """A gas limit of 1004 fits no item of the block access list, which only validation checks."""
+    blocks = [{"blockOverrides": {"gasLimit": hex(1004)}}]
+    requests = [
+        _request({"blockStateCalls": blocks}),
+        _request({"blockStateCalls": blocks, "validation": True}),
+    ]
+    assert _answer_codes(requests) == [RESULT, -32603]
+
+
+def test_fee_recipient_defaults() -> None:
+    """A block takes the fee recipient of the block before it, the base block for the first one."""
+    # The base block is the genesis block alone, with a fee recipient that is not zero.
+    chain = replay_chain()
+    genesis = genesis_block(chain.config, bytes.fromhex("c5" * 20))
+    head = block_hash(genesis)
+    base = dataclasses.replace(chain, blocks=(genesis,), forkchoice=(head, head, head))
+    override = "0x" + "c6" * 20
+    # Blocks 2 and 3 are gap blocks before block 4, which sets the fee recipient.
+    overrides = {"number": "0x4", "feeRecipient": override}
+    payload = {"blockStateCalls": [{}, {"blockOverrides": overrides}, {}]}
+    (text,) = base.serve([_request(payload)])
+    assert text is not None
+    miners = [block["miner"] for block in json.loads(text)["result"]]
+    assert miners == ["0x" + "c5" * 20] * 3 + [override] * 2
 
 
 def test_base_block_is_latest_by_default() -> None:

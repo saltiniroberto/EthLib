@@ -19,37 +19,7 @@ They cover multistream-select messages, mplex and yamux frames, and secp256k1 pe
 
 They also run each peer of a multistream-select negotiation, and the upgrade of a TCP connection.
 
-A peer of a negotiation reads the messages at the start of its input until it stops.
-
-It returns its state, its protocol, the bytes it sent from its start, and the unread bytes.
-
-The state crosses as its name in snake case, such as `await_proposal`.
-
-The protocol is the agreed one, or the reply that a dialer did not expect, else empty.
-
 A decoder returns the value at the start of its input and the bytes after it.
-
-An mplex frame crosses as a `dict` of its stream ID, its flag and its data.
-
-A yamux frame crosses as a `dict` of its kind, flags, stream ID, length and data.
-
-An mplex flag or a yamux kind crosses as its name in snake case, such as `new_stream`.
-
-The yamux flags cross as an `int`.
-
-The multistream-select and mplex encoders refuse an input outside the format, with code 0.
-
-The yamux encoder refuses, with code 0, data whose size is not the one its kind and length give.
-
-Each such input breaks a rule of its source, so it has no bytes.
-
-Another export module that passes a frame imports its conversions from this module.
-
-The keys of a frame `dict` are the field names of its Lean structure, in snake case.
-
-The mplex streams of one side cross as a list of an ID, who opened it, and a state name.
-
-The yamux streams of one side cross as a list of an ID, a state name and the two windows.
 -/
 
 public section
@@ -60,12 +30,24 @@ open EthLib.Exports (ExportError Result PyValue pyExport rejectArgument toResult
 open EthLib.Networking.Encoding
 open EthLib.Cryptography.Secp256k1 (Fn)
 
+-- Another export module that passes a frame imports these conversions from this module.
+--
+-- The keys of a frame `dict` are the field names of its Lean structure, in snake case.
+--
+-- An mplex flag crosses as its name in snake case.
+--
+-- So the flag that opens a stream crosses as new and stream, joined by an underscore.
 derive_py Mplex.Flag
 derive_py_laws Mplex.Flag
+-- An mplex frame crosses as a `dict` of its stream ID, its flag and its data.
 derive_py Mplex.Frame
 derive_py_laws Mplex.Frame
+-- A yamux kind crosses as its name in snake case.
 derive_py Yamux.Kind
 derive_py_laws Yamux.Kind
+-- A yamux frame crosses as a `dict` of its kind, flags, stream ID, length and data.
+--
+-- The yamux flags cross as an `int`.
 derive_py Yamux.Frame
 derive_py_laws Yamux.Frame
 
@@ -92,6 +74,7 @@ The message must be shorter than `2^63 - 1` bytes, so that its length fits an un
 @[export eth_multistream_encode]
 def multistreamEncodeExport (args : PyValue) : Result PyValue :=
   pyExport (fun (message : ByteArray) => do
+    -- A message outside the format breaks a rule of its source, so it has no bytes: code 0.
     if Uvarint.bound ≤ message.size + 1 then
       rejectArgument none "message must be shorter than 2^63 - 1 bytes"
     return (⟨(Multistream.encode message).toArray⟩ : ByteArray)) args
@@ -108,14 +91,18 @@ def multistreamDecodeExport (args : PyValue) : Result PyValue :=
 def encodeAll (messages : List ByteArray) : ByteArray :=
   ⟨(messages.flatMap Multistream.encode).toArray⟩
 
-/-- The name and the protocol of a listener state. -/
+/-- The name and the protocol of a listener state.
+
+The state crosses as its name in snake case, such as `await_proposal`. -/
 def listenerView : Multistream.Listener → String × ByteArray
   | .awaitHeader _ => ("await_header", .empty)
   | .awaitProposal _ => ("await_proposal", .empty)
   | .agreed protocol => ("agreed", protocol)
   | .aborted => ("aborted", .empty)
 
-/-- The name and the protocol of a dialer state. -/
+/-- The name and the protocol of a dialer state.
+
+The protocol is the agreed one, or the reply that the dialer did not expect, else empty. -/
 def dialerView : Multistream.Dialer → String × ByteArray
   | .awaitHeader _ _ => ("await_header", .empty)
   | .awaitAnswer _ _ => ("await_answer", .empty)
@@ -144,6 +131,7 @@ def runPeer {σ : Type} (step : σ → ByteArray → σ × List ByteArray) (wait
     sent := sent ++ out
     rest := after
   let (name, protocol) := view state
+  -- The state, the protocol, the bytes sent from the start, and the unread bytes.
   return (name, protocol, encodeAll sent, ⟨rest.toArray⟩)
 
 /-- What a listener does with the bytes it receives, from its start.
@@ -190,6 +178,7 @@ def upgradeExport (args : PyValue) : Result PyValue :=
 @[export eth_mplex_encode]
 def mplexEncodeExport (args : PyValue) : Result PyValue :=
   pyExport (fun (frame : Mplex.Frame) => do
+    -- A frame outside the format breaks a rule of its source, so it has no bytes: code 0.
     unless decide frame.Valid do
       rejectArgument none ("frame must have a stream ID below 2^60, at most 1 MiB of data, " ++
         "and no data on a close or a reset")
@@ -253,12 +242,16 @@ def mplexSessionExport (args : PyValue) : Result PyValue :=
       let frames ← toResult s!"event {index}: mplex frame rejected" (mplexFrames data.data.toList)
       for frame in frames do
         streams ← toResult s!"event {index}" (Mplex.step received streams frame)
+    -- Each stream crosses as its ID, whether this side opened it, and its state name.
     return streams.map fun ((id, opened), state) => (id, opened, mplexStateName state)) args
 
 /-- The bytes of a valid yamux frame. -/
 @[export eth_yamux_encode]
 def yamuxEncodeExport (args : PyValue) : Result PyValue :=
   pyExport (fun (frame : Yamux.Frame) => do
+    -- Data whose size is not the one its kind and length give breaks a rule of its source.
+    --
+    -- So it has no bytes, and the encoder refuses it with code 0.
     unless decide frame.Valid do
       rejectArgument none "frame must carry as many bytes as its length for data, else none"
     return (⟨(Yamux.encode frame).toArray⟩ : ByteArray)) args
@@ -333,8 +326,10 @@ def yamuxSessionExport (args : PyValue) : Result PyValue :=
         if received then
           replies := replies ++ (Yamux.reply frame).toArray.map
             fun r => (⟨(Yamux.encode r).toArray⟩ : ByteArray)
+    -- Each stream crosses as its ID, its state name, and the windows to send and to receive.
     let streams := session.streams.map fun ((id, s) : UInt32 × Yamux.Stream) =>
       (id.toNat, yamuxStateName s.state, s.sendWindow, s.recvWindow)
+    -- Then come whether the side received Go Away, and the bytes of the frames it sends back.
     return (streams, session.goneAway, replies.toList)) args
 
 /-- A rejected peer identity reaches Python with its code, and its message is the printed error. -/

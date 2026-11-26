@@ -2,6 +2,7 @@ module
 
 public import EthLib.Cryptography.Proofs.Merkle.Binding.Collision
 public import EthLib.Cryptography.Proofs.Merkle.Binding.SecondPreimage
+public import EthLib.Cryptography.Proofs.Merkle.QueryBound
 public import VCVio.OracleComp.QueryTracking.SubSpec
 public import VCVio.OracleComp.QueryTracking.RandomOracle.CachePartial
 
@@ -10,15 +11,15 @@ public import VCVio.OracleComp.QueryTracking.RandomOracle.CachePartial
 
 A random oracle is a uniformly random function, chosen once for every party.
 
-Source: Bellare and Rogaway, "Random Oracles are Practical", CCS 1993, section 2, "Oracles".
-
-<https://cseweb.ucsd.edu/~mihir/papers/ro.pdf>
+Source: Bellare and Rogaway, ["Random Oracles are Practical"][ro], CCS 1993, section 2, "Oracles".
 
 Each oracle input is a node position with its two children, so the oracle is a node hash.
 
 The file counts the oracle calls of a tree, a climb and the two searches.
 
 It also replays a tree, a climb or a search from a cache of answers.
+
+[ro]: https://cseweb.ucsd.edu/~mihir/papers/ro.pdf
 -/
 
 @[expose] public section
@@ -51,6 +52,27 @@ theorem experimentWith_queryBound {γ β : Type} {extraction : γ → OracleComp
   -- The adversary spends its `q` calls, then the extraction its `n`, on whatever claim it got.
   isQueryBoundP_bind hq fun claim _ => IsQueryBoundP.liftComp_subSpec
     (fun _ => iff_of_true trivial rfl) (hn claim)
+
+omit [DecidableEq D] in
+/-- A climb that a partial table replays to the end meets `P` on every pair it hashes. -/
+theorem climbPairs_of_replay {ι : Type} {spec : OracleSpec ι} {impl : QueryImpl spec Option}
+    {hash : Position → α → α → OracleComp spec α} {table : Position → α → α → Id α}
+    {P : α → α → Prop}
+    -- Each replayed node hash meets `P` on its children and returns the node of a full table.
+    (hstep : ∀ p a b v, simulateQ impl (hash p a b) = some v → P a b ∧ v = (table p a b).run) :
+    -- The pairs are those of the climb with the full table.
+    ∀ (t : List α) (p : Position) (b : α) {top : α},
+      simulateQ impl (climb hash p b t) = some top → ∀ x ∈ climbPairs table p b t, P x.1 x.2
+  | [], _, _, _, _, x, hx => by simp [climbPairs] at hx
+  | _ :: t, p, _, _, hrun, x, hx => by
+    simp only [climb, simulateQ_bind] at hrun
+    obtain ⟨parent, hparent, hrun⟩ := Option.bind_eq_some_iff.mp hrun
+    -- The replayed parent is the parent of the table, so the climb above goes on from it.
+    obtain ⟨hpair, rfl⟩ := hstep _ _ _ _ hparent
+    simp only [climbPairs, List.mem_cons] at hx
+    rcases hx with rfl | hx
+    · exact hpair
+    · exact climbPairs_of_replay hstep t p.parent _ hrun x hx
 
 /-- An oracle input includes the parent position and its ordered children.
 
@@ -90,25 +112,8 @@ The search stops when the shorter list runs out. -/
 theorem findCollision_queryBound [DecidableEq R] :
     ∀ (s t : List R) (p : Position) (a b : R),
       IsTotalQueryBound (findCollision queryNode p a b s t)
-        (2 * min s.length t.length) := by
-  intro s
-  induction s with
-  | nil => intros; trivial
-  | cons u s ih =>
-    intro t p a b
-    cases t with
-    | nil => trivial
-    | cons v t =>
-      -- This level makes two queries, one per climb.
-      simp only [List.length_cons, min_add_add_right,
-        findCollision, queryNode, isTotalQueryBound_query_bind_iff]
-      refine ⟨by omega, fun x => ⟨by omega, fun y => ?_⟩⟩
-      split
-      · -- A collision here stops the search, with no more queries.
-        trivial
-      · -- Otherwise the rest of the search makes two queries per remaining common level.
-        convert ih t p.parent x y using 1
-        omega
+        (2 * min s.length t.length) :=
+  isTotalQueryBound_findCollision queryNode_queryBound
 
 /-- Computing an honest node from fixed leaves makes `2^level - 1` hash calls.
 
@@ -132,8 +137,6 @@ theorem node_queryBound (leaves : Nat → R) : ∀ p : Position,
 
 /-- Worst-case calls of the second-preimage search, including honest recomputation.
 
-At each level it hashes the candidate and computes the two honest children and parent.
-
 Repeated honest calls still count, even though the oracle answers them from its cache.
 
 From level `l` over `n` siblings, the budget is `2^(l+n+2) - 2^(l+2) - 2n`.
@@ -146,6 +149,7 @@ It nears four only for long paths.
 -/
 def secondPreimageQueries : Nat → Nat → Nat
   | _, 0 => 0
+  -- At each level it hashes the candidate and computes the two honest children and parent.
   | level, n + 1 =>
     1 + 2 * (2 ^ level - 1) + (2 ^ (level + 1) - 1) + secondPreimageQueries (level + 1) n
 
@@ -303,10 +307,7 @@ theorem partial_siblings_isSome (c : (NodeInput R →ₒ R).QueryCache) (leaves 
 
 /-- A climb against the oracle makes one call per sibling. -/
 theorem climb_queryBound : ∀ (t : List R) (p : Position) (b : R),
-    IsTotalQueryBound (climb queryNode p b t) t.length
-  | [], _, _ => trivial
-  | v :: t, p, b => by
-    simp only [climb, queryNode, List.length_cons, isTotalQueryBound_query_bind_iff]
-    exact ⟨by omega, fun x => by simpa using climb_queryBound t p.parent x⟩
+    IsTotalQueryBound (climb queryNode p b t) t.length :=
+  isTotalQueryBound_climb queryNode_queryBound
 
 end EthLib.Cryptography.Merkle.RandomOracle

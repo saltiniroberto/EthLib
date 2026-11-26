@@ -6,13 +6,9 @@ public import EthLib.Consensus.Proofs.SlashingProtection
 /-!
 # Proofs: importing keystores through the Keymanager API
 
-A request whose lists differ in length is refused.
-
 A call that succeeds gives one status for each keystore.
 
 A key with the status imported is held afterwards, and no key held before is removed.
-
-A keystore is a duplicate exactly when its key was held before, or imported earlier in the request.
 
 The record refuses afterwards every message that it refused before.
 
@@ -56,6 +52,20 @@ theorem localKeys_prefix_importAll (state : KeyState) (pairs : List (String × S
   | cons pair rest ih =>
     obtain ⟨keystore, password⟩ := pair
     exact (localKeys_prefix_importKeystore state keystore password).trans (ih _)
+
+/-- An import of keystores leaves the remote keys as they were. -/
+theorem remoteKeys_importAll (state : KeyState) (pairs : List (String × String)) :
+    (importAll text limits file state pairs).2.remoteKeys = state.remoteKeys := by
+  induction pairs generalizing state with
+  | nil => rfl
+  | cons head rest ih =>
+    obtain ⟨keystore, password⟩ := head
+    simp only [importAll]
+    rw [ih]
+    unfold importKeystore
+    split
+    · rfl
+    · split <;> rfl
 
 /-- The status of one keystore is imported exactly when it decrypts to a key not active. -/
 theorem importKeystore_eq_imported_iff {state : KeyState} {keystore password : String} :
@@ -652,5 +662,19 @@ theorem postKeystores_of_length_ne {body : Json}
     (postKeystores text limits state body).1.status = 400 ∧
       (postKeystores text limits state body).2 = state := by
   simp [postKeystores, read, importKeystores_eq_error_of_length_ne mismatch, badRequest]
+
+/-- The call that imports keystores leaves the remote keys as they were. -/
+theorem remoteKeys_postKeystores (state : KeyState) (body : Json) :
+    (postKeystores text limits state body).2.remoteKeys = state.remoteKeys := by
+  unfold postKeystores
+  split
+  · rfl
+  · split
+    · rfl
+    · rfl
+    · rename_i call
+      obtain ⟨-, file, eq, -⟩ := importKeystores_eq_ok call
+      rw [show _ = _ from congrArg Prod.snd eq]
+      exact remoteKeys_importAll state _
 
 end EthLib.Consensus.KeymanagerApi

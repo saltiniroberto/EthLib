@@ -16,13 +16,11 @@ import Std.Data.TreeMap.Raw.Lemmas
 import Std.Data.TreeMap.Raw.WF
 
 /-!
-# Proofs: `Serialization.Exports.Ssz`
+# Proofs: the SSZ exports
 
 The SSZ exports read and write Python values directly.
 
 This file holds JSON readers of types and values, and a JSON writer of values, as a reference.
-
-The readers here test for the type `bool` with a match, not with the equality of JSON documents.
 
 It proves that reading a Python value gives what the reference gives on its JSON.
 
@@ -478,7 +476,8 @@ theorem valueOf_eq_json (fuel : Nat) (value : PyValue) :
         jsonPair_toJson]
       case h_3 =>
         -- The writer of bytes is the hex writer of the codec, whose reader reads them back.
-        have back (data : Bytes) : ofHex (Base.hexString data.toList) = .ok data := ofHex_toHex data
+        have back (data : Bytes) : ofHex (Base.hexString data.data.toList) = .ok data :=
+          ofHex_toHex data
         simp only [strOf, pure, Except.pure, Base.toList_eq_data_toList, back]
       case h_4 => rfl
       case h_5 =>

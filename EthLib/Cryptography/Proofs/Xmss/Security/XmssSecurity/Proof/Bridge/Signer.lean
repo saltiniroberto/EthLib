@@ -9,20 +9,6 @@ public import EthLib.Cryptography.Proofs.Xmss.Security.XmssSecurity.Adversary
 
 EthLib's signer, with a key the prepared cache knows, is the model's table signer.
 
-A key the cache knows has the scheme's seed `S`, the parameter `P` and the top tree of `S`.
-
-Each tree it keeps is the build of its index, with the top signature of its root.
-
-It derives the same randomizer base and makes the same trials.
-
-Everything it computes after a codeword is cached.
-
-That is the chains, the bottom tree and the whole top signature.
-
-The bottom tree's build resolves to a tree with the stored root and the stored path of the key.
-
-A kept tree is the one the cache resolves, so it holds the same values.
-
 So signing erases to the values the model's key stores, and returns a key the cache knows.
 -/
 
@@ -57,12 +43,13 @@ theorem halfOf_zero_ofOutput_randomizer (y : HashOutput) :
 /-- The randomizer base is one query, its answer's first half read as a randomizer.
 
 Stated at the randomizer's type, so later binds associate with it. -/
-theorem randomizerBase_queryH (pp : Xmss.PublicParam) (s : Xmss.Seed) (layer : Xmss.Layer)
+theorem randomizerBase_queryH (publicParam : Xmss.PublicParam) (s : Xmss.Seed) (layer : Xmss.Layer)
     (e : UInt32) (msg : Array UInt64) :
-    (Xmss.randomizerBase pp (Xmss.seedPrf queryH s) layer e msg :
+    (Xmss.randomizerBase publicParam (Xmss.seedPrf queryH s) layer e msg :
       OracleComp HashSpec Xmss.Randomizer)
       = liftM (HashSpec.query
-          (Hash.Keccak.lanesBytes (Xmss.thInput pp (Xmss.addrRnd layer e) (s.toArray ++ msg)))) >>=
+          (Hash.Keccak.lanesBytes
+            (Xmss.thInput publicParam (Xmss.Address.rnd layer e) (s.toArray ++ msg)))) >>=
         fun y => pure (ofRandomizer (y.extractLsb' 0 randomnessBits)) := by
   rw [Xmss.randomizerBase_seedPrf]
   unfold Xmss.th
@@ -73,14 +60,14 @@ theorem randomizerBase_queryH (pp : Xmss.PublicParam) (s : Xmss.Seed) (layer : X
 /-- The bottom randomizer base `R0(idx, m)` is the bottom derivation's input. -/
 theorem rndInput_toList (P : PublicParameter) (seed : MasterSeed) (index : LeafIndex)
     (message : Message) :
-    Hash.Keccak.lanesBytes (Xmss.thInput (ofParam P) (Xmss.addrRnd .bottom (ofLeafIndex index))
+    Hash.Keccak.lanesBytes (Xmss.thInput (ofParam P) (Xmss.Address.rnd .bottom (ofLeafIndex index))
       ((ofSeed seed).toArray ++ (ofMessage message).toArray))
       = rndInput P seed ⟨index, message⟩ := by
   rw [rndInput_eq]
   simp only [Xmss.thInput_eq_append,
     EthLib.Cryptography.Hash.Keccak.lanesBytes_append, Xmss.Unforgeability.toList_ofParam,
     Xmss.Unforgeability.toList_ofSeed, Xmss.Unforgeability.toList_ofMessage,
-    Xmss.Unforgeability.toList_addrRnd, Xmss.Unforgeability.toNat_ofLeafIndex]
+    Xmss.Unforgeability.toList_encode_rnd, Xmss.Unforgeability.toNat_ofLeafIndex]
   -- The bottom layer adds no flag to `hi`.
   exact congrArg (fun x => bytesLE 16 P ++ fieldBytes (tweakFields 7 0 x index.val) ++
     (bytesLE 32 seed ++ bytesLE 32 message)) (by simp [Xmss.Layer.toNat])
@@ -88,14 +75,14 @@ theorem rndInput_toList (P : PublicParameter) (seed : MasterSeed) (index : LeafI
 /-- The top randomizer base `R0_top(b, r)` is the top derivation's input. -/
 theorem topRndInput_toList (P : PublicParameter) (seed : MasterSeed) (key : TopIndex)
     (root : Digest) :
-    Hash.Keccak.lanesBytes (Xmss.thInput (ofParam P) (Xmss.addrRnd .top (ofTopIndex key))
+    Hash.Keccak.lanesBytes (Xmss.thInput (ofParam P) (Xmss.Address.rnd .top (ofTopIndex key))
       ((ofSeed seed).toArray ++ (ofDigest root).toArray))
       = topRndInput P seed (key, root) := by
   rw [topRndInput_eq]
   simp only [Xmss.thInput_eq_append,
     EthLib.Cryptography.Hash.Keccak.lanesBytes_append, Xmss.Unforgeability.toList_ofParam,
     Xmss.Unforgeability.toList_ofSeed, Xmss.Unforgeability.toList_ofDigest,
-    Xmss.Unforgeability.toList_addrRnd, Xmss.Unforgeability.toNat_ofTopIndex]
+    Xmss.Unforgeability.toList_encode_rnd, Xmss.Unforgeability.toNat_ofTopIndex]
   -- The top layer adds its flag to `hi`.
   exact congrArg (fun x => bytesLE 16 P ++ fieldBytes (tweakFields 7 0 x key.val) ++
     (bytesLE 32 seed ++ bytesLE 16 root)) (by simp [Xmss.Layer.toNat, topFlag])
@@ -340,14 +327,17 @@ end Merkle
 attribute [local irreducible] LAYER_HEIGHT
 
 /-- A resolved top tree resolves the path of each top key, to the path the tree holds. -/
-theorem resolves_path_top {cache : QueryCache HashSpec} {pp : Xmss.PublicParam} {s : Xmss.Seed}
+theorem resolves_path_top {cache : QueryCache HashSpec}
+    {publicParam : Xmss.PublicParam} {s : Xmss.Seed}
     {T : Merkle.Built Xmss.Digest}
-    (hT : Resolves cache (Xmss.build queryH pp (Xmss.seedPrf queryH s) .top LAYER_HEIGHT 0 :
+    (hT : Resolves cache (Xmss.build queryH publicParam
+      (Xmss.seedPrf queryH s) .top LAYER_HEIGHT 0 :
       OracleComp HashSpec _) T) {b : Nat} (hb : b < 2 ^ LAYER_HEIGHT) :
-    Resolves cache (Xmss.path queryH pp (Xmss.seedPrf queryH s) .top b : OracleComp HashSpec _)
+    Resolves cache (Xmss.path queryH publicParam
+      (Xmss.seedPrf queryH s) .top b : OracleComp HashSpec _)
       (T.path LAYER_HEIGHT b) := by
   obtain ⟨v, hv⟩ := resolves_path_of_build _ _ hT hb
-  change Resolves cache (Xmss.path queryH pp (Xmss.seedPrf queryH s) .top b :
+  change Resolves cache (Xmss.path queryH publicParam (Xmss.seedPrf queryH s) .top b :
     OracleComp HashSpec _) v at hv
   convert hv using 1
   -- Answer every query from the cache: the build and the path then evaluate to their values.
@@ -356,13 +346,16 @@ theorem resolves_path_top {cache : QueryCache HashSpec} {pp : Xmss.PublicParam} 
   rw [← hT.eval f hf, ← hv.eval f hf]
   have hbuild := Xmss.build_map_monad (m := OracleComp HashSpec) (m' := Id)
     (fun {β} (c : OracleComp HashSpec β) => (evalWithAnswerFn f c : Id β)) (fun _ => rfl)
-    (fun x g => evalWithAnswerFn_bind f x g) queryH (Xmss.seedPrf queryH s) pp .top LAYER_HEIGHT 0
+    (fun x g => evalWithAnswerFn_bind f x g) queryH
+      (Xmss.seedPrf queryH s) publicParam .top LAYER_HEIGHT 0
   have hpath := Xmss.path_map_monad (m := OracleComp HashSpec) (m' := Id)
     (fun {β} (c : OracleComp HashSpec β) => (evalWithAnswerFn f c : Id β)) (fun _ => rfl)
-    (fun x g => evalWithAnswerFn_bind f x g) queryH (Xmss.seedPrf queryH s) pp .top b
+    (fun x g => evalWithAnswerFn_bind f x g) queryH (Xmss.seedPrf queryH s) publicParam .top b
   rw [hbuild, hpath]
-  have := Xmss.path_build_run (H := fun x => (evalWithAnswerFn f (queryH x) : Id _)) (pp := pp)
-    (prf := fun pp a suffix => (evalWithAnswerFn f (Xmss.seedPrf queryH s pp a suffix) : Id _))
+  have := Xmss.path_build_run (H := fun x => (evalWithAnswerFn f (queryH x) : Id _))
+    (publicParam := publicParam)
+    (prf := fun publicParam a suffix => (evalWithAnswerFn f
+      (Xmss.seedPrf queryH s publicParam a suffix) : Id _))
     (layer := .top) b
   rwa [Nat.div_eq_of_lt hb] at this
 
@@ -523,6 +516,9 @@ theorem erases_signWith (h : Prepared seed d result cache) (hk : KeyResolves see
   simp only [bind_assoc, map_bind]
   have hR0 : cache (rndInput d.parameter seed ⟨index, message⟩) = some (d.rnd ⟨index, message⟩) :=
     h.prog_le (progCache_rnd seed d ⟨index, message⟩)
+  -- With a key the cache knows, the signer derives the same randomizer base.
+  --
+  -- It then makes the same trials.
   refine Erases.skip (spec := HashSpec) _ (d.rnd ⟨index, message⟩) ?_ _ _ ?_
   · rw [rndInput_toList]
     exact hR0
@@ -532,6 +528,9 @@ theorem erases_signWith (h : Prepared seed d result cache) (hk : KeyResolves see
   · simp [Except.toOption]
     exact .pure _
   · intro randomness encoding
+    -- Everything the signer computes after a codeword is cached.
+    --
+    -- That is the chains, the bottom tree and the whole top signature.
     apply erases_pure_of_resolves
     dsimp only
     simp only [bind_assoc, pure_bind]
@@ -539,6 +538,7 @@ theorem erases_signWith (h : Prepared seed d result cache) (hk : KeyResolves see
     refine (h.realBottomChains index encoding).bind ?_
     rw [Xmss.Unforgeability.bottomTree_ofLeafIndex]
     simp only [map_bind]
+    -- A kept tree is the one the cache resolves, so it holds the same values.
     obtain ⟨t, sk', hfetch, hpath, htop, -⟩ := h.realFetch hk index
     refine hfetch.bind ?_
     dsimp only

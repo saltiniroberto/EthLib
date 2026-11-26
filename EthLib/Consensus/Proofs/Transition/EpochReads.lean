@@ -222,17 +222,7 @@ private theorem getTotalBalance_increments_le {fork : Fork} {state : BeaconState
 
 /-- From Altair, the end of an epoch moves the balance of one validator within an envelope.
 
-It gains at most its base reward times 54/64, scaled by the ratio of two balances.
-
-The numerator is the effective balance active in the previous epoch, in increments and at least one.
-
-The denominator is the total active balance, in increments and at least one.
-
-It loses at most its base reward plus its inactivity penalty at its present score.
-
 The base reward is any bound on each successful read of it at the validator.
-
-The total is the active effective balance, at least one increment, as a successful read returns.
 
 That needs a registry within its limit. -/
 private theorem processRewardsAndPenalties_balance_le_of_altair
@@ -242,18 +232,28 @@ private theorem processRewardsAndPenalties_balance_le_of_altair
     (j : Nat) (inside : j < state.validators.data.size)
     {base : ℕ} (based : ∀ total reward, getTotalActiveBalance state = .ok total →
       getBaseReward state total j.toUInt64 = .ok reward → reward.toNat ≤ base) :
+    -- The envelope reads only the effective balances, the balances and the inactivity scores.
     let inc := preset.EFFECTIVE_BALANCE_INCREMENT.toNat
     let effective (i : Nat) := ((state.validators.data[i]?).map (·.effectiveBalance.toNat)).getD 0
+    -- The total is the active effective balance, at least one increment.
+    --
+    -- A successful read returns it.
     let total := max inc (∑ i ∈ (Finset.range state.validators.data.size).filter
       (fun i => isActiveAt state (getCurrentEpoch state) i = true), effective i)
+    -- The numerator is the effective balance active in the previous epoch, in increments.
+    --
+    -- It is at least one.
     let num := max 1 ((∑ i ∈ (Finset.range state.validators.data.size).filter
       (fun i => isActiveAt state (getPreviousEpoch state) i = true), effective i) / inc)
+    -- The denominator is the total active balance, in increments and at least one.
     let den := max 1 (total / inc)
     let score := (((state.inactivityScores altair).data[j]?).map (·.toNat)).getD 0
+    -- The balance gains at most its base reward times 54/64, scaled by the ratio of two balances.
     ((after.balances.data[j]?).map (·.toNat)).getD 0 ≤
         ((state.balances.data[j]?).map (·.toNat)).getD 0 +
           base * (PARTICIPATION_FLAG_WEIGHTS.map (·.toNat)).sum * num /
             (WEIGHT_DENOMINATOR.toNat * den) ∧
+      -- It loses at most its base reward plus its inactivity penalty at its present score.
       ((state.balances.data[j]?).map (·.toNat)).getD 0 ≤
         ((after.balances.data[j]?).map (·.toNat)).getD 0 + base + effective j * score /
           (config.INACTIVITY_SCORE_BIAS.toNat *
@@ -420,12 +420,6 @@ private theorem processRewardsAndPenalties_balance_le_of_altair
 
 It moves one balance within the same envelope, read before that update.
 
-The update keeps the registry, the balances and the slot.
-
-It raises the score of the validator by at most the score bias.
-
-So the inactivity penalty reads the score before the update plus that bias.
-
 The base reward is any bound on each successful read of it at the validator, before the update. -/
 theorem processRewardsAndPenalties_balance_le_of_inactivityUpdates
     {fork : Fork}
@@ -448,12 +442,14 @@ theorem processRewardsAndPenalties_balance_le_of_inactivityUpdates
         ((state.balances.data[j]?).map (·.toNat)).getD 0 +
           base * (PARTICIPATION_FLAG_WEIGHTS.map (·.toNat)).sum * num /
             (WEIGHT_DENOMINATOR.toNat * den) ∧
+      -- The inactivity penalty reads the score before the update plus the score bias.
       ((state.balances.data[j]?).map (·.toNat)).getD 0 ≤
         ((after.balances.data[j]?).map (·.toNat)).getD 0 + base +
           effective j * (score + config.INACTIVITY_SCORE_BIAS.toNat) /
             (config.INACTIVITY_SCORE_BIAS.toNat *
               (parameters preset fork).INACTIVITY_PENALTY_QUOTIENT.toNat) := by
   dsimp only
+  -- The update keeps the registry, the balances and the slot.
   have frame := processInactivityUpdates_frame updated
   have validators : scored.validators = state.validators := by rw [frame]
   have balances : scored.balances = state.balances := by rw [frame]
@@ -464,7 +460,7 @@ theorem processRewardsAndPenalties_balance_le_of_inactivityUpdates
     rw [current]
   have active (epoch : Epoch) (i : Nat) : isActiveAt scored epoch i = isActiveAt state epoch i := by
     simp only [isActiveAt, validators]
-  -- The update raises the score of the validator by at most the bias.
+  -- The update raises the score of the validator by at most the score bias.
   have raised : (((scored.inactivityScores altair).data[j]?).map (·.toNat)).getD 0 ≤
       (((state.inactivityScores altair).data[j]?).map (·.toNat)).getD 0 +
         config.INACTIVITY_SCORE_BIAS.toNat := by
@@ -537,16 +533,15 @@ theorem Run.fork_eq_of_same_epoch {x y : ForkedBeaconState preset}
       obtain ⟨cached, next, -, rfl⟩ := advanceSlotAcross_of_same_epoch ok (same.trans midEpoch.symm)
       exact prior
 
-/-- Inside one epoch before Gloas, the keys of the current sync committee stay.
+/-- Inside one epoch, from Altair, the keys of the current sync committee stay.
 
 Blocks keep the committee, and slots inside the epoch only cache the slot. -/
 theorem Run.currentSyncCommittee_eq_of_same_epoch {x y : ForkedBeaconState preset}
-    (tail : Run config checks x y)
-    (early : y.fork < .glamsterdam) (same : getCurrentEpoch y.state = getCurrentEpoch x.state)
+    (tail : Run config checks x y) (same : getCurrentEpoch y.state = getCurrentEpoch x.state)
     (altair : .altair ≤ y.fork) (altair' : .altair ≤ x.fork) :
     (y.state.currentSyncCommittee altair).value.pubkeys.toList =
       (x.state.currentSyncCommittee altair').value.pubkeys.toList :=
-  tail.currentSyncCommittee_eq_of_same_period early (by rw [same]) altair altair'
+  tail.currentSyncCommittee_eq_of_same_period (by rw [same]) altair altair'
 
 /-- The positions active in an epoch are the same in two registries when activity stays.
 

@@ -21,7 +21,7 @@ At the end of each epoch on the way, the signers must hold at most the active ba
 
 The draws must end, and a run before Altair must end within the epoch limit.
 
-On mainnet, the step covers the limits for 16 epochs at a budget of `2^57` Gwei.
+On mainnet, the step covers the limits for 64 epochs at a budget of `2^57` Gwei.
 
 Before Gloas, the types of a mainnet body keep it within three of those limits.
 
@@ -173,16 +173,6 @@ theorem ChainHolds.processSlotsAcross_exists_ok
 
 The chain starts from a state that keeps the facts of a chain.
 
-The step covers the limits, and the conditions of the chain hold.
-
-The least inclusion delay and the withdrawal delay are positive.
-
-The increment is at most the least balance to activate.
-
-At the end of each epoch of the advance, the signers hold at most the active balance.
-
-The draws end, and before Altair the advance ends within the epoch limit.
-
 The state that the advance returns keeps the facts of the chain, with its blocks counted. -/
 theorem processSlotsAcross_exists_ok_of_chain
     [∀ fork, Serialization.Ssz.LawfulSszType (BeaconState preset fork)]
@@ -192,17 +182,22 @@ theorem processSlotsAcross_exists_ok_of_chain
     {start : RunStart} {step : BlockStep} {limits : BlockLimits}
     {budget epochs lastEpoch startEpoch blocks count : Nat}
     {forked reached : ForkedBeaconState preset} {slot : Slot}
+    -- The conditions of the chain hold, and the step covers the limits.
     (conditions : ChainConditions preset config start step budget epochs lastEpoch)
     (fits : startEpoch + epochs ≤ lastEpoch)
     (covers : step.Covers preset limits start budget epochs)
+    -- The least inclusion delay and the withdrawal delay are positive.
     (inclusion : 0 < preset.MIN_ATTESTATION_INCLUSION_DELAY.toNat)
     (withdrawable : 0 < config.MIN_VALIDATOR_WITHDRAWABILITY_DELAY.toNat)
+    -- The increment is at most the least balance to activate.
     (activationIncrement : preset.EFFECTIVE_BALANCE_INCREMENT ≤ preset.MIN_ACTIVATION_BALANCE)
     (holds : ChainHolds config start step budget startEpoch blocks forked.state)
     (reaches : ChainReaches config checks limits forked count reached)
     (later : reached.state.slot < slot)
     (within : slot.toNat / preset.SLOTS_PER_EPOCH.toNat ≤ startEpoch + epochs)
+    -- At the end of each epoch of the advance, the signers hold at most the active balance.
     (signers : SignersAtEnds config checks reached (slot.toNat - reached.state.slot.toNat))
+    -- The draws end, and before Altair the advance ends within the epoch limit.
     (draws : DrawsEnd config checks reached (slot.toNat - reached.state.slot.toNat))
     (limit : EpochLimitBeforeAltair reached (slot.toNat - reached.state.slot.toNat)) :
     ∃ after, processSlotsAcross config checks reached slot = .ok after ∧
@@ -218,17 +213,20 @@ theorem processSlotsAcross_exists_ok_of_chain
 
 /-- Limits on a block body on mainnet.
 
-Its deposits and deposit requests bring in at most 10,000 ETH, and it applies at most 16 deposits.
-
-It raises the validators plus the pending deposits by at most `2^14`.
-
-Its slashings name at most `2^10` validators, and it carries at most 16 withdrawal requests.
-
 Before Gloas, the body types bound the count of deposits, the load and the withdrawal requests.
 
 The protocol does not cap the Gwei of the deposits, and it allows far more slashed validators. -/
 def BlockLimits.mainnet : BlockLimits :=
-  { deposits := 10 ^ 13, joins := 16, load := 2 ^ 14, slashings := 2 ^ 10, withdrawals := 16 }
+  -- Its deposits and deposit requests bring in at most 10,000 ETH.
+  { deposits := 10 ^ 13,
+    -- It applies at most 16 deposits.
+    joins := 16,
+    -- It raises the validators plus the pending deposits by at most `2^14`.
+    load := 2 ^ 14,
+    -- Its slashings name at most `2^10` validators.
+    slashings := 2 ^ 10,
+    -- It carries at most 16 withdrawal requests.
+    withdrawals := 16 }
 
 /-- Before Gloas, every mainnet block body is within three of the mainnet limits.
 
@@ -282,30 +280,40 @@ theorem BlockBounded.mainnet {fork : Fork} (before : fork < .glamsterdam)
 
 /-- The step of a block on mainnet, which covers the mainnet limits at a budget of `2^57` Gwei.
 
-The supply rises by at most 100,000 ETH, and the effective balances by 16 times 2048 ETH.
+The supply rises by at most 25,000 ETH, and the effective balances by 16 times 2048 ETH.
 
 The load rises by at most `2^15`, and the exit ceiling by at most `2^32` epochs.
 
 The slashed balances rise by at most `2^10` times 2048 ETH. -/
 def BlockStep.mainnet : BlockStep :=
-  { supply := 10 ^ 14, effective := 16 * 2048 * 10 ^ 9, load := 2 ^ 15, ceiling := 2 ^ 32,
-    slashed := 2 ^ 10 * 2048 * 10 ^ 9 }
+  { supply := 25 * 10 ^ 12, effective := 16 * 2048 * 10 ^ 9, load := 2 ^ 15, ceiling := 2 ^ 32,
+    slashed := 2 ^ 10 * 2048 * 10 ^ 9,
+    -- In each epoch, the rewards for attestations raise the supply by at most 71,000 ETH.
+    rewards := 71 * 10 ^ 12 }
 
-/-- On mainnet the step covers the limits, at a budget of `2^57` Gwei and over 16 epochs. -/
+/-- On mainnet the step covers the limits, at a budget of `2^57` Gwei and over 64 epochs. -/
 theorem blockStep_covers_mainnet (startEpoch : Nat) :
     BlockStep.mainnet.Covers Preset.mainnet BlockLimits.mainnet (RunStart.mainnet startEpoch)
-      (2 ^ 57) 16 := by
+      (2 ^ 57) 64 := by
   have largest : Preset.mainnet.largestEffectiveBalance = 2048 * 10 ^ 9 := by decide
   have increment : Preset.mainnet.EFFECTIVE_BALANCE_INCREMENT.toNat = 10 ^ 9 := by decide
   have root : Nat.sqrt (10 ^ 9) = 31622 := (Nat.eq_sqrt.mpr ⟨by decide, by decide⟩).symm
-  have reward : blockRewardBound Preset.mainnet (2 ^ 57) = 70640217747754 := by
-    unfold blockRewardBound
+  have perIncrement : Preset.mainnet.largestPerIncrement = 2023907 := by
+    unfold Preset.largestPerIncrement
     rw [increment, root]
     decide
-  have blocks : Preset.mainnet.chainBlocks 16 = 544 := by decide
+  have sync : syncRewardBound Preset.mainnet (2 ^ 57) = 325530956800 := by
+    unfold syncRewardBound
+    rw [increment, perIncrement]
+    decide
+  have weight : flagWeightBound Preset.mainnet (2 ^ 57) = 31500979682347728 := by
+    unfold flagWeightBound
+    rw [increment, perIncrement]
+    decide
+  have blocks : Preset.mainnet.chainBlocks 64 = 2080 := by decide
   have hysteresis : Preset.mainnet.HYSTERESIS_QUOTIENT.toNat = 4 ∧
       Preset.mainnet.HYSTERESIS_DOWNWARD_MULTIPLIER.toNat = 1 := by decide
-  refine ⟨?_, ?_, ?_, fun fork => ?_, ?_, ?_⟩
+  refine ⟨?_, ?_, ?_, fun fork => ?_, ?_, ?_, ?_⟩
   · simp only [BlockLimits.mainnet, BlockStep.mainnet, largest]
     omega
   · simp only [BlockLimits.mainnet, BlockStep.mainnet, largest]
@@ -317,7 +325,9 @@ theorem blockStep_covers_mainnet (startEpoch : Nat) :
     have share : 2 ^ 10 * 2048 * 10 ^ 9 /
         (parameters Preset.mainnet fork).WHISTLEBLOWER_REWARD_QUOTIENT.toNat ≤
         2 ^ 10 * 2048 * 10 ^ 9 / 512 := Nat.div_le_div_left quotient (by decide)
-    simp only [BlockLimits.mainnet, BlockStep.mainnet, reward]
+    simp only [BlockLimits.mainnet, BlockStep.mainnet, sync]
+    omega
+  · simp only [BlockStep.mainnet, weight]
     omega
   · simp only [BlockStep.mainnet, hysteresis.1, hysteresis.2]
     omega
@@ -325,15 +335,15 @@ theorem blockStep_covers_mainnet (startEpoch : Nat) :
       blocks, increment, largest]
     omega
 
-/-- On mainnet the conditions of a chain hold for 16 epochs, from any epoch up to `2^40`.
+/-- On mainnet the conditions of a chain hold for 64 epochs, from any epoch up to `2^40`.
 
 They read the mainnet start and step, and a budget of `2^57` Gwei. -/
 theorem chainConditions_mainnet {startEpoch : Nat} (early : startEpoch ≤ 2 ^ 40) :
     ChainConditions Preset.mainnet Config.mainnet (RunStart.mainnet startEpoch) BlockStep.mainnet
-      (2 ^ 57) 16 (startEpoch + 16) := by
+      (2 ^ 57) 64 (startEpoch + 64) := by
   have run := runConditions_mainnet early
   have root : Nat.sqrt (2 ^ 57) = 379625062 := (Nat.eq_sqrt.mpr ⟨by decide, by decide⟩).symm
-  have blocks : Preset.mainnet.chainBlocks 16 = 544 := by decide
+  have blocks : Preset.mainnet.chainBlocks 64 = 2080 := by decide
   have seed : Preset.mainnet.MIN_SEED_LOOKAHEAD.toNat = 1 := by decide
   have longest : Preset.mainnet.MAX_SEED_LOOKAHEAD.toNat = 4 := by decide
   have slots : Preset.mainnet.SLOTS_PER_EPOCH.toNat = 32 := by decide
@@ -359,31 +369,39 @@ theorem chainConditions_mainnet {startEpoch : Nat} (early : startEpoch ≤ 2 ^ 4
     loadRoom := ?_
     slotRoom := ?_
     epochRoom := ?_ }, ?_⟩
-  · simp only [RunStart.afterBlocks, RunStart.mainnet, BlockStep.mainnet, blocks, increment]
+  · simp only [RunStart.afterChain, RunStart.afterBlocks, RunStart.mainnet, BlockStep.mainnet,
+      blocks, increment]
     decide
-  · simp only [Preset.epochIssuanceBeforeAltair, root, RunStart.afterBlocks, RunStart.mainnet,
+  · simp only [Preset.epochIssuanceBeforeAltair, root, RunStart.afterChain, RunStart.afterBlocks,
+      RunStart.mainnet,
       BlockStep.mainnet, blocks]
     decide
-  · simp only [Preset.epochIssuanceBeforeAltair, Preset.epochIssuance, root, RunStart.afterBlocks,
+  · simp only [Preset.epochIssuanceBeforeAltair, Preset.epochIssuance, root, RunStart.afterChain,
+      RunStart.afterBlocks,
       RunStart.mainnet, BlockStep.mainnet, blocks]
     decide
-  · simp only [RunStart.afterBlocks, RunStart.mainnet] at horizon ⊢
+  · simp only [RunStart.afterChain, RunStart.afterBlocks, RunStart.mainnet] at horizon ⊢
     omega
-  · simp only [RunStart.afterBlocks, RunStart.mainnet, BlockStep.mainnet, blocks, longest]
+  · simp only [RunStart.afterChain, RunStart.afterBlocks, RunStart.mainnet, BlockStep.mainnet,
+      blocks, longest]
     omega
-  · simp only [RunStart.ceilingAt, RunStart.exitStep, RunStart.afterBlocks, RunStart.mainnet,
+  · simp only [RunStart.ceilingAt, RunStart.exitStep, RunStart.afterChain, RunStart.afterBlocks,
+      RunStart.mainnet,
       BlockStep.mainnet, blocks, increment, delay]
     omega
-  · simp only [RunStart.afterBlocks, RunStart.mainnet] at depositRoom ⊢
+  · simp only [RunStart.afterChain, RunStart.afterBlocks, RunStart.mainnet] at depositRoom ⊢
     omega
   · intro fork
-    simp only [RunStart.afterBlocks, RunStart.mainnet, BlockStep.mainnet, blocks]
+    simp only [RunStart.afterChain, RunStart.afterBlocks, RunStart.mainnet, BlockStep.mainnet,
+        blocks]
     cases fork <;> decide
-  · simp only [RunStart.afterBlocks, RunStart.mainnet] at history ⊢
+  · simp only [RunStart.afterChain, RunStart.afterBlocks, RunStart.mainnet] at history ⊢
     omega
-  · simp only [RunStart.afterBlocks, RunStart.mainnet, BlockStep.mainnet, blocks]
+  · simp only [RunStart.afterChain, RunStart.afterBlocks, RunStart.mainnet, BlockStep.mainnet,
+      blocks]
     decide
-  · simp only [RunStart.afterBlocks, RunStart.mainnet, BlockStep.mainnet, blocks]
+  · simp only [RunStart.afterChain, RunStart.afterBlocks, RunStart.mainnet, BlockStep.mainnet,
+      blocks]
     decide
   · rw [seed, slots, roots]
     omega
@@ -398,17 +416,17 @@ The chain starts from a state that keeps the facts of a chain, with the mainnet 
 
 The budget of effective balances is `2^57` Gwei.
 
-The advance ends at most 16 epochs past the first epoch of the chain, which is at most `2^40`.
-
 It takes the hypotheses on the signers, the draws and the epoch limit of the general theorem. -/
 theorem processSlotsAcross_exists_ok_of_chain_mainnet {startEpoch blocks count : Nat}
     {forked reached : ForkedBeaconState Preset.mainnet} {slot : Slot}
+    -- The first epoch of the chain is at most `2^40`.
     (early : startEpoch ≤ 2 ^ 40)
     (holds : ChainHolds Config.mainnet (RunStart.mainnet startEpoch) BlockStep.mainnet (2 ^ 57)
       startEpoch blocks forked.state)
     (reaches : ChainReaches Config.mainnet checks BlockLimits.mainnet forked count reached)
     (later : reached.state.slot < slot)
-    (within : slot.toNat / Preset.mainnet.SLOTS_PER_EPOCH.toNat ≤ startEpoch + 16)
+    -- The advance ends at most 64 epochs past the first epoch of the chain.
+    (within : slot.toNat / Preset.mainnet.SLOTS_PER_EPOCH.toNat ≤ startEpoch + 64)
     (signers : SignersAtEnds Config.mainnet checks reached (slot.toNat - reached.state.slot.toNat))
     (draws : DrawsEnd Config.mainnet checks reached (slot.toNat - reached.state.slot.toNat))
     (limit : EpochLimitBeforeAltair reached (slot.toNat - reached.state.slot.toNat)) :
@@ -425,14 +443,25 @@ theorem RunHolds.toChainHolds_step {start : RunStart} {step : BlockStep} {budget
     (holds : RunHolds config start budget startEpoch state) :
     ChainHolds config start step budget startEpoch 0 state := by
   have chain := holds.toChainHolds
-  have zero : start.afterBlocks step 0 = start.afterBlocks BlockStep.zero 0 := by
-    simp [RunStart.afterBlocks]
-  exact ⟨chain.started, chain.invariant, chain.shaped, chain.wellFormed, chain.resolved,
-    chain.early, chain.voted, chain.counted, zero ▸ chain.bounded⟩
+  have supplyLe := holds.bounded.supply
+  -- With no block, the chain raises only the supply, by the rewards of the epochs.
+  have raised : ∀ elapsed, start.afterChain step 0 elapsed =
+      { start with supply := start.supply + (elapsed + 1) * step.rewards } := by
+    intro elapsed
+    cases start
+    simp [RunStart.afterChain, RunStart.afterBlocks]
+  refine ⟨chain.started, chain.invariant, chain.shaped, chain.wellFormed, chain.resolved,
+    chain.early, chain.voted, chain.counted, ?_, ?_⟩
+  · rw [raised]
+    exact holds.bounded.raiseSupply (Nat.le_add_right _ _)
+  · have split := Nat.mul_add ((getCurrentEpoch state).toNat - startEpoch) step.rewards
+      (preset.epochIssuanceBeforeAltair budget)
+    simp only [RunStart.afterBlocks, Nat.zero_mul, Nat.add_zero]
+    omega
 
 /-- After a chain of blocks within the mainnet limits, the advance from the Altair witness succeeds.
 
-The advance ends at most 16 epochs past the epoch of the witness.
+The advance ends at most 64 epochs past the epoch of the witness.
 
 It takes the hypotheses on the signers, the draws and the epoch limit of the general theorem. -/
 theorem processSlotsAcross_exists_ok_of_chain_altairWitnessState {count : Nat}
@@ -440,7 +469,7 @@ theorem processSlotsAcross_exists_ok_of_chain_altairWitnessState {count : Nat}
     (reaches : ChainReaches Config.mainnet checks BlockLimits.mainnet ⟨.altair, altairWitnessState⟩
       count reached)
     (later : reached.state.slot < slot)
-    (within : slot.toNat / Preset.mainnet.SLOTS_PER_EPOCH.toNat ≤ 74240 + 16)
+    (within : slot.toNat / Preset.mainnet.SLOTS_PER_EPOCH.toNat ≤ 74240 + 64)
     (signers : SignersAtEnds Config.mainnet checks reached (slot.toNat - reached.state.slot.toNat))
     (draws : DrawsEnd Config.mainnet checks reached (slot.toNat - reached.state.slot.toNat))
     (limit : EpochLimitBeforeAltair reached (slot.toNat - reached.state.slot.toNat)) :

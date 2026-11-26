@@ -3,6 +3,7 @@ module
 public import EthLib.Base.Proofs.List
 public import EthLib.Cryptography.Kzg.Cells
 public import EthLib.Cryptography.Proofs.Kzg.Polynomials
+import Batteries.Data.Array.Lemmas
 
 /-!
 # Proofs: the shape and the input checks of the cell operations
@@ -14,6 +15,10 @@ The coset of a cell has a full cell of points.
 The batch challenge is a canonical field element.
 
 Each cell operation rejects each malformed input with its own error, before any other work.
+
+A buffer of indices decodes to a list exactly when it holds their 8-byte encodings, in order.
+
+Commitments are ordered by their bytes, with the laws that a search tree needs.
 -/
 
 @[expose] public section
@@ -101,6 +106,21 @@ theorem val_computeVerifyCellKzgProofBatchChallenge_lt
   rw [computeVerifyCellKzgProofBatchChallenge]
   exact Fr.val_hashToBlsField_lt _
 
+/-! ## The order of commitments -/
+
+/-- Commitments compare as their bytes, so the order is transitive. -/
+instance : Std.TransOrd KZGCommitment where
+  -- Both laws are those of the order on byte vectors.
+  eq_swap := Std.OrientedCmp.eq_swap (cmp := fun a b : Vector UInt8 48 => compare a b)
+  isLE_trans := Std.TransCmp.isLE_trans (cmp := fun a b : Vector UInt8 48 => compare a b)
+
+/-- Commitments compare as equal exactly when they are equal. -/
+instance : Std.LawfulEqOrd KZGCommitment where
+  -- Equal bytes make equal commitments.
+  eq_of_compare h :=
+    congrArg KZGCommitment.mk
+      (Std.LawfulEqCmp.eq_of_compare (cmp := fun a b : Vector UInt8 48 => compare a b) h)
+
 /-! ## `verifyCellKzgProofBatchImpl` validation -/
 
 /-- Rejects a `cellIndices` array whose length does not match `commitmentIndices`. -/
@@ -173,12 +193,12 @@ theorem verifyCellKzgProofBatchImpl_duplicateCommitments (setup : TrustedSetup)
     verifyCellKzgProofBatchImpl setup commitments commitmentIndices cellIndices
         cosetsEvals proofs
       = throw (.duplicateCommitments entry.2) := by
-  have h : commitments.zipIdx.any (fun (c, i) => commitments.idxOf? c ≠ some i) = true :=
-    Base.any_eq_true_of_find?_eq_some found
+  -- The search of the array is the search of its list, so the scan finds the same place.
+  have h : Base.firstRepeatIndex commitments.toList = some entry.2 := by
+    rw [Base.firstRepeatIndex_eq_find?, ← Array.toList_zipIdx, Array.find?_toList]
+    simp only [Array.idxOf?_toList, found, Option.map_some]
   unfold verifyCellKzgProofBatchImpl
-  rw [h, hcidx]
-  simp only [ne_eq, decide_not] at found
-  simp [hcell, hcoset, hproof, found, throw_bind]
+  simp [hcell, hcoset, hproof, hcidx, h, throw_bind]
 
 /-- Alias for `verifyCellKzgProofBatchImpl_cellIndices_mismatch`. -/
 theorem computeVerifyCellKzgProofBatchChallenge_mismatch_cellIndices (setup : TrustedSetup)
@@ -312,5 +332,57 @@ theorem unpackIndicesBE_bad_size {b : ByteArray} (h : b.size % 8 ≠ 0) :
   unfold unpackIndicesBE
   simp [hsz]
   rfl
+
+/-- A buffer of a multiple of 8 bytes decodes to one index per 8 bytes, in order. -/
+private theorem unpackIndicesBE_eq_ok_of_mod_eq_zero {b : ByteArray} (h : b.size % 8 = 0) :
+    unpackIndicesBE b = .ok ((List.range (b.size / 8)).map fun i =>
+      Base.ByteOrder.ofBE ((b.data.toList.drop (i * 8)).take 8)).toArray := by
+  unfold unpackIndicesBE
+  simp only [h, bne_self_eq_false, Bool.false_eq_true, ite_false]
+  rw [Std.Legacy.Range.forIn_eq_forIn_range']
+  simp only [List.forIn_pure_yield_eq_foldl, Std.Legacy.Range.size, ByteArray.data_extract,
+    Array.toList_extract, List.extract_eq_take_drop, Array.mkEmpty_eq, pure_bind]
+  have hsteps : (b.size / 8 - 0 + 1 - 1) / 1 = b.size / 8 := by omega
+  have hwidth : ∀ a : Nat, (a + 1) * 8 - a * 8 = 8 := fun a => by omega
+  -- The loop pushes one index per step, so it appends the list of the indices.
+  simp only [hsteps, hwidth, ← List.range_eq_range', List.foldl_push_eq_append]
+  simp
+  rfl
+
+/-- A buffer decodes to a list of indices exactly when it is their encodings, in order.
+
+Each index is below `2^64`, and its encoding is 8 bytes, the most significant first.
+
+So the decoding reads all 8 bytes of each index, and drops or adds no byte of the buffer. -/
+theorem unpackIndicesBE_eq_ok_iff (b : ByteArray) (xs : Array Nat) :
+    unpackIndicesBE b = .ok xs ↔
+      (∀ x ∈ xs, x < 2 ^ 64) ∧ b.data.toList
+        = xs.toList.flatMap (fun x => (Base.ByteOrder.toBE 8 x).toList) := by
+  have h64 : (2 : Nat) ^ 64 = 256 ^ 8 := rfl
+  constructor
+  · intro hok
+    by_cases h : b.size % 8 = 0
+    · rw [unpackIndicesBE_eq_ok_of_mod_eq_zero h] at hok
+      obtain rfl := (Except.ok.inj hok).symm
+      refine ⟨fun x hx => ?_, ?_⟩
+      · obtain ⟨i, -, rfl⟩ := List.mem_map.mp (List.mem_toArray.mp hx)
+        have hlt := Base.ByteOrder.ofBE_lt ((b.data.toList.drop (i * 8)).take 8)
+        have hle : 256 ^ ((b.data.toList.drop (i * 8)).take 8).length ≤ 2 ^ 64 :=
+          h64 ▸ Nat.pow_le_pow_right (by decide) (List.length_take_le _ _)
+        omega
+      · have hlen : b.data.toList.length = 8 * (b.size / 8) := by
+          rw [Array.length_toList]
+          exact (Nat.mul_div_cancel' (Nat.dvd_of_mod_eq_zero h)).symm
+        rw [List.toList_toArray, Base.ByteOrder.flatMap_toBE_map_range_ofBE hlen]
+    · rw [unpackIndicesBE_bad_size h] at hok
+      cases hok
+  · rintro ⟨hlt, heq⟩
+    have hlen : b.size = 8 * xs.size := by
+      have hsize : b.data.toList.length = b.size := Array.length_toList
+      rw [← hsize, heq, Base.ByteOrder.length_flatMap_toBE, Array.length_toList]
+    rw [unpackIndicesBE_eq_ok_of_mod_eq_zero (by omega), show b.size / 8 = xs.toList.length by
+      rw [Array.length_toList]; omega, heq,
+      Base.ByteOrder.map_range_ofBE_flatMap_toBE
+        fun x hx => h64 ▸ hlt x (Array.mem_toList_iff.mp hx)]
 
 end EthLib.Cryptography.Kzg

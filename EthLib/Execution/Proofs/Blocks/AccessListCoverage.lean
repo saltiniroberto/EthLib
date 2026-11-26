@@ -5,17 +5,7 @@ public import EthLib.Execution.Proofs.Blocks.AccessListBuilder
 /-!
 # Proofs: the builder records every account and key that a call touched
 
-When a transaction or a system call ends, the builder records what it did.
-
-Every account that the call read or wrote then has a record.
-
-Every storage key that it read or wrote is then named by the record of its account.
-
-A key is named when it has a change at some position, or when it counts as read.
-
-A write that leaves a slot as its position found it drops any change at that position.
-
-It counts as a read, so a written key may appear among the reads of its account.
+When a transaction or a system call ends, the builder records each account and key that it touched.
 
 A later call never drops a record or a named key.
 
@@ -196,6 +186,7 @@ Otherwise the key counts as read, and any earlier change at that position is dro
 theorem recordStorageWrite_extends (b : AccessListBuilder) (address : Address) (key : Bytes32)
     (value : U256) :
     b.Extends (b.recordStorageWrite address key value) ∧
+      -- A write that changes nothing counts as a read, so a written key may appear among the reads.
       (b.recordStorageWrite address key value).NamesKey address key := by
   unfold recordStorageWrite
   split

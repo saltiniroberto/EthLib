@@ -11,25 +11,9 @@ public import Lean.Data.Json
 
 The C exports of the active fork of a chain, for the Python bindings.
 
-Mainnet and Hoodi have an export each, and any other chain passes its configuration.
+Mainnet, Hoodi and Sepolia have an export each, and any other chain passes its configuration.
 
-A block number and a timestamp cross the boundary as 64-bit integers, as EIP-6122 reads them.
-
-A fork crosses it as its name, a `str` such as `bellatrix`.
-
-A chain configuration crosses it as the typed value of its JSON, a `dict`.
-
-Its keys are its chain ID, its deposit contract, its activations and its blob schedules.
-
-The deposit contract is its address: `0x` and forty hex digits, which Python `bytes` become.
-
-An activation is a fork name, `block` or `time`, and a number.
-
-A blob schedule is `block` or `time`, a number, the target, the maximum and the update fraction.
-
-A blob schedule can start with the name of its fork.
-
-A client configuration file crosses as the `dict` of its JSON, as EIP-7840 and EIP-7892 shape it.
+The configuration of each of these three also crosses as a `dict`.
 -/
 
 public section
@@ -39,10 +23,16 @@ namespace EthLib.Base.ChainConfig.Exports
 open EthLib.Exports (ExportError Result PyValue UnreadArgument pyExport forkOfName
   rejectArgument toResult)
 
+/-- The name of the active fork of a configuration at a block, if a fork is active. -/
+def activeForkName (config : ChainConfig) (args : UInt64 × UInt64) : Result (Option String) :=
+  -- A block number and a timestamp cross the boundary as 64-bit integers, as EIP-6122 reads them.
+  let (number, timestamp) := args
+  -- A fork crosses it as its name, a `str` such as `bellatrix`.
+  pure ((config.activeFork number.toNat timestamp.toNat).map (·.name))
+
 /-- The name of the active fork of mainnet at a block, if a fork is active. -/
 def mainnetActiveForkOf (args : UInt64 × UInt64) : Result (Option String) :=
-  let (number, timestamp) := args
-  pure ((mainnet.activeFork number.toNat timestamp.toNat).map (·.name))
+  activeForkName mainnet args
 
 /-- The name of the active fork of mainnet at a block, or `None` when none is active.
 
@@ -52,14 +42,24 @@ def mainnetActiveForkExport (args : PyValue) : Result PyValue := pyExport mainne
 
 /-- The name of the active fork of Hoodi at a block, if a fork is active. -/
 def hoodiActiveForkOf (args : UInt64 × UInt64) : Result (Option String) :=
-  let (number, timestamp) := args
-  pure ((hoodi.activeFork number.toNat timestamp.toNat).map (·.name))
+  activeForkName hoodi args
 
 /-- The name of the active fork of Hoodi at a block, or `None` when none is active.
 
 The arguments are the block number and the timestamp. -/
 @[export eth_hoodi_active_fork]
 def hoodiActiveForkExport (args : PyValue) : Result PyValue := pyExport hoodiActiveForkOf args
+
+/-- The name of the active fork of Sepolia at a block, if a fork is active. -/
+def sepoliaActiveForkOf (args : UInt64 × UInt64) : Result (Option String) :=
+  activeForkName sepolia args
+
+/-- The name of the active fork of Sepolia at a block, or `None` when none is active.
+
+The arguments are the block number and the timestamp. -/
+@[export eth_sepolia_active_fork]
+def sepoliaActiveForkExport (args : PyValue) : Result PyValue :=
+  pyExport sepoliaActiveForkOf args
 
 open Lean (Json)
 
@@ -84,7 +84,7 @@ def activationOfJson (j : Json) : Result (Fork × Activation) := do
     | rejectArgument none "an activation is not [fork, kind, n]"
   return (← forkOfName name.toUTF8, ← activationOf kind n)
 
-/-- One blob schedule of a configuration: its activation, target, maximum and update fraction.
+/-- One blob schedule: `block` or `time`, a number, the target, the maximum and the update fraction.
 
 A fork name in front gives the fork that the schedule belongs to.
 
@@ -116,6 +116,7 @@ def depositContractOfJson (j : Json) : Result Address := do
     rejectArgument none "config: depositContractAddress is not forty hex digits"
   let some bytes := hexBytes? digits
     | rejectArgument none "config: depositContractAddress is not hex"
+  -- Python `bytes` become `0x` and forty hex digits, which read back as these 20 bytes.
   toResult none (Base.exactBytes 20 bytes fun _ =>
     UnreadArgument.mk "config: depositContractAddress is not 20 bytes")
 
@@ -127,6 +128,7 @@ No fork by block number may come after a fork by timestamp in the timeline, as E
 
 The chain ID is a 64-bit number, so a larger one is rejected rather than reduced. -/
 def configOfJson (j : Json) : Result ChainConfig := do
+  -- The keys of the JSON are the chain ID, the deposit contract, the activations and the schedules.
   let some chainId := (j.getObjValAs? Nat "chainId").toOption
     | rejectArgument none "config: no chainId"
   unless chainId < 2 ^ 64 do rejectArgument none "config: chainId is not below 2^64"
@@ -144,13 +146,51 @@ def configOfJson (j : Json) : Result ChainConfig := do
   return { chainId := UInt64.ofNat chainId, depositContractAddress := depositContractAddress,
             activations := activations, blobSchedules := schedules }
 
+/-- The configuration of a chain that EthLib holds, by its name. -/
+def namedConfigOf : String → Result ChainConfig
+  | "mainnet" => pure mainnet
+  | "hoodi" => pure hoodi
+  | "sepolia" => pure sepolia
+  -- No error type covers an unknown name, so it has code 0 and a message.
+  | name => rejectArgument none s!"no chain is named {name}"
+
+/-- An activation as the reader of a configuration takes it: its kind, then its number. -/
+def activationJson : Activation → List Json
+  | .block n => [.str "block", Lean.toJson n]
+  | .time t => [.str "time", Lean.toJson t]
+
+/-- A configuration as the JSON that the reader of a configuration takes. -/
+def configJsonOf (config : ChainConfig) : Json :=
+  Json.mkObj [
+    ("chainId", Lean.toJson config.chainId.toNat),
+    -- The address is `0x` and forty lowercase hex digits.
+    ("depositContractAddress", .str (hexString config.depositContractAddress.toList)),
+    -- Each activation is its fork's name, its kind and its number.
+    ("activations", .arr (config.activations.map fun (fork, a) =>
+      Json.arr (.str fork.name :: activationJson a).toArray).toArray),
+    -- Each schedule is its fork's name if it has one, its activation and its three numbers.
+    ("blobSchedules", .arr (config.blobSchedules.map fun (fork, a, s) =>
+      Json.arr ((fork.map fun f => Json.str f.name).toList ++ activationJson a ++
+        [Lean.toJson s.target.toNat, Lean.toJson s.max.toNat,
+          Lean.toJson s.baseFeeUpdateFraction]).toArray).toArray)]
+
+/-- The configuration of a chain that EthLib holds, as a `dict`. -/
+def chainConfigValue (name : String) : Result PyValue := do
+  return .ofJson (configJsonOf (← namedConfigOf name))
+
+/-- The configuration of a chain that EthLib holds, as a `dict`.
+
+The argument is the name of the chain: `mainnet`, `hoodi` or `sepolia`. -/
+@[export eth_chain_config]
+def chainConfigExport (args : PyValue) : Result PyValue := pyExport chainConfigValue args
+
 /-- The name of the active fork of a configured chain at a block, if a fork is active.
 
 The configuration is a `dict` with the keys and values of the JSON that other exports read. -/
 def activeForkOf (args : PyValue × UInt64 × UInt64) : Result (Option String) := do
   let (config, number, timestamp) := args
-  let config ← configOfJson config.toJson
-  return (config.activeFork number.toNat timestamp.toNat).map (·.name)
+  -- A chain configuration crosses the boundary as the typed value of its JSON, a `dict`.
+  activeForkName (← configOfJson config.toJson) (number, timestamp)
 
 /-- The name of the active fork of a configured chain at a block, or `None` when none is active.
 
@@ -168,6 +208,9 @@ instance : ExportError ExecutionConfig.ConfigError where
 A file that the reader refuses gives the code of its error. -/
 def executionConfigOf (base file : PyValue) : Result ChainConfig := do
   let base ← configOfJson base.toJson
+  -- A client configuration file crosses as the `dict` of its JSON.
+  --
+  -- EIP-7840 and EIP-7892 shape that JSON.
   toResult "execution config" (ExecutionConfig.readExecutionConfig base file.toJson)
 
 /-- The blob schedule of a chain at a block, from a base configuration and a configuration file.

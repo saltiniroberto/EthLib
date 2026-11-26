@@ -18,18 +18,6 @@ That is the first step towards placing each supporter in those committees.
 
 Another file shows that the state of the target and the state of the head agree on them.
 
-A supporter of a block votes for a node that descends from it.
-
-That node is a known block, from the slot of the block or later.
-
-In a store where each latest vote has its origin, that vote comes from an attestation.
-
-Its slot is at or after the slot of the voted block, and before the current slot.
-
-So the slot of the vote lies in the range of the adversary of the block.
-
-In particular, no vote counts for a block at the current slot, which is never one-confirmed.
-
 [fcr]: https://arxiv.org/abs/2405.00549v4
 -/
 
@@ -55,21 +43,24 @@ theorem VotesHaveOrigins.exists_attestation_of_mem_supportersOf
     (supporter : v ∈ store.supportersOf state node) :
     ∃ attestation, store.latestMessages[v]? = some (LatestMessage.ofAttestation attestation) ∧
       store.VoteOrigin config v attestation ∧ block.slot ≤ attestation.data.slot :=
+  -- A supporter of a block votes for a node that descends from it.
+  --
+  -- That node is a known block, from the slot of the block or later.
+  --
+  -- In a store where each latest vote has its origin, that vote comes from an attestation.
   holds.exists_attestation_of_voteCountsFor found
     (store.voteCountsFor_of_mem_supportersOf supporter)
 
 /-- The vote of each supporter of a known block is from a slot of a range of slots.
 
-The range starts at or before the slot of the block.
-
-It ends at the last slot before the current one.
-
 Each latest vote of the store must come from an attestation, with the facts behind it. -/
 theorem VotesHaveOrigins.slot_mem_range_of_mem_supportersOf (holds : store.VotesHaveOrigins config)
     {state : BeaconState preset fork} {root : Root} {block : BeaconBlock preset fork}
     {currentSlot startSlot lastSlot : Slot} {v : ValidatorIndex}
+    -- The range starts at or before the slot of the block.
     (blockOk : store.block root = .ok block) (startLe : startSlot ≤ block.slot)
     (slotOk : store.getCurrentSlot config = .ok currentSlot)
+    -- It ends at the last slot before the current one.
     (lastOk : subChecked currentSlot 1 = .ok lastSlot)
     (supporter : v ∈ store.supportersOf state ⟨root, .pending⟩) :
     ∃ attestation, store.latestMessages[v]? = some (LatestMessage.ofAttestation attestation) ∧
@@ -78,6 +69,9 @@ theorem VotesHaveOrigins.slot_mem_range_of_mem_supportersOf (holds : store.Votes
   have found : store.blocks[root]? = some block := block_ok_iff.mp blockOk
   obtain ⟨attestation, latest, origin, slotLe⟩ :=
     holds.exists_attestation_of_mem_supportersOf (node := ⟨root, .pending⟩) found supporter
+  -- Its slot is at or after the slot of the voted block, and before the current slot.
+  --
+  -- So the slot of the vote lies in the range of the adversary of the block.
   refine ⟨attestation, latest, origin, UInt64.le_trans startLe slotLe, ?_⟩
   obtain ⟨current, currentOk, past⟩ := origin.past
   rw [slotOk] at currentOk
@@ -204,133 +198,6 @@ private theorem stake_le_weight_of_gloas (lower : store.ParentsBelow) (gloas : .
   rw [same]
   simpa [latestNode, latest, supportedOk, Except.toOption] using honest
 
-open Models.ForkChoice in
-/-- From Gloas, a viable node weighing over half the stake plus the boost stays on the head chain.
-
-No viable node from the justified block down to it may be a payload decision of the previous slot.
-
-The walk from each node above it then reaches it. -/
-private theorem getHeadFrom_ancestor_of_path_majority (lower : store.ParentsBelow)
-    (gloas : .glamsterdam ≤ fork) {nodes : List ForkChoiceNode} {state : BeaconState preset fork}
-    (tree : store.getFilteredNodeTree config = .ok nodes)
-    (stateOk : store.checkpointState store.justifiedCheckpoint = .ok state)
-    {target : ForkChoiceNode} {targetBlock : BeaconBlock preset fork} (targetIn : target ∈ nodes)
-    (targetFound : store.blocks[target.root]? = some targetBlock)
-    (noDecision : ∀ n ∈ nodes, (nodeTree lower).Ancestor n.toModel target.toModel →
-      store.isPreviousSlotPayloadDecision config n = .ok false)
-    (majority : Models.stake (balanceAt state) (voters state) +
-        store.boostScoreOfGloas config gloas <
-      2 * Models.ForkChoice.weight (voters state) (balanceAt state) (nodeView lower nodes)
-        target.toModel) :
-    ∀ {start head : ForkChoiceNode},
-      (nodeTree lower).Ancestor (some store.justifiedCheckpoint.root, none) start.toModel →
-      (nodeTree lower).Ancestor start.toModel target.toModel →
-      store.getHeadFrom config store.justifiedTally nodes start = .ok head →
-      ∃ ancestor, store.getAncestor head targetBlock.slot = .ok ancestor ∧
-        ancestor.root = target.root := by
-  classical
-  have tallied := justifiedTally_of_state stateOk
-  have closed := filterNodeTree_closed (T := nodeTree lower) (·.toModel) tree
-    fun _ _ _ ok _ mem => isChild_of_mem_getNodeChildren gloas ok mem
-  -- The weight with the boost of a node: its votes, and the boost below it.
-  let boosted := fun n : ForkChoiceNode =>
-    Models.ForkChoice.weight (voters state).insertNone
-      (boostStake (balanceAt state) (store.boostScoreOfGloas config gloas))
-      ((nodeView lower nodes).withBoost (store.boostedNode config gloas)) n.toModel
-  -- A weighed node of the tree weighs its weight with the boost, or 0 as a payload decision.
-  have weighs : ∀ {n : ForkChoiceNode} {value : Gwei}, n ∈ nodes →
-      store.getWeight config store.justifiedTally n = .ok value →
-      value.toNat = boosted n ∨ value = 0 := by
-    intro n value mem computed
-    obtain ⟨-, ⟨nBlock, nFound⟩, -⟩ := filterNodeTree_mem tree n mem
-    cases decision : store.isPreviousSlotPayloadDecision config n with
-    | error e => simp [getWeight, gloas, decision, bind, Except.bind] at computed
-    | ok verdict =>
-    cases verdict with
-    | true =>
-      simp [getWeight, gloas, decision, bind, Except.bind, pure, Except.pure] at computed
-      exact .inr computed.symm
-    | false =>
-      exact .inl (getWeight_eq_weight_withBoost_of_gloas (lower := lower) gloas decision tallied
-        nFound nodes computed)
-  intro start
-  induction start using getHeadFrom.induct store with
-  | _ start ih =>
-  intro head below onPath walk
-  by_cases atTarget : start.toModel = target.toModel
-  · obtain rfl := ForkChoiceNode.toModel_injective atTarget
-    obtain ⟨ancestor, walked, rootEq, -⟩ :=
-      getAncestor_getHeadFrom_of_gloas gloas walk targetFound
-    exact ⟨ancestor, walked, rootEq⟩
-  -- The child of the start towards the target is a viable child of the start.
-  obtain ⟨c, cChild, cAbove⟩ := onPath.exists_child atTarget
-  obtain ⟨path, pathIn, rfl⟩ := (closed target targetIn).2 c (below.trans cChild.ancestor)
-    cAbove
-  rw [getHeadFrom] at walk
-  cases found : store.heaviestChild config store.justifiedTally nodes start with
-  | error e => simp [found, bind, Except.bind] at walk
-  | ok result =>
-  obtain ⟨children, weighted, childrenOk, weightedOk, choice⟩ := heaviestChild_eq found
-  have pathMem : path ∈ children.filter (· ∈ nodes) :=
-    (mem_children_nodeView gloas tree below childrenOk).mp
-      (Models.ForkChoice.mem_children.mpr
-        ⟨View.mem_ofBlocks.mpr ⟨_, List.mem_toFinset.mpr (List.mem_map_of_mem pathIn), .refl _⟩,
-          cChild⟩)
-  obtain ⟨y, yMem, pathOk⟩ := exists_mem_of_mapM_ok weightedOk pathMem
-  obtain ⟨-, pathWeight, -⟩ := weighNode_ok_iff.mp pathOk
-  -- The path child weighs its weight with the boost, at least the votes of the target.
-  have targetWeight := Models.ForkChoice.weight_mono (V := voters state) (w := balanceAt state)
-    (G := nodeView lower nodes) cAbove
-  obtain ⟨-, ⟨pathBlock, pathFound⟩, -⟩ := filterNodeTree_mem tree path pathIn
-  have pathValue : y.2.1.toNat = boosted path := getWeight_eq_weight_withBoost_of_gloas
-    (lower := lower) gloas (noDecision path pathIn cAbove) tallied pathFound nodes pathWeight
-  have pathLower : Models.ForkChoice.weight (voters state) (balanceAt state) (nodeView lower nodes)
-      path.toModel ≤ boosted path := by
-    simp only [boosted, weight_withBoost]
-    omega
-  cases result with
-  | none =>
-    rw [chooseHeaviest_eq_none] at choice
-    subst choice
-    cases yMem
-  | some chosen =>
-  simp only [found, bind, Except.bind] at walk
-  split at walk
-  swap
-  · cases walk
-  obtain ⟨key, chosenMem, largest⟩ := chooseHeaviest_some choice
-  obtain ⟨source, sourceMem, sourceOk⟩ := mapM_ok_mem weightedOk _ chosenMem
-  obtain ⟨same, sourceWeight, -⟩ := weighNode_ok_iff.mp sourceOk
-  replace same : source = chosen := same.symm
-  subst same
-  -- The chosen child is the path child: any other child weighs less.
-  have chosenPath : source = path := by
-    by_contra other
-    have sourceIn : source ∈ nodes := of_decide_eq_true (List.mem_filter.mp sourceMem).2
-    have sourceChild := isChild_of_mem_getNodeChildren (lower := lower) gloas childrenOk
-      (List.mem_filter.mp sourceMem).1
-    have models : source.toModel ≠ path.toModel :=
-      fun eq => other (ForkChoiceNode.toModel_injective eq)
-    have le := toLex_le_of_compareWeighted_tiebreaker (largest y yMem)
-    rw [Prod.Lex.toLex_le_toLex] at le
-    have below : key.1.toNat < y.2.1.toNat := by
-      rcases weighs sourceIn sourceWeight with value | zero
-      · -- Two children share at most the stake of the voters and the boost.
-        have sum := weight_withBoost_add_le (V := voters state) (w := balanceAt state)
-          (G := nodeView lower nodes) sourceChild cChild models (store.boostedNode config gloas)
-          (store.boostScoreOfGloas config gloas)
-        have total := weight_add_le (V := voters state) (w := balanceAt state)
-          (G := nodeView lower nodes) sourceChild cChild models
-        simp only [boosted] at value pathValue pathLower
-        omega
-      · rw [zero]
-        simp only [UInt64.toNat_zero]
-        omega
-    dsimp only at le
-    rcases le with lt | ⟨eq, -⟩ <;> omega
-  subst chosenPath
-  exact ih source ‹_› (below.trans cChild.ancestor) cAbove walk
-
 /-- An honest duty majority in the justified state puts a viable block on the head chain.
 
 Twice the honest duty stake exceeds the active, unslashed stake plus the boost.
@@ -399,11 +266,19 @@ theorem isAncestor_getHead_of_duty_support
       fun ⟨_, empty⟩ => List.ne_nil_of_mem viable (List.isEmpty_iff.mp empty)
     have headFrom := headOk
     simp only [getHead, tree, notEmpty, ↓reduceIte, bind, Except.bind] at headFrom
-    obtain ⟨ancestor, walked, rootEq⟩ := getHeadFrom_ancestor_of_path_majority lower gloas tree
-      stateOk viable known noDecision (by rw [total]; omega) (.refl _)
-      (closed _ viable).1 headFrom
-    simp [isAncestor_pending gloas, block_ok_iff.mpr known, walked, rootEq, bind, Except.bind,
-      pure, Except.pure]
+    have majority' : Models.stake (balanceAt state) (voters state) +
+        store.boostScoreOfGloas config gloas <
+      2 * Models.ForkChoice.weight (voters state) (balanceAt state) (nodeView lower nodes)
+        (⟨root, .pending⟩ : ForkChoiceNode).toModel := by
+      rw [total]
+      omega
+    exact isAncestor_getHeadFrom_of_sibling_bound
+      (start := ⟨store.justifiedCheckpoint.root, .pending⟩) lower gloas tree stateOk viable
+      (.refl _) (closed _ viable).1 (fun n nIn _ above => noDecision n nIn above)
+      (fun _ _ _ _ _ _ _ cChild dChild toward other =>
+        (siblingBound_of_majority lower gloas majority' cChild dChild toward other).imp_left
+          fun beats _ => beats)
+      headFrom
   have before : fork < .glamsterdam := Nat.lt_of_not_le gloas
   by_cases covered : store.isAncestor ⟨store.justifiedCheckpoint.root, .pending⟩
       ⟨root, .pending⟩ = .ok true
@@ -444,6 +319,8 @@ theorem not_isOneConfirmed_of_slot_eq_current
   obtain ⟨support, threshold, supportOk, thresholdOk, -⟩ :=
     isOneConfirmed_eq_ok_true_iff.mp confirmed
   have above := threshold_lt_of_isOneConfirmed supportOk thresholdOk confirmed
+  -- No vote counts for a block at the current slot, as each vote is from an earlier slot.
+  --
   -- The support is the sum of the balances whose vote counts, and none counts.
   have zero : support.toNat = 0 := by
     rw [store.getAttestationScore_toNat_eq_sum supportOk]

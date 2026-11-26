@@ -13,17 +13,9 @@ public import EthLib.Networking.Gossip.Rpc
 
 C-ABI exports for the gossip message ID, payload, RPC and router.
 
-The router exports receive an RPC, join and leave a topic, publish, and run the heartbeat.
-
 The Python C extension calls them.
 
-The message ID takes typed values: the name of a fork as a `str`, then the topic and the data.
-
-An RPC crosses as a `dict` whose keys are the field names of its Lean structure, in snake case.
-
-Each nested message crosses the same way, and each list as a `list`.
-
-Every field has its key, in both directions.
+The router exports receive an RPC, join and leave a topic, publish, and run the heartbeat.
 -/
 
 public section
@@ -33,6 +25,11 @@ namespace EthLib.Networking.Gossip.Exports
 open EthLib.Exports (ExportError Result PyValue UnreadArgument forkOfName pyExport rejectArgument
   toResult)
 
+-- An RPC crosses as a `dict` whose keys are the field names of its Lean structure, in snake case.
+--
+-- Each nested message crosses the same way, and each list as a `list`.
+--
+-- Every field has its key, in both directions.
 derive_py SubOpts
 derive_py_laws SubOpts
 derive_py Message
@@ -75,21 +72,24 @@ def messageIdOf (args : String × ByteArray × ByteArray) : Result MessageId := 
 
 /-- The message ID of a message on a topic of a named fork.
 
-The arguments are the name of the fork, the topic and the data. -/
+The arguments are the name of the fork, the topic and the data.
+
+They are typed values: the name of a fork is a `str`. -/
 @[export eth_gossip_message_id]
 def messageIdExport (args : PyValue) : Result PyValue :=
   pyExport messageIdOf args
 
-/-- The SSZ bytes of the data of a gossip message, given the size bound of its SSZ type. -/
+/-- The SSZ bytes of the data of a gossip message, given the payload cap and the size bound. -/
 @[export eth_gossip_decode_payload]
-def decodePayloadExport (typeBound : UInt64) (data : ByteArray) : Result ByteArray :=
-  toResult "gossip payload rejected" (decodePayload typeBound data)
+def decodePayloadExport (maxPayloadSize typeBound : UInt64) (data : ByteArray) :
+    Result ByteArray :=
+  toResult "gossip payload rejected" (decodePayload maxPayloadSize typeBound data)
 
-/-- The RPC that the bytes encode, under the `StrictNoSign` policy. -/
+/-- The RPC that the bytes encode, under the `StrictNoSign` policy and the size limit of the cap. -/
 @[export eth_gossip_rpc_decode]
 def rpcDecodeExport (args : PyValue) : Result PyValue :=
-  pyExport (fun (data : ByteArray) =>
-    toResult "gossip RPC rejected" (decodeRpc data)) args
+  pyExport (fun ((maxPayloadSize, data) : UInt64 × ByteArray) =>
+    toResult "gossip RPC rejected" (decodeRpc maxPayloadSize data)) args
 
 /-- The bytes of an RPC. -/
 @[export eth_gossip_rpc_encode]
@@ -132,9 +132,13 @@ The arguments come in this order.
 
 - The name of a fork, whose rule gives the ID of every message, whatever the digest of its topic.
 - The gossipsub parameters, then the two durations in milliseconds that the router takes.
-- The standing of some peers; any other peer has every flag false.
-- The validation result of some message IDs; any other message is ignored.
+- The standing of some peers.
+- The validation result of some message IDs.
 - The time in milliseconds, the peer that sent the RPC, the RPC and the state.
+
+A peer outside the standings has every flag false.
+
+A message whose ID has no validation result is ignored.
 
 In each table, the first entry for a key counts.
 

@@ -1,7 +1,7 @@
 module
 
 public import EthLib.Networking.Rlpx.Handshake
-public import EthLib.Base.BigEndian
+public import EthLib.Base.ByteOrder
 
 /-!
 # `Networking.Rlpx.Frame`
@@ -122,12 +122,12 @@ def header (size : Nat) : ByteArray :=
   -- `frame-size` is a 24-bit big-endian integer, in 3 bytes (section Message Encoding).
   --
   -- `header-data` is the 3 bytes of `[0, 0]`, and `header-padding` is 10 zeros up to 16 bytes.
-  ⟨(Base.natToBytes 3 size).toArray ++ HEADER_DATA.toArray ++ Array.replicate 10 0⟩
+  ⟨(Base.ByteOrder.toBE 3 size).toArray ++ HEADER_DATA.toArray ++ Array.replicate 10 0⟩
 
 /-- The frame size that the first 3 bytes of a header give. -/
 def readSize (header : List UInt8) : Nat :=
   -- `frame-size`: the first 3 bytes of the header, a 24-bit big-endian integer.
-  Base.bytesToNat (header.take 3)
+  Base.ByteOrder.ofBE (header.take 3)
 
 /-- A MAC state as the 16 bytes of its MAC. -/
 def macBytes (h : Hasher256) : ByteArray := ⟨(macDigest h).toArray⟩
@@ -160,18 +160,22 @@ def writeFrame (st : FrameState) (frameData : ByteArray) :
       -- The stream moves past the blocks of the frame ciphertext.
       { st with counter := advance (paddedSize size / BLOCK_SIZE) counter, mac := h2 })
 
-/-- The data of the frame at the start of `input`, the state after it, and the bytes after it. -/
-def readFrame (st : FrameState) (input : ByteArray) :
-    Except FrameError (ByteArray × FrameState × ByteArray) :=
-  let bytes := input.data.toList
+/-- The data of the frame at offset `pos` of `input`, the state after it, and the offset after it.
+
+The offsets let a stream of frames be read without copying what is left of it. -/
+def readFrameAt (st : FrameState) (input : ByteArray) (pos : Nat) :
+    Except FrameError (ByteArray × FrameState × Nat) :=
+  -- Each part is cut at its offset from `pos`, so a frame costs its own size, not the input's.
+  let left := input.size - pos
   -- The header ciphertext and the header MAC take 16 bytes each.
-  if bytes.length < 2 * BLOCK_SIZE then .error (.tooShort (2 * BLOCK_SIZE) bytes.length)
+  if left < 2 * BLOCK_SIZE then .error (.tooShort (2 * BLOCK_SIZE) left)
   else
-    let headerCt := bytes.take BLOCK_SIZE
+    let headerCt := (input.extract pos (pos + BLOCK_SIZE)).data.toList
     -- `ingress-mac` is updated in the same way as `egress-mac`, from `header-ciphertext`.
     let h1 := macStep st.macKey st.mac headerCt
     -- The digest is compared to `header-mac`, before `header-ciphertext` is decrypted.
-    if (bytes.drop BLOCK_SIZE).take BLOCK_SIZE ≠ (macDigest h1).toList then
+    if (input.extract (pos + BLOCK_SIZE) (pos + 2 * BLOCK_SIZE)).data.toList ≠
+        (macDigest h1).toList then
       .error .headerMacMismatch
     else
       -- `frame-size` from the decrypted header.
@@ -182,13 +186,14 @@ def readFrame (st : FrameState) (input : ByteArray) :
       let n := paddedSize size
       -- Then comes the 16-byte `frame-mac`.
       let needed := 2 * BLOCK_SIZE + n + BLOCK_SIZE
-      if bytes.length < needed then .error (.tooShort needed bytes.length)
+      if left < needed then .error (.tooShort needed left)
       else
-        let frameCt : ByteArray := ⟨((bytes.drop (2 * BLOCK_SIZE)).take n).toArray⟩
+        let frameCt := input.extract (pos + 2 * BLOCK_SIZE) (pos + 2 * BLOCK_SIZE + n)
         -- `ingress-mac` takes the steps of `frame-mac`, as `egress-mac` does.
         let h2 := frameMacStep st.macKey h1 frameCt
         -- The digest is compared to `frame-mac`, before `frame-ciphertext` is decrypted.
-        if (bytes.drop (2 * BLOCK_SIZE + n)).take BLOCK_SIZE ≠ (macDigest h2).toList then
+        if (input.extract (pos + 2 * BLOCK_SIZE + n) (pos + needed)).data.toList ≠
+            (macDigest h2).toList then
           .error .frameMacMismatch
         else
           -- The frame ciphertext starts at the block after the header.
@@ -197,7 +202,14 @@ def readFrame (st : FrameState) (input : ByteArray) :
           let data := (crypt st.aesKey counter frameCt).data.toList.take size
           -- The stream moves past the blocks of the frame ciphertext.
           .ok (⟨data.toArray⟩, { st with counter := advance (n / BLOCK_SIZE) counter, mac := h2 },
-            ⟨(bytes.drop needed).toArray⟩)
+            pos + needed)
+
+/-- The data of the frame at the start of `input`, the state after it, and the bytes after it. -/
+def readFrame (st : FrameState) (input : ByteArray) :
+    Except FrameError (ByteArray × FrameState × ByteArray) := do
+  let (data, st, next) ← readFrameAt st input 0
+  -- The bytes after the frame, from the offset where it ends.
+  return (data, st, input.extract next input.size)
 
 /--
 The sending direction of a session, from its secrets.

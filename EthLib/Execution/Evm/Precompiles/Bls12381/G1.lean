@@ -1,6 +1,7 @@
 module
 
 public import EthLib.Execution.Evm.Precompiles.Bls12381.Encoding
+public import EthLib.Execution.Evm.Precompiles.Bls12381.Gas
 public import EthLib.Cryptography.Bls.MapToCurve
 
 /-!
@@ -17,7 +18,7 @@ Every fork from Pectra accepts the same inputs at the same prices.
 
 namespace EthLib.Execution.Evm.Precompiles.Bls12381
 
-open EthLib.Base (bytesToNat)
+open EthLib.Base (ByteOrder.ofBE)
 open EthLib.Cryptography.Bls (G1)
 
 /-- The price of G1ADD, from EIP-2537, Gas schedule. -/
@@ -70,13 +71,11 @@ def G1_MAX_DISCOUNT : Nat := 519
 
 /-- The discount for `k` pairs. -/
 def discountG1 (k : Nat) : Nat :=
-  -- The table covers `k <= 128`, and the maximum discount applies for `k > 128`.
-  if h : 0 < k ∧ k ≤ 128 then G1_K_DISCOUNT[k - 1] else G1_MAX_DISCOUNT
+  msmDiscount G1_K_DISCOUNT G1_MAX_DISCOUNT k
 
 /-- The price of G1MSM on `k` pairs: `k * 12000 * discount / 1000`, rounded down. -/
 def bls12G1MsmGas (k : Nat) : Nat :=
-  -- EIP-2537: `floor(k * c * discount(k) / 1000)`, for the price `c` of one multiplication.
-  k * GAS_G1MUL * discountG1 k / MULTIPLIER
+  msmGas GAS_G1MUL G1_K_DISCOUNT G1_MAX_DISCOUNT k
 
 /-- The sum of `[m]P` over the pairs, each point checked to be in the subgroup.
 
@@ -86,7 +85,7 @@ def g1Msm (pairs : List (List UInt8 × List UInt8)) : Except Bls12381Error G1 :=
     -- Error case: an input is on the curve but not in the correct subgroup.
     let point ← bytesToG1 raw true
     -- The scalar is not required to be less than or equal to the subgroup order `q`.
-    return G1.add sum (G1.mulNat point (bytesToNat scalar))
+    return G1.add sum (G1.mulNat point (ByteOrder.ofBE scalar))
 
 /-- The multi-scalar multiplication of the pairs in the call data. -/
 def bls12G1Msm (data : ByteArray) (gas : Nat) : Except Bls12381Error ByteArray := do

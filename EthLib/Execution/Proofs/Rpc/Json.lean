@@ -5,11 +5,13 @@ public import EthLib.Serialization.Proofs.JsonRpc
 import EthLib.Base.Proofs.Toolchain.JsonBasic
 
 /-!
-# Proofs: the JSON form of a withdrawal
+# Proofs: the JSON form of a withdrawal and of a versioned hash
 
 A withdrawal reads exactly from an object with exactly its four fields, each of its type.
 
 The writer of withdrawals writes what the reader reads back, alone or in a list.
+
+A versioned hash reads exactly from the hex string of its bytes, which its writer writes.
 -/
 
 public section
@@ -109,5 +111,32 @@ theorem array_withdrawal_listJson (what : String) (ws : List Blocks.Withdrawal) 
     simp only [List.mapM_cons]
     rw [ih, withdrawal_withdrawalJson]
     rfl
+
+/-- The decoder of versioned hashes reads back the encoding of any versioned hash. -/
+theorem versionedHash_versionedHashJson (what : String) (h : Cryptography.Kzg.VersionedHash) :
+    versionedHash what (versionedHashJson h) = .ok h := by
+  rw [versionedHash, versionedHashJson, fixed_dataJson]
+  rfl
+
+/-- A versioned hash decodes exactly from `0x` and the 64 lowercase hex digits of its bytes. -/
+theorem versionedHash_eq_ok_iff {what : String} {j : Lean.Json}
+    {h : Cryptography.Kzg.VersionedHash} :
+    versionedHash what j = .ok h ↔ j = .str (hexString h.bytes.toList) := by
+  obtain ⟨b⟩ := h
+  rw [versionedHash, ← fixed_false_eq_ok_iff (what := what)]
+  cases fixed what 32 j false <;>
+    simp [Functor.map, Except.map, Cryptography.Kzg.VersionedHash.mk.injEq]
+
+/-- A list of versioned hashes decodes exactly from the array of the strings of its items. -/
+theorem array_versionedHash_eq_ok_iff {what w : String} {j : Lean.Json}
+    {l : List Cryptography.Kzg.VersionedHash} :
+    array what (versionedHash w) j = .ok l ↔
+      j = .arr (l.map fun h => .str (hexString h.bytes.toList)).toArray :=
+  array_eq_ok_iff_of fun _ _ => versionedHash_eq_ok_iff
+
+/-- The decoder of lists of versioned hashes reads back the encoding of any list of them. -/
+theorem array_versionedHash_listJson (what w : String) (hs : List Cryptography.Kzg.VersionedHash) :
+    array what (versionedHash w) (listJson versionedHashJson hs) = .ok hs :=
+  array_listJson_of what (versionedHash_versionedHashJson w) hs
 
 end EthLib.Execution.Rpc

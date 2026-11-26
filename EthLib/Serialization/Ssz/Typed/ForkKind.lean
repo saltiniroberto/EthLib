@@ -9,13 +9,7 @@ public import EthLib.Serialization.Ssz.Typed.Container
 
 A fork can change the SSZ kind of a type and keep its contents.
 
-From that fork on, a list with a limit becomes a progressive list, whose tree grows with it.
-
-A bitlist becomes a progressive bitlist, and a container a progressive container.
-
 One Lean type then holds the value at every fork, and the fork chooses its kind.
-
-Before the switch, each type encodes and roots as the kind it replaces.
 
 The rules are stated in EthLib's own terms, one step per comment.
 
@@ -67,6 +61,10 @@ instance {switch fork : Fork} {limit : Nat} : DecidableEq (ForkBitlist switch fo
 instance {switch fork : Fork} {α : Type} [SszType α] {limit : Nat} :
     SszType (ForkList switch fork α limit) where
   -- EIP-7688: from the switch, List[type, N] becomes ProgressiveList[type]; before, it is kept.
+  --
+  -- The tree of a progressive list grows with it.
+  --
+  -- Before the switch, the list encodes and roots as a List[type, N].
   desc := if switch ≤ fork then .progressiveList (desc α) none else .list (desc α) limit
   toValue l := .seq (l.data.toList.map toValue)
   ofValue
@@ -85,9 +83,9 @@ instance {switch fork : Fork} {α : Type} [SszType α] {limit : Nat} :
   -- EIP-7916 serializes a ProgressiveList[type] as a List[type, N], so the bytes do not change.
   encode l :=
     if (desc α).isFixed then encodeFixedElements l.data
-    else do
+    else
       let shape := if switch ≤ fork then .progressiveList (desc α) none else .list (desc α) limit
-      return ⟨← Ssz.serialize shape (.seq (l.data.toList.map toValue))⟩
+      Ssz.serialize shape (.seq (l.data.toList.map toValue))
 
 /-- Bytes: a byte list before the switch, and a progressive list of bytes from it on.
 
@@ -96,7 +94,7 @@ instance (priority := high) {switch fork : Fork} {limit : Nat} :
     SszType (ForkList switch fork UInt8 limit) where
   -- Before the switch, ByteList[N]; from it, ProgressiveByteList, which is ProgressiveList[byte].
   desc := if switch ≤ fork then .progressiveList (desc UInt8) none else .byteList limit
-  toValue l := if switch ≤ fork then .seq (l.data.toList.map toValue) else .bytes l.data
+  toValue l := if switch ≤ fork then .seq (l.data.toList.map toValue) else .bytes ⟨l.data⟩
   ofValue value :=
     if switch ≤ fork then
       match value with
@@ -110,7 +108,7 @@ instance (priority := high) {switch fork : Fork} {limit : Nat} :
       match value with
       -- Before the switch, ByteList[N]: at most `N` bytes.
       | .bytes data =>
-        if within : fork < switch → data.size ≤ limit then .ok ⟨data, within⟩
+        if within : fork < switch → data.size ≤ limit then .ok ⟨data.data, within⟩
         else .error (.overLimit limit data.size)
       | _ => .error .typeMismatch
 

@@ -2,19 +2,14 @@ module
 
 public import EthLib.Execution.Blocks.ProofOfWork
 public import EthLib.Execution.Proofs.Blocks.Header
+import EthLib.Base.Proofs.CodeInjective
 
 /-!
 # Proofs: the proof of work of a header
 
 Before Shapella, the seal item is the item of the header without the mix digest and the nonce.
 
-So the seal hash covers every other field in its order, with the base fee from London on.
-
 A header passes the check exactly when Ethash gives its mix digest and a result within the target.
-
-So a header with another mix digest fails, whatever its nonce.
-
-A higher difficulty never raises the target, so it never accepts a result that a lower one rejects.
 
 The official proof-of-work vectors are in the Python suite, through the bindings.
 -/
@@ -38,6 +33,7 @@ So it keeps the first 13 fields in their order, then the base fee from London on
 From Shapella on, the header has fields that the seal item leaves out. -/
 theorem sealItem_eq {fork : Fork} (h : Header fork) {items : List Item}
     (hItem : Codec.toItem h = .list items) (hFork : fork < .shapella) :
+    -- The seal hash then covers every other field in its order, with the base fee from London on.
     h.sealItem = .list (items.take 13 ++ items.drop 15) := by
   rw [toItem_eq] at hItem
   obtain rfl := Item.list.inj hItem
@@ -53,7 +49,7 @@ end Header
 theorem checkPowOutput_eq_ok_iff {fork : Fork} (h : Header fork) (out : PowOutput) :
     checkPowOutput h out = .ok () ↔
       out.mixDigest = ⟨h.prevRandao.toArray⟩ ∧
-        bytesToNat out.result.toList ≤ powTarget h.difficulty := by
+        ByteOrder.ofBE out.result.toList ≤ powTarget h.difficulty := by
   unfold checkPowOutput
   split
   · rename_i hm
@@ -70,7 +66,7 @@ theorem checkProofOfWork_eq_ok_iff {fork : Fork} (h : Header fork) :
     checkProofOfWork h = .ok () ↔
       ∃ out : PowOutput, powOutput h = .ok out ∧
         out.mixDigest = ⟨h.prevRandao.toArray⟩ ∧
-        bytesToNat out.result.toList ≤ powTarget h.difficulty := by
+        ByteOrder.ofBE out.result.toList ≤ powTarget h.difficulty := by
   unfold checkProofOfWork
   -- The output stays opaque: only its shape matters.
   generalize powOutput h = r
@@ -84,6 +80,7 @@ theorem checkProofOfWork_eq_ok_iff {fork : Fork} (h : Header fork) :
 /-- A header whose mix digest is not the one that Ethash gives fails the check. -/
 theorem checkProofOfWork_wrongMixDigest {fork : Fork} {h : Header fork} {out : PowOutput}
     (hp : powOutput h = .ok out) (hm : out.mixDigest ≠ ⟨h.prevRandao.toArray⟩) :
+    -- It fails whatever its nonce.
     checkProofOfWork h ≠ .ok () := by
   rw [Ne, checkProofOfWork_eq_ok_iff]
   rintro ⟨out', hp', hm', -⟩
@@ -94,11 +91,11 @@ theorem checkProofOfWork_wrongMixDigest {fork : Fork} {h : Header fork} {out : P
 /-- Each error has its own code. -/
 theorem PowError.code_injective (e₁ e₂ : PowError) (h : e₁.code = e₂.code) :
     e₁.ctorIdx = e₂.ctorIdx := by
-  cases e₁ <;> cases e₂ <;>
-    first | rfl | (simp only [PowError.code] at h; exact absurd h (by decide))
+  code_injective PowError.code
 
 /-- A higher positive difficulty has a target no higher. -/
 theorem powTarget_antitone {d d' : Nat} (hd : 0 < d) (h : d ≤ d') :
+    -- So a higher difficulty never accepts a result that a lower one rejects.
     powTarget d' ≤ powTarget d :=
   Nat.div_le_div_left h hd
 

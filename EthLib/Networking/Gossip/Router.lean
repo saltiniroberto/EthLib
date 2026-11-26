@@ -11,8 +11,6 @@ What a gossipsub router does with one RPC that it receives from a peer.
 
 It also joins and leaves topics, publishes the messages of this node, and runs the heartbeat.
 
-The router is a pure function of its state, the time, and its inputs.
-
 The sources are these sections of gossipsub v1.0 and v1.1, and of the pubsub interface.
 
 - v1.0: [Message Processing][proc], [Topic Membership][member] and [Heartbeat][heartbeat].
@@ -27,14 +25,6 @@ The rules of v1.1 apply on top of those of v1.0.
 Each step comment names the section that it follows, or one of its subsections.
 
 Where the sources leave a case open, the comment says how EthLib reads it.
-
-The standing of a peer under the score thresholds, the message ID and the validation are arguments.
-
-So every result holds for every choice that a client makes for them.
-
-The choice among candidate peers is an argument, and so are the values that v1.1 leaves open.
-
-Floodsub peers are not modelled, so the router never sends to them.
 
 [proc]: https://github.com/libp2p/specs/blob/4facaf9876da1eb7d6e066982010c81495ebb965/pubsub/gossipsub/gossipsub-v1.0.md#message-processing
 [ext]: https://github.com/libp2p/specs/blob/4facaf9876da1eb7d6e066982010c81495ebb965/pubsub/gossipsub/gossipsub-v1.1.md#extended-validators
@@ -85,7 +75,9 @@ structure Standing where
   belowGraylist : Bool := false
   deriving DecidableEq, Repr
 
-/-- The state of a gossipsub router. -/
+/-- The state of a gossipsub router.
+
+The router is a pure function of its state, the time, and its inputs. -/
 structure RouterState where
   /-- The topics this node joined. -/
   topics : List String := []
@@ -109,7 +101,9 @@ structure RouterState where
   seen : SeenCache := {}
   deriving DecidableEq
 
-/-- What the router sends and delivers on one RPC, each list in the order it was produced. -/
+/-- What the router sends and delivers on one RPC, each list in the order it was produced.
+
+Floodsub peers are not modelled, so the router never sends to them. -/
 structure Out where
   /-- The valid new messages, each with a peer it is forwarded to. -/
   forward : List (PeerId × Message) := []
@@ -300,7 +294,9 @@ The caller passes two durations in milliseconds.
 
 They are the extension of a backoff, and the backoff of a PRUNE that carries none.
 
-It also passes the standing of each peer, the message ID and the validation. -/
+It also passes the standing of each peer, the message ID and the validation.
+
+So every result holds for every choice that a client makes for them. -/
 def receiveRpc (p : GossipsubParameters) (backoffMs pruneBackoffMs : Nat)
     (standing : PeerId → Standing)
     (msgId : Message → MessageId) (validate : Message → ValidationResult) (now : Nat)
@@ -347,6 +343,8 @@ def Select.Lawful (sel : Select) : Prop :=
 def Select.first : Select := fun n l => l.take n
 
 /-- The values that gossipsub v1.1 leaves to the client, and the consensus layer does not fix.
+
+They are an argument of the router.
 
 Backoffs are in seconds, as a PRUNE carries them. -/
 structure ClientChoices where

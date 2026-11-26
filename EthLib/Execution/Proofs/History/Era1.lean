@@ -3,33 +3,22 @@ module
 public import EthLib.Base.Proofs.MapM
 public import EthLib.Execution.History.Era1
 public import EthLib.Serialization.Proofs.E2store
+import EthLib.Base.Proofs.CodeInjective
 
 /-!
 # Proofs: the block index and the chain of an era1 file
 
-An accepted file has one offset per block.
-
-The offset of a block, from the start of the BlockIndex record, finds its header record.
-
-That record decompresses to the header of the block.
+In an accepted file, the index finds the header record of each block.
 
 So a reader can go straight to any block through the index.
 
-The blocks of an accepted file form a chain.
+The blocks of an accepted file form a chain:
 
-Their headers carry the numbers from the first number of the index on.
-
-Each block after the first names the hash of the header before as its parent.
-
-Each total difficulty after the first is the one before plus the difficulty of the block.
-
-In a file whose first number is 0, the first total difficulty is the difficulty of that block.
-
-An accepted file holds at most 8192 blocks.
+- their headers carry the numbers from the first number of the index on;
+- each block after the first names the hash of the header before as its parent;
+- each total difficulty after the first is the one before plus the difficulty of the block.
 
 The accumulator is the SSZ root of the list of the hash and total difficulty of each block.
-
-Two errors of an era1 file with one code come from one constructor.
 -/
 
 @[expose] public section
@@ -41,8 +30,7 @@ open EthLib.Serialization
 /-- Two errors with one code come from one constructor. -/
 theorem Era1Error.code_injective (e₁ e₂ : Era1Error) (h : e₁.code = e₂.code) :
     e₁.ctorIdx = e₂.ctorIdx := by
-  cases e₁ <;> cases e₂ <;>
-    first | rfl | (simp only [Era1Error.code] at h; exact absurd h (by decide))
+  code_injective Era1Error.code
 
 /-- The front records split into the four records of each block, then the records after them. -/
 private theorem takeBlocks_spec (rs : List E2store.Record) :
@@ -156,17 +144,7 @@ private theorem readBlocks_spec {start i : Nat} {before : Option (Base.Hash32 ×
 
 /-- Read blocks form a chain from the block before them.
 
-The header of each decodes to one RLP item, with the number its place asks.
-
-After a block before, the first names its hash as parent.
-
-Its total difficulty is the one before plus its difficulty.
-
-With no block before and a numbering that starts at 0, the first total difficulty is its difficulty.
-
-Each later block names the Keccak-256 hash of the header before as its parent.
-
-Its total difficulty is the one before plus its difficulty. -/
+The header of each block decodes to one RLP item, with the number that its place asks for. -/
 private theorem readBlocks_chain {start i : Nat} {before : Option (Base.Hash32 × Nat)}
     {ts : List (E2store.Record × E2store.Record × E2store.Record × E2store.Record)}
     {blocks : List Era1Block} (h : readBlocks start i before ts = .ok blocks)
@@ -175,10 +153,17 @@ private theorem readBlocks_chain {start i : Nat} {before : Option (Base.Hash32 �
       Execution.Network.headerNumber item = .ok (start + (i + k)) ∧
       Execution.Network.headerDifficulty item = .ok difficulty ∧
       (k = 0 →
+        -- When there is a block before, the first block names its hash as its parent.
+        --
+        -- The total difficulty of the first block is the one before plus its difficulty.
         (∀ hash tdBefore, before = some (hash, tdBefore) →
           Execution.Network.headerParent item = .ok hash ∧
             blocks[k].totalDifficulty.toNat = tdBefore + difficulty) ∧
+        -- With no block before and a first number of 0, its total difficulty is its difficulty.
         (before = none → start = 0 → blocks[k].totalDifficulty.toNat = difficulty)) ∧
+      -- Each later block names the Keccak-256 hash of the header before as its parent.
+      --
+      -- Its total difficulty is the one before plus its difficulty.
       ∀ j (hj : k = j + 1),
         Execution.Network.headerParent item =
             .ok (Cryptography.Hash.Keccak.keccak256 (blocks[j]'(by omega)).header) ∧

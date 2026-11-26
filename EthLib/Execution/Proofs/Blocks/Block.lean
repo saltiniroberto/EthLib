@@ -10,19 +10,16 @@ public import EthLib.Serialization.Proofs.Rlp.RoundTrip
 /-!
 # Proofs: blocks
 
-At every fork, a block reads back from its RLP item when each ommer has the fork of its number.
+At every fork, a block reads back from its RLP item and from its bytes.
 
-That holds when the codec of its transactions is lawful.
+That holds under two conditions:
 
-An item that decodes as a block is the item of that block.
-
-Each ommer that the decoder returns has the fork of its own number.
-
-The bytes of a block decode back to that block when each ommer has the fork of its number.
-
-Bytes that decode as a block are its encoding.
+- each ommer has the fork of its number;
+- the codec of its transactions is lawful.
 
 So decoding accepts exactly the encodings of the blocks whose ommers have the fork of their numbers.
+
+Each ommer that the decoder returns has the fork of its own number.
 -/
 
 @[expose] public section

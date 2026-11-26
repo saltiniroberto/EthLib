@@ -3,34 +3,17 @@ module
 public import EthLib.Serialization.Der
 public import EthLib.Base.Except
 public import EthLib.Base.Proofs.MapM
-public import EthLib.Base.Proofs.BigEndian
+public import EthLib.Base.Proofs.ByteOrder
+import EthLib.Base.Proofs.Bytes
 
 /-!
 # DER reader checks
 
-A successful typed read has the requested tag and a complete read consumes its input.
+This module proves what the DER reader accepts, value by value and type by type.
 
 The reader is stated against X.690 itself, in terms of octets and numbers.
 
-- A read is exactly a low-number tag octet other than 0, the shortest length, the content, the rest.
-- So a tag and a content have a single encoding.
-- An INTEGER reads as `i` exactly when its content is `i` in two's complement on the fewest octets.
-- So an integer has a single content.
-- A nonnegative one is its big-endian octets, at least one, after a zero if the top bit is set.
-- A BOOLEAN is one octet, FF for TRUE and 00 for FALSE.
-- The BIT STRING reader accepts only an octet-aligned value: the octet 0, then its octets.
-- BIT STRING contents count at most 7 unused bits, all zero, and none when no octet follows.
-- BMPString and UniversalString pass when they write Unicode scalar values, two or four octets each.
-- An INTEGER passes validation exactly when its content is two's complement on the fewest octets.
-- An OCTET STRING always passes, and an IA5String passes when each octet is below 128.
-- An OBJECT IDENTIFIER is one or more subidentifiers, each on the fewest base-128 octets.
-- A SEQUENCE passes validation exactly when each value it holds passes.
-- A SET OF also needs the encodings of those values in ascending order.
-
 The ECDSA signature codec is checked against its own encoder, not against X.690.
-
-- A scalar below `2 ^ 256` is an INTEGER on the fewest bytes, the first with its top bit clear.
-- The ECDSA reader accepts exactly the encodings of r and s in [1, 2^256), and returns them.
 -/
 
 @[expose] public section
@@ -39,6 +22,130 @@ namespace EthLib.Serialization.Proofs.Der
 
 open EthLib.Serialization.Der
 open EthLib.Base
+
+/-- Cutting a byte array past its end gives the same bytes as cutting at its end. -/
+private theorem extract_min_size (a : ByteArray) (i j : Nat) :
+    a.extract i (min j a.size) = a.extract i j := by
+  ext1
+  simp [Array.extract_eq_extract_right]
+  omega
+
+/-- A read at an offset is the read at the start of the bytes from that offset, shifted back. -/
+private theorem readAt_shift (input : ByteArray) (pos : Nat) :
+    readAt input pos =
+      (fun r => (r.1, r.2 + pos)) <$> readAt (input.extract pos input.size) 0 := by
+  have hE : (input.extract pos input.size).size = input.size - pos := by
+    simp [ByteArray.size_extract]
+  unfold readAt
+  by_cases h : pos + 2 ≤ input.size
+  · have h' : 0 + 2 ≤ (input.extract pos input.size).size := by rw [hE]; omega
+    rw [dite_eq_left h, dite_eq_left h']
+    simp only [ByteArray.getElem_extract, hE, Nat.sub_zero, Nat.zero_add,
+      ByteArray.extract_extract, extract_min_size, Nat.add_assoc]
+    simp only [throw, throwThe, MonadExceptOf.throw, bind, Except.bind, pure, Except.pure,
+      Functor.map, Except.map]
+    generalize input[pos] = tag
+    generalize input[pos + 1] = first
+    generalize (input.extract (pos + 2) (pos + (2 + (first.toNat - 128)))).data.toList = B
+    rcases B with _ | ⟨b, B⟩ <;>
+      by_cases c1 : tag.toNat % 32 = 31 ∨ tag = 0 <;> simp only [c1, ite_true, ite_false] <;>
+      by_cases c2 : first.toNat < 128 <;> simp only [c2, ite_true, ite_false] <;>
+      simp_all <;> repeat (split <;> (try simp_all [Nat.add_comm]))
+  · rw [dite_eq_right h, dite_eq_right (by rw [hE]; omega)]
+    simp [hE, throw, throwThe, MonadExceptOf.throw, Functor.map, Except.map]
+
+/-- The reader at offset 0 in its form on the list of the input's octets.
+
+It reads the value at the start, then hands back a copy of the bytes after it. -/
+theorem read_eq (input : ByteArray) : read input = (do
+    match input.data.toList with
+    | tag :: first :: rest =>
+      if tag.toNat % 32 = 31 ∨ tag = 0 then throw (.tag none tag)
+      let (length, header) ←
+        if first.toNat < 128 then pure (first.toNat, 2)
+        else do
+          let count := first.toNat - 128
+          if count = 0 ∨ count = 127 then throw (.length first)
+          if rest.length < count then throw (.truncated (2 + count) input.size)
+          let bytes := rest.take count
+          match bytes with
+          | [] => throw (.length first)
+          | head :: _ =>
+            if head = 0 then throw (.length first)
+            let length := EthLib.Base.ByteOrder.ofBE bytes
+            if length < 128 then throw (.length first)
+            pure (length, 2 + count)
+      if input.size < header + length then throw (.truncated (header + length) input.size)
+      return (⟨tag, input.extract header (header + length),
+        input.extract 0 (header + length)⟩, input.extract (header + length) input.size)
+    | _ => throw (.truncated 2 input.size)
+  : Except Error (Value × ByteArray)) := by
+  unfold EthLib.Serialization.Der.read readAt
+  have hsz : input.size = input.data.toList.length := by simp
+  rcases hL : input.data.toList with _ | ⟨tag, _ | ⟨first, rest⟩⟩ <;> rw [hL] at hsz
+  · simp at hsz
+    simp [hsz, throw, throwThe, MonadExceptOf.throw, bind, Except.bind]
+  · simp at hsz
+    simp [hsz, throw, throwThe, MonadExceptOf.throw, bind, Except.bind]
+  · have h0 : ∀ hh, input[0]'hh = tag := by
+      intro hh; simp [ByteArray.getElem_eq_getElem_data, ← Array.getElem_toList, hL]
+    have h1 : ∀ hh, input[0 + 1]'hh = first := by
+      intro hh; simp [ByteArray.getElem_eq_getElem_data, ← Array.getElem_toList, hL]
+    have hb : ∀ n, (input.extract (0 + 2) (0 + 2 + n)).data.toList = rest.take n := by
+      intro n; simp [ByteArray.data_extract, hL]
+    simp at hsz
+    rw [dite_eq_left (by omega)]
+    simp only [h0, h1, hb, throw, throwThe, MonadExceptOf.throw, bind, Except.bind, pure,
+      Except.pure, Nat.sub_zero, Nat.zero_add]
+    have hl : input.size - 2 = rest.length := by omega
+    simp only [hl]
+    symm
+    generalize List.take (first.toNat - 128) rest = B
+    rcases B with _ | ⟨b, B⟩ <;> repeat (split <;> (try simp_all))
+
+/-- The siblings from an offset are the siblings of the bytes from that offset. -/
+private theorem goAt_shift (fuel : Nat) : ∀ (input : ByteArray) (pos : Nat),
+    children.goAt fuel input pos = children.go fuel (input.extract pos input.size) := by
+  induction fuel with
+  | zero =>
+    intro input pos
+    simp only [children.go, children.goAt, ByteArray.size_extract, Nat.min_self, Nat.sub_zero,
+      Nat.le_zero, Nat.sub_eq_zero_iff_le]
+  | succ fuel ih =>
+    intro input pos
+    simp only [children.go, children.goAt, ByteArray.size_extract, Nat.min_self,
+      Nat.le_zero, Nat.sub_eq_zero_iff_le]
+    by_cases hp : input.size ≤ pos
+    · simp [hp]
+    · rw [readAt_shift]
+      simp only [hp, ite_false]
+      cases readAt (input.extract pos input.size) 0 with
+      | error e => rfl
+      | ok r =>
+        obtain ⟨v, n⟩ := r
+        simp only [Functor.map, Except.map, bind, Except.bind]
+        rw [ih, ih, ByteArray.extract_extract, ByteArray.size_extract, Nat.min_self,
+          Nat.add_comm n pos, show pos + (input.size - pos) = input.size by omega, Nat.min_self]
+
+/-- With no fuel, the siblings of an empty input are none, and any other input is truncated. -/
+theorem children_go_zero (input : ByteArray) :
+    children.go 0 input = if input.isEmpty then .ok [] else .error (.truncated 2 input.size) := by
+  simp [children.go, children.goAt, ByteArray.isEmpty]
+
+/-- With fuel, the siblings are the value read first, then the siblings of the bytes after it. -/
+theorem children_go_succ (fuel : Nat) (input : ByteArray) :
+    children.go (fuel + 1) input = (do
+      if input.isEmpty then return []
+      let (value, rest) ← read input
+      return value :: (← children.go fuel rest)) := by
+  simp only [children.go, children.goAt, EthLib.Serialization.Der.read, ByteArray.isEmpty,
+    Nat.le_zero, beq_iff_eq]
+  cases readAt input 0 with
+  | error e => rfl
+  | ok r =>
+    obtain ⟨v, n⟩ := r
+    simp only [bind, Except.bind, pure, Except.pure]
+    rw [goAt_shift, children.go]
 
 /-- A typed read succeeds only with the requested tag and the underlying reader's result. -/
 theorem readTag_ok_iff {tag : UInt8} {input rest : ByteArray} {value : Value} :
@@ -79,10 +186,6 @@ theorem integer_redundant_zero (next : UInt8) (rest : List UInt8)
 
 /-! ## The length octets -/
 
-/-- A list of bytes in a byte array is the array. -/
-private theorem byteArray_eq_of_toList {a b : ByteArray} (h : a.data.toList = b.data.toList) :
-    a = b := ByteArray.ext (Array.toList_inj.mp h)
-
 /-- The bytes of a slice are the bytes after its start, up to its end. -/
 private theorem toList_extract (b : ByteArray) (x y : Nat) :
     (b.extract x y).data.toList = (b.data.toList.drop x).take (y - x) := by
@@ -90,33 +193,31 @@ private theorem toList_extract (b : ByteArray) (x y : Nat) :
 
 /-- A read gives `value` and `rest` exactly when the input is the encoding of `value`, then `rest`.
 
-The identifier is one octet whose five low bits are not all set (X.690 §8.1.2).
-
-It is not zero, the identifier of the end-of-contents octets (X.690 §8.1.5).
-
-The length is definite and on the fewest octets (X.690 §§8.1.3, 10.1).
-
-A content of fewer than 128 octets has its length in one octet.
-
-A longer content has an octet `129 + k`, then its length on `k + 1` big-endian octets.
-
-Its length lies in `[256 ^ k, 256 ^ (k + 1))`, so the first of those octets is not zero.
-
-`k` is below 126, because the initial octet 255 is reserved. -/
+The length is definite and on the fewest octets (X.690 §§8.1.3, 10.1). -/
 theorem read_ok_iff {input rest : ByteArray} {value : Value} :
     read input = .ok (value, rest) ↔
+      -- The identifier is one octet whose five low bits are not all set (X.690 §8.1.2).
+      --
+      -- It is not zero, the identifier of the end-of-contents octets (X.690 §8.1.5).
       value.tag.toNat % 32 ≠ 31 ∧ value.tag ≠ 0 ∧
       input.data.toList = value.encoded.data.toList ++ rest.data.toList ∧
+      -- A content of fewer than 128 octets has its length in one octet.
       ((value.content.size < 128 ∧ value.encoded.data.toList =
           value.tag :: UInt8.ofNat value.content.size :: value.content.data.toList) ∨
+        -- A longer content has an octet `129 + k`, then its length on `k + 1` big-endian octets.
+        --
+        -- Its length lies in `[256 ^ k, 256 ^ (k + 1))`, so the first of those octets is not zero.
+        --
+        -- `k` is below 126, because the initial octet 255 is reserved.
         ∃ k, 256 ^ k ≤ value.content.size ∧ value.content.size < 256 ^ (k + 1) ∧ k < 126 ∧
           128 ≤ value.content.size ∧ value.encoded.data.toList =
             value.tag :: UInt8.ofNat (129 + k) ::
-              (natToBytes (k + 1) value.content.size ++ value.content.data.toList)) := by
+              ((ByteOrder.toBE (k + 1) value.content.size).toList
+                ++ value.content.data.toList)) := by
   constructor
   · intro h
     have hsz : input.size = input.data.toList.length := by rw [Array.length_toList]; rfl
-    unfold EthLib.Serialization.Der.read at h
+    rw [read_eq] at h
     generalize hL : input.data.toList = L at h hsz
     rcases L with _ | ⟨tag, _ | ⟨first, more⟩⟩
     · simp [throw, throwThe, MonadExceptOf.throw] at h
@@ -173,14 +274,14 @@ theorem read_ok_iff {input rest : ByteArray} {value : Value} :
       -- The length octets: `c` bytes, the first nonzero, worth `n`.
       have hlen : (head :: tail).length = first.toNat - 128 := by
         rw [← htake, List.length_take]; omega
-      have hlo := bytesToNat_cons head tail
-      have hhi := bytesToNat_lt (head :: tail)
+      have hlo := ByteOrder.ofBE_cons head tail
+      have hhi := ByteOrder.ofBE_lt (head :: tail)
       have hh : 1 ≤ head.toNat := by
         have : head.toNat ≠ 0 := fun h => hhead (UInt8.toNat_inj.mp h)
         omega
       have hpow : 256 ^ tail.length ≤ head.toNat * 256 ^ tail.length :=
         Nat.le_mul_of_pos_left _ hh
-      generalize hnb : bytesToNat (head :: tail) = n at *
+      generalize hnb : ByteOrder.ofBE (head :: tail) = n at *
       obtain ⟨k, hk⟩ : ∃ k, first.toNat - 128 = k + 1 := ⟨first.toNat - 129, by omega⟩
       rw [hk] at hlen htake hin ⊢
       have hm : min (2 + (k + 1) + n) (more.length + 1 + 1) - (2 + (k + 1)) = n := by omega
@@ -194,8 +295,8 @@ theorem read_ok_iff {input rest : ByteArray} {value : Value} :
         apply UInt8.toNat_inj.mp
         simp only [UInt8.toNat_ofNat']
         omega
-      have hbytes : natToBytes (k + 1) n = List.take (k + 1) more := by
-        rw [htake, ← hnb, ← hlen, natToBytes_bytesToNat]
+      have hbytes : (ByteOrder.toBE (k + 1) n).toList = List.take (k + 1) more := by
+        rw [htake, ← hnb, ← hlen, ByteOrder.toList_toBE_ofBE]
       refine ⟨fun h => ht (.inl h), fun h => ht (.inr h), ?_,
         .inr ⟨k, ?_, ?_, ?_, by omega, ?_⟩⟩
       · rw [List.take_of_length_le (l := List.drop (k + 1 + n) more) (by
@@ -220,7 +321,7 @@ theorem read_ok_iff {input rest : ByteArray} {value : Value} :
     · rw [he] at hin
       have hfirst : (UInt8.ofNat content.size).toNat = content.size := by
         simp only [UInt8.toNat_ofNat']; omega
-      unfold EthLib.Serialization.Der.read
+      rw [read_eq]
       rw [hin]
       simp only [List.cons_append]
       simp [ht1, ht0, hfirst, hs, throw, throwThe, MonadExceptOf.throw, bind, Except.bind, pure,
@@ -238,9 +339,10 @@ theorem read_ok_iff {input rest : ByteArray} {value : Value} :
       have hq1 : 1 ≤ content.size / 256 ^ k := (Nat.le_div_iff_mul_le hpos).mpr (by omega)
       have hq2 : content.size / 256 ^ k < 256 :=
         (Nat.div_lt_iff_lt_mul hpos).mpr (by rw [Nat.pow_succ] at hhi; omega)
-      have hsplit : natToBytes (k + 1) content.size =
-          UInt8.ofNat (content.size / 256 ^ k) :: natToBytes k content.size := by
-        rw [Nat.add_comm, natToBytes_add, natToBytes_succ, natToBytes_zero, List.nil_append,
+      have hsplit : (ByteOrder.toBE (k + 1) content.size).toList =
+          UInt8.ofNat (content.size / 256 ^ k) :: (ByteOrder.toBE k content.size).toList := by
+        rw [Nat.add_comm, ByteOrder.toList_toBE_add, ByteOrder.toList_toBE_succ,
+          ByteOrder.toList_toBE_zero, List.nil_append,
           Nat.mod_eq_of_lt hq2]
         rfl
       have hhead : UInt8.ofNat (content.size / 256 ^ k) ≠ 0 := by
@@ -249,41 +351,40 @@ theorem read_ok_iff {input rest : ByteArray} {value : Value} :
         simp only [UInt8.toNat_ofNat'] at this
         simp at this
         omega
-      have hval : bytesToNat (natToBytes (k + 1) content.size) = content.size :=
-        bytesToNat_natToBytes_of_lt hhi
+      have hval : ByteOrder.ofBE ((ByteOrder.toBE (k + 1) content.size).toList) = content.size :=
+        ByteOrder.ofBE_toBE_of_lt hhi
       rw [hsplit] at hin he hval
       have hnot : ¬ input.size < 2 + (k + 1) + content.size := by
         rw [hsz, hin]
-        simp [natToBytes_length, ← hcs]
+        simp [← hcs]
         omega
-      unfold EthLib.Serialization.Der.read
+      rw [read_eq]
       rw [hin]
       simp only [List.cons_append]
       simp [ht1, ht0, throw, throwThe, MonadExceptOf.throw, bind, Except.bind, pure,
         Except.pure]
       have htk : List.take (k + 1) (UInt8.ofNat (content.size / 256 ^ k) ::
-          (natToBytes k content.size ++ (C ++ R))) =
-          UInt8.ofNat (content.size / 256 ^ k) :: natToBytes k content.size := by
-        rw [List.take_succ_cons, List.take_left' (natToBytes_length k _)]
+          ((ByteOrder.toBE k content.size).toList ++ (C ++ R))) =
+          UInt8.ofNat (content.size / 256 ^ k) :: (ByteOrder.toBE k content.size).toList := by
+        rw [List.take_succ_cons, List.take_left' (ByteOrder.length_toList_toBE k _)]
       simp only [show (129 + k) % 256 = 129 + k by omega, show 129 + k - 128 = k + 1 by omega,
         htk, hhead, hval, hnot]
-      have a3 : ¬ (natToBytes k content.size).length + (C.length + R.length) + 1 < k + 1 := by
-        rw [natToBytes_length]; omega
+      have a3 : ¬ k + (C.length + R.length) + 1 < k + 1 := by omega
       simp only [show ¬ 129 + k < 128 by omega, show ¬ (k + 1 = 0 ∨ k + 1 = 127) by omega, a3,
         show ¬ content.size < 128 by omega, ite_false]
       simp only [Except.ok.injEq, Prod.mk.injEq, Value.mk.injEq, true_and]
       have e : 2 + (k + 1) = k + 1 + 1 + 1 := by omega
       rw [e]
       refine ⟨⟨?_, ?_⟩, ?_⟩ <;> apply byteArray_eq_of_toList <;> rw [hext, hin]
-      · simp [hC, hcs, List.drop_left' (natToBytes_length k _)]
+      · simp [hC, hcs, List.drop_left' (ByteOrder.length_toList_toBE k _)]
       · have e2 : k + 1 + 1 + 1 + content.size = k + content.size + 1 + 1 + 1 := by omega
-        have hl : (natToBytes k content.size ++ C).length = k + content.size := by
-          simp [natToBytes_length, hcs]
+        have hl : ((ByteOrder.toBE k content.size).toList ++ C).length = k + content.size := by
+          simp [hcs]
         simp only [Nat.sub_zero, List.drop_zero, he, e2, List.take_succ_cons, List.cons_append,
           ← hl, List.take_left']
       · have e2 : k + 1 + 1 + 1 + content.size = k + content.size + 1 + 1 + 1 := by omega
-        have hl : (natToBytes k content.size ++ C).length = k + content.size := by
-          simp [natToBytes_length, hcs]
+        have hl : ((ByteOrder.toBE k content.size).toList ++ C).length = k + content.size := by
+          simp [hcs]
         rw [hR, hsz, hin, e2]
         simp only [List.drop_succ_cons, List.cons_append, ← hl,
           List.drop_left']
@@ -312,6 +413,66 @@ theorem encoded_eq_of_read_ok {a b rest rest' : ByteArray} {v w : Value}
         omega
     rw [hv, hw, hkl]
 
+/-- A value that reads also reads from its own encoding followed by any bytes. -/
+theorem read_encoded_append {a rest : ByteArray} {v : Value} (ha : read a = .ok (v, rest))
+    (more : ByteArray) : read (v.encoded ++ more) = .ok (v, more) := by
+  obtain ⟨t1, t2, -, hv⟩ := read_ok_iff.mp ha
+  -- The conditions on the value do not depend on the bytes after it.
+  exact read_ok_iff.mpr ⟨t1, t2, by simp, hv⟩
+
+/-- No encoding that reads is a proper prefix of another one.
+
+The header fixes the length of the whole encoding (X.690 §§8.1.3, 10.1). -/
+theorem encoded_eq_of_prefix {a b rest rest' : ByteArray} {v w : Value}
+    (ha : read a = .ok (v, rest)) (hb : read b = .ok (w, rest'))
+    (hp : v.encoded.data.toList <+: w.encoded.data.toList) : v.encoded = w.encoded := by
+  obtain ⟨t, ht⟩ := hp
+  obtain ⟨-, -, hin, -⟩ := read_ok_iff.mp hb
+  -- The input of the second read starts with the encoding of the first value.
+  have hb' : b = v.encoded ++ ⟨(t ++ rest'.data.toList).toArray⟩ := by
+    apply byteArray_eq_of_toList
+    simp [hin, ← ht]
+  rw [hb', read_encoded_append ha] at hb
+  -- Both reads return the first value, so the two values are one.
+  obtain ⟨hvw, -⟩ := Prod.mk.inj (Except.ok.inj hb)
+  rw [hvw]
+
+/-- Two lists of which neither is a prefix of the other compare as their extensions do. -/
+private theorem le_append_iff_of_not_prefix {l1 l2 : List UInt8} (h12 : ¬ l1 <+: l2)
+    (h21 : ¬ l2 <+: l1) (t1 t2 : List UInt8) : l1 ++ t1 ≤ l2 ++ t2 ↔ l1 ≤ l2 := by
+  induction l1 generalizing l2 with
+  | nil => exact absurd (List.nil_prefix) h12
+  | cons a as ih =>
+    cases l2 with
+    | nil => exact absurd (List.nil_prefix) h21
+    | cons b bs =>
+      simp only [List.cons_append, List.cons_le_cons_iff]
+      by_cases hab : a = b
+      · -- Equal first bytes: the order is that of the rest, where neither is a prefix either.
+        subst hab
+        have h12' : ¬ as <+: bs := fun h => h12 (List.prefix_cons_inj a |>.mpr h)
+        have h21' : ¬ bs <+: as := fun h => h21 (List.prefix_cons_inj a |>.mpr h)
+        simp [ih h12' h21']
+      · -- Different first bytes decide both comparisons alike.
+        simp [hab]
+
+/-- The order of two encodings that read is the order of §11.6, with zero padding. -/
+theorem encoded_le_iff_padded {a b rest rest' : ByteArray} {v w : Value}
+    (ha : read a = .ok (v, rest)) (hb : read b = .ok (w, rest')) (n : Nat) :
+    v.encoded.data.toList ≤ w.encoded.data.toList ↔
+      v.encoded.data.toList ++ List.replicate (n - v.encoded.size) 0 ≤
+        w.encoded.data.toList ++ List.replicate (n - w.encoded.size) 0 := by
+  by_cases heq : v.encoded = w.encoded
+  · -- One encoding twice: both sides compare a list with itself.
+    rw [heq]
+    exact iff_of_true (List.le_refl _) (List.le_refl _)
+  · -- Two encodings: neither is a prefix of the other, so the padding never decides.
+    have h12 : ¬ v.encoded.data.toList <+: w.encoded.data.toList :=
+      fun p => heq (encoded_eq_of_prefix ha hb p)
+    have h21 : ¬ w.encoded.data.toList <+: v.encoded.data.toList :=
+      fun p => heq (encoded_eq_of_prefix hb ha p).symm
+    exact (le_append_iff_of_not_prefix h12 h21 _ _).symm
+
 /-! ## INTEGER -/
 
 /-- A power of 256 in the integers is the cast of the natural power. -/
@@ -331,23 +492,23 @@ private theorem emod_cases {i M : Int} (lo : -M ≤ 2 * i) (hi : 2 * i < M) :
 private theorem twos_complement_iff (first : UInt8) (rest : List UInt8) (i : Int) :
     ((∀ next tail, rest = next :: tail →
         ¬ ((first = 0 ∧ next.toNat < 128) ∨ (first = 255 ∧ 128 ≤ next.toNat))) ∧
-      i = if first.toNat < 128 then (bytesToNat (first :: rest) : Int)
-        else bytesToNat (first :: rest) - 256 ^ (rest.length + 1)) ↔
+      i = if first.toNat < 128 then (ByteOrder.ofBE (first :: rest) : Int)
+        else ByteOrder.ofBE (first :: rest) - 256 ^ (rest.length + 1)) ↔
     ∃ k : Nat, -(128 * 256 ^ k : Int) ≤ i ∧ i < 128 * 256 ^ k ∧
       (∀ j < k, i < -(128 * 256 ^ j : Int) ∨ 128 * 256 ^ j ≤ i) ∧
-      first :: rest = natToBytes (k + 1) (i % 256 ^ (k + 1)).toNat := by
-  have hN := bytesToNat_cons first rest
-  have hR := bytesToNat_lt rest
+      first :: rest = (ByteOrder.toBE (k + 1) (i % 256 ^ (k + 1)).toNat).toList := by
+  have hN := ByteOrder.ofBE_cons first rest
+  have hR := ByteOrder.ofBE_lt rest
   have hf : first.toNat < 256 := first.toNat_lt
   have mulQ : ∀ a b, a ≤ b → a * 256 ^ rest.length ≤ b * 256 ^ rest.length :=
     fun a b h => Nat.mul_le_mul_right _ h
   -- The second byte, when there is one, is worth `256 ^ (k - 1)` per unit.
   have hsecond : ∀ next tail, rest = next :: tail →
-      bytesToNat rest = next.toNat * 256 ^ tail.length + bytesToNat tail ∧
-      bytesToNat tail < 256 ^ tail.length ∧ 256 ^ rest.length = 256 * 256 ^ tail.length ∧
+      ByteOrder.ofBE rest = next.toNat * 256 ^ tail.length + ByteOrder.ofBE tail ∧
+      ByteOrder.ofBE tail < 256 ^ tail.length ∧ 256 ^ rest.length = 256 * 256 ^ tail.length ∧
       (∀ a b, a ≤ b → a * 256 ^ tail.length ≤ b * 256 ^ tail.length) := by
     rintro next tail rfl
-    exact ⟨bytesToNat_cons next tail, bytesToNat_lt tail, by
+    exact ⟨ByteOrder.ofBE_cons next tail, ByteOrder.ofBE_lt tail, by
       rw [List.length_cons, Nat.pow_succ, Nat.mul_comm], fun a b h => Nat.mul_le_mul_right _ h⟩
   have hsmall : ∀ j < rest.length, ∀ tail : List UInt8, rest.length = tail.length + 1 →
       256 ^ j ≤ 256 ^ tail.length := fun j hj tail ht =>
@@ -365,7 +526,7 @@ private theorem twos_complement_iff (first : UInt8) (rest : List UInt8) (i : Int
         have := mulQ first.toNat 255 (by omega)
         omega
     have hmod : (i % ((256 ^ rest.length * 256 : Nat) : Int)).toNat =
-        bytesToNat (first :: rest) := by
+        ByteOrder.ofBE (first :: rest) := by
       have := mulQ first.toNat 255 (by omega)
       rcases emod_cases (i := i) (M := ((256 ^ rest.length * 256 : Nat) : Int))
         (by omega) (by omega) with ⟨h0, h⟩ | ⟨h0, h⟩ <;> rw [h] <;> split at hi <;> omega
@@ -398,17 +559,17 @@ private theorem twos_complement_iff (first : UInt8) (rest : List UInt8) (i : Int
             have := mulQ first.toNat 254 (by omega)
             omega
     · rw [hmod]
-      exact (natToBytes_bytesToNat (first :: rest)).symm
+      exact (ByteOrder.toList_toBE_ofBE (first :: rest)).symm
   · rintro ⟨k, lo, hi, hmin, hc⟩
     have hk : k = rest.length := by
       have := congrArg List.length hc
-      rw [natToBytes_length, List.length_cons] at this
+      rw [ByteOrder.length_toList_toBE, List.length_cons] at this
       omega
     subst hk
     -- The bytes hold `i` modulo `256 ^ (k + 1)`, which is `i` or `i + 256 ^ (k + 1)`.
     have hval :
-        bytesToNat (first :: rest) = (i % ((256 ^ rest.length * 256 : Nat) : Int)).toNat := by
-      rw [hc, bytesToNat_natToBytes_of_lt]
+        ByteOrder.ofBE (first :: rest) = (i % ((256 ^ rest.length * 256 : Nat) : Int)).toNat := by
+      rw [hc, ByteOrder.ofBE_toBE_of_lt]
       rcases emod_cases (i := i) (M := ((256 ^ rest.length * 256 : Nat) : Int))
         (by omega) (by omega) with ⟨h0, h⟩ | ⟨h0, h⟩ <;> rw [h, Nat.pow_succ] <;> omega
     have hcase := emod_cases (i := i) (M := ((256 ^ rest.length * 256 : Nat) : Int))
@@ -432,18 +593,17 @@ private theorem twos_complement_iff (first : UInt8) (rest : List UInt8) (i : Int
 
 /-- An INTEGER reads as `i` exactly when its tag is 2 and its content is `i` on the fewest octets.
 
-The octets are two's complement (X.690 §8.3.3).
-
-The content is `i` modulo `256 ^ (k + 1)` on `k + 1` big-endian octets.
-
-`i` lies in `[-(128 * 256 ^ k), 128 * 256 ^ k)`, the range of `k + 1` octets.
-
-No shorter content holds `i`, so a first octet 0 or 255 is never redundant (X.690 §8.3.2). -/
+The octets are two's complement (X.690 §8.3.3). -/
 theorem integer_ok_iff {value : Value} {i : Int} :
     integer value = .ok i ↔ value.tag = 2 ∧ ∃ k : Nat,
+      -- `i` lies in `[-(128 * 256 ^ k), 128 * 256 ^ k)`, the range of `k + 1` octets.
       -(128 * 256 ^ k : Int) ≤ i ∧ i < 128 * 256 ^ k ∧
+      -- No shorter content holds `i`.
+      --
+      -- So a first octet 0 or 255 is never redundant (X.690 §8.3.2).
       (∀ j < k, i < -(128 * 256 ^ j : Int) ∨ 128 * 256 ^ j ≤ i) ∧
-      value.content.data.toList = natToBytes (k + 1) (i % 256 ^ (k + 1)).toNat := by
+      -- The content is `i` modulo `256 ^ (k + 1)` on `k + 1` big-endian octets.
+      value.content.data.toList = (ByteOrder.toBE (k + 1) (i % 256 ^ (k + 1)).toNat).toList := by
   unfold integer
   generalize hc : value.content.data.toList = c
   have hsize : value.content.size = c.length := by
@@ -457,7 +617,7 @@ theorem integer_ok_iff {value : Value} {i : Int} :
         not_and]
       intro k _ _ _ h
       have := congrArg List.length h
-      simp [natToBytes_length] at this
+      simp at this
     rw [← twos_complement_iff]
     rcases rest with _ | ⟨next, tail⟩
     · simp [pure, Except.pure, eq_comm]
@@ -498,7 +658,8 @@ The content has `k + 1` octets, and `n` is below `128 * 256 ^ k`.
 No shorter content holds `n`. -/
 theorem natural_ok_iff {value : Value} {n : Nat} :
     natural value = .ok n ↔ value.tag = 2 ∧ ∃ k : Nat, n < 128 * 256 ^ k ∧
-      (∀ j < k, 128 * 256 ^ j ≤ n) ∧ value.content.data.toList = natToBytes (k + 1) n := by
+      (∀ j < k, 128 * 256 ^ j ≤ n) ∧ value.content.data.toList
+        = (ByteOrder.toBE (k + 1) n).toList := by
   have hnat : natural value = .ok n ↔ integer value = .ok (n : Int) := by
     unfold natural
     cases h : integer value with
@@ -595,16 +756,13 @@ private theorem mod_two_pow_eq_zero_iff (n u : Nat) :
 
 /-- BIT STRING contents pass exactly when the initial octet counts at most 7 unused bits, all zero.
 
-The initial octet is 0 when no octet follows it (X.690 §8.6.2.3).
-
-Otherwise the unused bits are the low bits of the final octet (X.690 §§8.6.2.1, 8.6.2.2).
-
-Each of them is zero (X.690 §11.2.1).
-
 The reader does not know the type, so it does not drop the trailing zero bits of §11.2.2. -/
 theorem validBits_ok_iff {content : ByteArray} :
+    -- The initial octet is 0 when no octet follows it (X.690 §8.6.2.3).
     validBits content = .ok () ↔ content.data.toList = [0] ∨
+      -- Otherwise the unused bits are the low bits of the final octet (X.690 §§8.6.2.1, 8.6.2.2).
       ∃ unused init last, content.data.toList = unused :: (init ++ [last]) ∧
+        -- At most 7 bits are unused, and each of them is zero (X.690 §11.2.1).
         unused.toNat ≤ 7 ∧ ∀ i < unused.toNat, last.toNat.testBit i = false := by
   unfold validBits
   generalize content.data.toList = c
@@ -660,14 +818,14 @@ private theorem fixedString_eq (width : Nat) (bytes : List UInt8) :
 private theorem foldl_step_partial {width : Nat} (bytes : List UInt8) (i acc : Nat) (ok : Bool)
     (h : i + bytes.length < width) :
     bytes.foldl (step width) (i, acc, ok) =
-      (i + bytes.length, acc * 256 ^ bytes.length + bytesToNat bytes, ok) := by
+      (i + bytes.length, acc * 256 ^ bytes.length + ByteOrder.ofBE bytes, ok) := by
   induction bytes generalizing i acc with
-  | nil => simp [bytesToNat]
+  | nil => simp [ByteOrder.ofBE_eq_foldl]
   | cons x xs ih =>
     simp only [List.length_cons] at h
     have hne : ¬ i + 1 = width := by omega
     simp only [List.foldl_cons, step, hne, ite_false]
-    rw [ih (i + 1) (acc * 256 + x.toNat) (by omega), bytesToNat_cons]
+    rw [ih (i + 1) (acc * 256 + x.toNat) (by omega), ByteOrder.ofBE_cons]
     simp only [List.length_cons, Prod.mk.injEq, and_true]
     refine ⟨by omega, ?_⟩
     rw [Nat.pow_succ, Nat.add_mul, Nat.mul_assoc, Nat.mul_comm 256, Nat.add_assoc]
@@ -675,13 +833,13 @@ private theorem foldl_step_partial {width : Nat} (bytes : List UInt8) (i acc : N
 /-- A complete code unit resets the count and adds its scalar check to the verdict. -/
 private theorem foldl_step_chunk {width : Nat} (chunk : List UInt8) (ok : Bool)
     (pos : 0 < width) (h : chunk.length = width) :
-    chunk.foldl (step width) (0, 0, ok) = (0, 0, ok && unicodeScalar (bytesToNat chunk)) := by
+    chunk.foldl (step width) (0, 0, ok) = (0, 0, ok && unicodeScalar (ByteOrder.ofBE chunk)) := by
   rcases List.eq_nil_or_concat chunk with rfl | ⟨init, last, rfl⟩
   · simp at h
     omega
   · simp only [List.concat_eq_append, List.length_append, List.length_singleton] at h ⊢
     rw [List.foldl_append, foldl_step_partial init 0 0 ok (by omega)]
-    simp [step, h, bytesToNat]
+    simp [step, h, ByteOrder.ofBE_eq_foldl, Nat.mul_comm]
 
 /-- A Unicode scalar value is at most 10FFFF and is not a surrogate, D800 to DFFF. -/
 private theorem unicodeScalar_iff (n : Nat) :
@@ -697,7 +855,7 @@ private theorem finish_foldl_iff {width : Nat} (pos : 0 < width) (bytes : List U
     (ok : Bool) :
     finish (bytes.foldl (step width) (0, 0, ok)) = true ↔ ok = true ∧ ∃ chars : List Nat,
       (∀ c ∈ chars, c < 256 ^ width ∧ c ≤ 0x10FFFF ∧ (c < 0xD800 ∨ 0xDFFF < c)) ∧
-      bytes = chars.flatMap (natToBytes width) := by
+      bytes = chars.flatMap (fun x => (ByteOrder.toBE width x).toList) := by
   induction h : bytes.length using Nat.strongRecOn generalizing bytes ok with
   | _ n ih =>
     by_cases hw : width ≤ bytes.length
@@ -708,16 +866,16 @@ private theorem finish_foldl_iff {width : Nat} (pos : 0 < width) (bytes : List U
       constructor
       · rintro ⟨hok, chars, hc, he⟩
         rw [Bool.and_eq_true, unicodeScalar_iff] at hok
-        refine ⟨hok.1, bytesToNat (bytes.take width) :: chars, ?_, ?_⟩
+        refine ⟨hok.1, ByteOrder.ofBE (bytes.take width) :: chars, ?_, ?_⟩
         · intro c hc'
           rcases List.mem_cons.mp hc' with rfl | hc'
           · refine ⟨?_, hok.2⟩
-            have := bytesToNat_lt (bytes.take width)
+            have := ByteOrder.ofBE_lt (bytes.take width)
             simpa [Nat.min_eq_left hw] using this
           · exact hc c hc'
         · have hl : (bytes.take width).length = width := by simp; omega
           rw [List.flatMap_cons, ← he]
-          conv => lhs; rw [← natToBytes_bytesToNat (bytes.take width)]
+          conv => lhs; rw [← ByteOrder.toList_toBE_ofBE (bytes.take width)]
           rw [hl]
       · rintro ⟨hok, chars, hc, he⟩
         rcases chars with _ | ⟨c, chars⟩
@@ -727,11 +885,12 @@ private theorem finish_foldl_iff {width : Nat} (pos : 0 < width) (bytes : List U
           omega
         · rw [List.take_append_drop, List.flatMap_cons] at he
           have hc0 := hc c (by simp)
-          have ht : bytes.take width = natToBytes width c := by
-            rw [he, List.take_left' (natToBytes_length width c)]
-          have hd : bytes.drop width = chars.flatMap (natToBytes width) := by
-            rw [he, List.drop_left' (natToBytes_length width c)]
-          rw [Bool.and_eq_true, unicodeScalar_iff, ht, bytesToNat_natToBytes_of_lt hc0.1]
+          have ht : bytes.take width = (ByteOrder.toBE width c).toList := by
+            rw [he, List.take_left' (ByteOrder.length_toList_toBE width c)]
+          have hd : bytes.drop width
+              = chars.flatMap (fun x => (ByteOrder.toBE width x).toList) := by
+            rw [he, List.drop_left' (ByteOrder.length_toList_toBE width c)]
+          rw [Bool.and_eq_true, unicodeScalar_iff, ht, ByteOrder.ofBE_toBE_of_lt hc0.1]
           exact ⟨⟨hok, hc0.2⟩, chars, fun c' h' => hc c' (by simp [h']), hd⟩
     · -- Fewer than `width` octets pass only when there are none.
       rw [foldl_step_partial bytes 0 0 ok (by omega)]
@@ -747,7 +906,7 @@ private theorem finish_foldl_iff {width : Nat} (pos : 0 < width) (bytes : List U
         rcases chars with _ | ⟨c, chars⟩
         · simp at he
         · have := congrArg List.length he
-          simp [natToBytes_length] at this
+          simp at this
           simp at hw
           omega
 
@@ -761,7 +920,7 @@ A UniversalString has four octets per character and a BMPString two (X.690 §§8
 theorem fixedString_eq_true_iff {width : Nat} (pos : 0 < width) {bytes : List UInt8} :
     fixedString width bytes = true ↔ ∃ chars : List Nat,
       (∀ c ∈ chars, c < 256 ^ width ∧ c ≤ 0x10FFFF ∧ (c < 0xD800 ∨ 0xDFFF < c)) ∧
-      bytes = chars.flatMap (natToBytes width) := by
+      bytes = chars.flatMap (fun x => (ByteOrder.toBE width x).toList) := by
   rw [fixedString_eq, finish_foldl_iff pos]
   simp
 
@@ -895,17 +1054,14 @@ private theorem foldlM_oidStep (c : List UInt8) :
 
 /-- An OBJECT IDENTIFIER reads as `bytes` exactly when its tag is 6 and `bytes` is its content.
 
-The content must be one or more subidentifiers (X.690 §8.19.2).
-
-Bit 8 is set on each octet of a subidentifier but the last, and clear on the last.
-
-The first octet of a subidentifier is not 80, so that it takes the fewest octets.
-
 The first subidentifier combines two arcs, and any value of it names a valid pair (§8.19.4). -/
 theorem oid_ok_iff {value : Value} {bytes : ByteArray} :
     oid value = .ok bytes ↔ value.tag = 6 ∧ bytes = value.content ∧
+      -- The content must be one or more subidentifiers (X.690 §8.19.2).
       ∃ parts : List (List UInt8), parts ≠ [] ∧ value.content.data.toList = parts.flatten ∧
+        -- The first octet of a subidentifier is not 80, so that it takes the fewest octets.
         ∀ p ∈ parts, p.head? ≠ some 0x80 ∧ ∃ init last, p = init ++ [last] ∧
+          -- Bit 8 is set on each octet of a subidentifier but the last, and clear on the last.
           (∀ b ∈ init, 0x80 ≤ b.toNat) ∧ last.toNat < 0x80 := by
   rw [oid_eq]
   change _ ↔ _ ∧ _ ∧ ∃ parts : List (List UInt8), parts ≠ [] ∧
@@ -986,7 +1142,7 @@ Each takes two octets. -/
 theorem validate_go_bmpString_ok_iff {value : Value} (fuel : Nat) (tag : value.tag = 30) :
     validate.go (fuel + 1) value = .ok () ↔ ∃ chars : List Nat,
       (∀ c ∈ chars, c < 256 ^ 2 ∧ c ≤ 0x10FFFF ∧ (c < 0xD800 ∨ 0xDFFF < c)) ∧
-      value.content.data.toList = chars.flatMap (natToBytes 2) := by
+      value.content.data.toList = chars.flatMap (fun x => (ByteOrder.toBE 2 x).toList) := by
   rw [← fixedString_eq_true_iff (by decide), validate.go, tag]
   dsimp only
   split <;> simp_all [pure, Except.pure, throw, throwThe, MonadExceptOf.throw]
@@ -997,7 +1153,7 @@ Each takes four octets. -/
 theorem validate_go_universalString_ok_iff {value : Value} (fuel : Nat) (tag : value.tag = 28) :
     validate.go (fuel + 1) value = .ok () ↔ ∃ chars : List Nat,
       (∀ c ∈ chars, c < 256 ^ 4 ∧ c ≤ 0x10FFFF ∧ (c < 0xD800 ∨ 0xDFFF < c)) ∧
-      value.content.data.toList = chars.flatMap (natToBytes 4) := by
+      value.content.data.toList = chars.flatMap (fun x => (ByteOrder.toBE 4 x).toList) := by
   rw [← fixedString_eq_true_iff (by decide), validate.go, tag]
   dsimp only
   split <;> simp_all [pure, Except.pure, throw, throwThe, MonadExceptOf.throw]
@@ -1017,14 +1173,14 @@ theorem validate_bitString {value : Value} (tag : value.tag = 3) :
 theorem validate_bmpString_ok_iff {value : Value} (tag : value.tag = 30) :
     validate value = .ok () ↔ ∃ chars : List Nat,
       (∀ c ∈ chars, c < 256 ^ 2 ∧ c ≤ 0x10FFFF ∧ (c < 0xD800 ∨ 0xDFFF < c)) ∧
-      value.content.data.toList = chars.flatMap (natToBytes 2) :=
+      value.content.data.toList = chars.flatMap (fun x => (ByteOrder.toBE 2 x).toList) :=
   validate_go_bmpString_ok_iff _ tag
 
 /-- A UniversalString passes validation exactly when it writes scalar values, four octets each. -/
 theorem validate_universalString_ok_iff {value : Value} (tag : value.tag = 28) :
     validate value = .ok () ↔ ∃ chars : List Nat,
       (∀ c ∈ chars, c < 256 ^ 4 ∧ c ≤ 0x10FFFF ∧ (c < 0xD800 ∨ 0xDFFF < c)) ∧
-      value.content.data.toList = chars.flatMap (natToBytes 4) :=
+      value.content.data.toList = chars.flatMap (fun x => (ByteOrder.toBE 4 x).toList) :=
   validate_go_universalString_ok_iff _ tag
 
 /-- With positive fuel, a value of tag 6 passes validation exactly when it is subidentifiers.
@@ -1229,7 +1385,7 @@ theorem validate_eq_error_tag {value : Value}
 /-! ## SEQUENCE and SET OF -/
 
 /-- The size of a byte array is the length of its octet list. -/
-private theorem size_eq_length (b : ByteArray) : b.size = b.data.toList.length := by
+theorem size_eq_length (b : ByteArray) : b.size = b.data.toList.length := by
   rw [Array.length_toList]
   rfl
 
@@ -1242,6 +1398,103 @@ theorem size_lt_of_read_ok {input rest : ByteArray} {v : Value}
   rw [size_eq_length, size_eq_length]
   rcases hv with ⟨-, hv⟩ | ⟨k, -, -, -, -, hv⟩ <;> rw [hv] <;> simp <;> omega
 
+/-- An empty byte array has no octets. -/
+theorem data_toList_eq_nil_of_isEmpty {b : ByteArray} (h : b.isEmpty = true) :
+    b.data.toList = [] := by
+  have : b.size = 0 := by simpa [ByteArray.isEmpty] using h
+  rw [size_eq_length] at this
+  exact List.eq_nil_of_length_eq_zero this
+
+/-- An input whose first value has under 128 content octets starts with that value.
+
+It is the tag, one length octet, the content, then the rest. -/
+theorem data_toList_eq_of_read_ok {input rest : ByteArray} {v : Value} {content : List UInt8}
+    (h : read input = .ok (v, rest)) (hc : v.content.data.toList = content)
+    (small : content.length < 128) :
+    input.data.toList = v.tag :: UInt8.ofNat content.length :: (content ++ rest.data.toList) := by
+  obtain ⟨-, -, hin, hv⟩ := read_ok_iff.mp h
+  have hs : v.content.size = content.length := by rw [size_eq_length, hc]
+  rcases hv with ⟨-, he⟩ | ⟨k, -, -, -, big, -⟩
+  · rw [hin, he, hs, hc]
+    rfl
+  · omega
+
+/-- A tag, a length octet under 128 and a content of that length read as one value. -/
+theorem read_eq_ok_of_length_lt {tag : UInt8} {content rest : List UInt8}
+    (low : tag.toNat % 32 ≠ 31) (nonzero : tag ≠ 0) (small : content.length < 128) :
+    read ⟨(tag :: UInt8.ofNat content.length :: (content ++ rest)).toArray⟩ =
+      .ok (⟨tag, ⟨content.toArray⟩, ⟨(tag :: UInt8.ofNat content.length :: content).toArray⟩⟩,
+        ⟨rest.toArray⟩) :=
+  read_ok_iff.mpr ⟨low, nonzero, by simp,
+    .inl ⟨show content.toArray.size < 128 by simpa using small, by simp [ByteArray.size]⟩⟩
+
+/-- A read of siblings that returns a value has read that value first. -/
+theorem exists_of_children_go_eq_ok_cons {fuel : Nat} {input : ByteArray} {v : Value}
+    {vs : List Value} (h : children.go fuel input = .ok (v :: vs)) :
+    ∃ f rest, fuel = f + 1 ∧ read input = .ok (v, rest) ∧ children.go f rest = .ok vs := by
+  cases fuel with
+  | zero =>
+    rw [children_go_zero] at h
+    split at h <;> simp at h
+  | succ f =>
+    rw [children_go_succ] at h
+    by_cases he : input.isEmpty = true
+    · simp [he, pure, Except.pure] at h
+    · cases hr : read input with
+      | error e => simp [he, hr, bind, Except.bind] at h
+      | ok p =>
+        obtain ⟨w, rest⟩ := p
+        cases hg : children.go f rest with
+        | error e => simp [he, hr, hg, bind, Except.bind] at h
+        | ok ws =>
+          simp [he, hr, hg, bind, Except.bind, pure, Except.pure] at h
+          obtain ⟨rfl, rfl⟩ := h
+          exact ⟨f, rest, rfl, rfl, hg⟩
+
+/-- A read of siblings that returns no value has read an empty input. -/
+theorem isEmpty_of_children_go_eq_ok_nil {fuel : Nat} {input : ByteArray}
+    (h : children.go fuel input = .ok []) : input.isEmpty = true := by
+  cases fuel with
+  | zero =>
+    rw [children_go_zero] at h
+    split at h
+    · assumption
+    · simp at h
+  | succ f =>
+    rw [children_go_succ] at h
+    by_cases he : input.isEmpty = true
+    · exact he
+    · cases hr : read input with
+      | error e => simp [he, hr, bind, Except.bind] at h
+      | ok p =>
+        cases hg : children.go f p.2 with
+        | error e => simp [he, hr, hg, bind, Except.bind] at h
+        | ok ws => simp [he, hr, hg, bind, Except.bind, pure, Except.pure] at h
+
+/-- A value read first, then siblings read from the rest, are the siblings of the input. -/
+theorem children_go_succ_eq_ok_of_read {fuel : Nat} {input rest : ByteArray} {v : Value}
+    {vs : List Value} (h : read input = .ok (v, rest))
+    (hg : children.go fuel rest = .ok vs) :
+    children.go (fuel + 1) input = .ok (v :: vs) := by
+  obtain ⟨hv, hs⟩ := size_lt_of_read_ok h
+  have he : input.isEmpty = false := by
+    simp only [ByteArray.isEmpty, beq_eq_false_iff_ne, ne_eq]
+    omega
+  simp [children_go_succ, he, h, hg, bind, Except.bind, pure, Except.pure]
+
+/-- An empty input has no siblings, whatever the fuel. -/
+theorem children_go_empty (fuel : Nat) : children.go fuel ⟨#[]⟩ = .ok [] := by
+  cases fuel <;> rfl
+
+/-- Two siblings are read in turn, and nothing follows them. -/
+theorem exists_read_of_children_eq_ok_pair {input : ByteArray} {a b : Value}
+    (h : children input = .ok [a, b]) :
+    ∃ rest last, read input = .ok (a, rest) ∧ read rest = .ok (b, last) ∧
+      last.isEmpty = true := by
+  obtain ⟨f, rest, -, ha, h⟩ := exists_of_children_go_eq_ok_cons h
+  obtain ⟨g, last, -, hb, h⟩ := exists_of_children_go_eq_ok_cons h
+  exact ⟨rest, last, ha, hb, isEmpty_of_children_go_eq_ok_nil h⟩
+
 /-- Each value that a read of siblings returns has a header and is at most as long as the input. -/
 theorem children_go_sizes : ∀ (fuel : Nat) (input : ByteArray) (vs : List Value),
     children.go fuel input = .ok vs →
@@ -1250,14 +1503,14 @@ theorem children_go_sizes : ∀ (fuel : Nat) (input : ByteArray) (vs : List Valu
   induction fuel with
   | zero =>
     intro input vs h v hv
-    simp only [children.go] at h
+    rw [children_go_zero] at h
     split at h
     · cases h
       simp at hv
     · cases h
   | succ fuel ih =>
     intro input vs h v hv
-    simp only [children.go] at h
+    rw [children_go_succ] at h
     by_cases he : input.isEmpty = true
     · simp only [he, ite_true, pure, Except.pure, bind, Except.bind, Except.ok.injEq] at h
       subst h
@@ -1357,11 +1610,41 @@ theorem validate_sequence_ok_iff {value : Value} (tag : value.tag = 48)
   rw [validate_constructed_ok_iff (.inl (by rw [tag]; rfl)) header]
   simp [tag]
 
+/-- Every value in a read of siblings reads on its own. -/
+private theorem exists_read_of_mem_children_go : ∀ (fuel : Nat) (input : ByteArray)
+    (vs : List Value), children.go fuel input = .ok vs →
+      ∀ v ∈ vs, ∃ a rest, read a = .ok (v, rest) := by
+  intro fuel input vs
+  induction vs generalizing fuel input with
+  | nil => intro _ v hv; simp at hv
+  | cons w ws ih =>
+    intro h v hv
+    obtain ⟨f, rest, -, hw, h⟩ := exists_of_children_go_eq_ok_cons h
+    rcases List.mem_cons.mp hv with rfl | hv
+    · exact ⟨input, rest, hw⟩
+    · exact ih f rest h v hv
+
+/-- Siblings are in ascending order exactly when they are once padded with zero octets.
+
+So the order check of a SET OF is the order of X.690 §11.6. -/
+theorem pairwise_le_iff_padded {input : ByteArray} {values : List Value}
+    (h : children input = .ok values) (n : Nat) :
+    (values.map (·.encoded.data.toList)).Pairwise (· ≤ ·) ↔
+      (values.map fun v => v.encoded.data.toList ++
+        List.replicate (n - v.encoded.size) 0).Pairwise (· ≤ ·) := by
+  rw [List.pairwise_map, List.pairwise_map]
+  apply List.Pairwise.iff_of_mem
+  intro v w hv hw
+  -- Each sibling reads, so each pair compares alike with or without the padding.
+  obtain ⟨a, rest, ha⟩ := exists_read_of_mem_children_go _ _ _ h v hv
+  obtain ⟨b, rest', hb⟩ := exists_read_of_mem_children_go _ _ _ h w hw
+  exact encoded_le_iff_padded ha hb n
+
 /-- A SET OF passes validation exactly when its content reads as values that each pass.
 
 Their encodings must also come in ascending order, compared octet by octet, a proper prefix first.
 
-X.690 §11.6 pads the shorter encoding with zero octets instead.
+X.690 §11.6 pads the shorter encoding with zero octets instead, which never changes the order.
 
 Every value that the reader returns has a header, so its encoding is longer than its content. -/
 theorem validate_set_ok_iff {value : Value} (tag : value.tag = 49)
@@ -1386,30 +1669,19 @@ The decoder accepts a signature only when the encoder writes the same bytes back
 -/
 
 /-- On `i + 1` bytes, the first byte is `n / 256 ^ i` modulo 256, then `n` follows on `i` bytes. -/
-private theorem natToBytes_succ_eq_cons (i n : Nat) :
-    natToBytes (i + 1) n = UInt8.ofNat (n / 256 ^ i) :: natToBytes i n := by
-  rw [Nat.add_comm, natToBytes_add]
+private theorem toBE_succ_eq_cons (i n : Nat) :
+    (ByteOrder.toBE (i + 1) n).toList
+      = UInt8.ofNat (n / 256 ^ i) :: (ByteOrder.toBE i n).toList := by
+  rw [Nat.add_comm, ByteOrder.toList_toBE_add]
   rfl
 
-/-- On 32 bytes, a number with `i + 1` significant bytes keeps them once its leading zeros go. -/
-private theorem dropWhile_natToBytes {n i : Nat} (hi : i < 32) (low : 256 ^ i ≤ n)
+/-- A number below `2 ^ 256` with `i + 1` significant bytes has them as its fewest bytes. -/
+private theorem minimal_toBE {n i : Nat} (hn : n < 2 ^ 256) (low : 256 ^ i ≤ n)
     (high : n < 256 ^ (i + 1)) :
-    (natToBytes 32 n).dropWhile (· == 0) = natToBytes (i + 1) n := by
-  have hsplit := natToBytes_add (31 - i) (i + 1) n
-  rw [show 31 - i + (i + 1) = 32 by omega, Nat.div_eq_of_lt high, natToBytes_zero_right]
-    at hsplit
-  have hpos : 0 < 256 ^ i := Nat.pow_pos (by decide)
-  have hlow : 1 ≤ n / 256 ^ i := (Nat.le_div_iff_mul_le hpos).mpr (by omega)
-  have hhigh : n / 256 ^ i < 256 :=
-    (Nat.div_lt_iff_lt_mul hpos).mpr (by rw [Nat.pow_succ] at high; omega)
-  have nonzero : UInt8.ofNat (n / 256 ^ i) ≠ 0 := by
-    intro h
-    have := congrArg UInt8.toNat h
-    rw [UInt8.toNat_ofNat_of_lt' hhigh] at this
-    simp at this
-    omega
-  rw [hsplit, natToBytes_succ_eq_cons, List.dropWhile_append_of_pos (by simp)]
-  simp [nonzero]
+    (ByteOrder.toBE (ByteOrder.byteLength (n % 256 ^ 32)) (n % 256 ^ 32)).toList
+      = (ByteOrder.toBE (i + 1) n).toList := by
+  have h256 : n < 256 ^ 32 := by simpa using hn
+  rw [Nat.mod_eq_of_lt h256, ByteOrder.byteLength_eq_of_bounds low high]
 
 /-- The DER INTEGER of a number below `2 ^ 256`, as BIP 62 spells out strict DER.
 
@@ -1417,32 +1689,31 @@ Its content is the number on `k` big-endian bytes, for the `k` that meets two bo
 
 The number is below `2 ^ (8 * k - 1)`, and, for `k` above 1, at least `2 ^ (8 * (k - 1) - 1)`.
 
-These bounds pick the fewest bytes such that the first has its top bit clear.
-
-With them, the first content byte is below `0x80`, and it is `0x00` only before `0x80` or more.
-
-Zero is one content byte, `0x00`. -/
+These bounds pick the fewest bytes such that the first has its top bit clear. -/
 theorem ecdsaInteger_eq {n k : Nat} (hn : n < 2 ^ 256) (high : n < 2 ^ (8 * k - 1))
     (low : k = 1 ∨ 2 ^ (8 * (k - 1) - 1) ≤ n) :
-    ecdsaInteger n = [0x02, UInt8.ofNat k] ++ natToBytes k n := by
+    ecdsaInteger n = [0x02, UInt8.ofNat k] ++ (ByteOrder.toBE k n).toList := by
   obtain _ | j := k
   · simp at high low; omega
   have hhigh : n < 128 * 256 ^ j := by
     rw [show 8 * (j + 1) - 1 = 7 + 8 * j by omega, Nat.pow_add, Nat.pow_mul] at high
     simpa using high
   have h256 : n < 256 ^ 32 := by simpa using hn
+  -- With the two bounds, the first content byte is below `0x80`.
   by_cases hj : 256 ^ j ≤ n
   · have hj32 : j < 32 := (Nat.pow_lt_pow_iff_right (a := 256) (by decide)).mp (by omega)
     have hdiv : n / 256 ^ j < 128 :=
       (Nat.div_lt_iff_lt_mul (Nat.pow_pos (by decide))).mpr (by omega)
-    have hdrop := dropWhile_natToBytes hj32 hj (by rw [Nat.pow_succ]; omega)
-    rw [natToBytes_succ_eq_cons j n] at hdrop ⊢
+    have hdrop := minimal_toBE (i := j) hn hj (by rw [Nat.pow_succ]; omega)
+    rw [toBE_succ_eq_cons j n] at hdrop ⊢
     have : ¬ (UInt8.ofNat (n / 256 ^ j)).toNat ≥ 128 := by
       rw [UInt8.toNat_ofNat_of_lt' (by rw [UInt8.size]; omega)]; omega
     simp only [ecdsaInteger, hdrop]
     rw [ite_eq_right this]
-    simp [natToBytes_length]
+    simp
+  -- It is `0x00` only before `0x80` or more.
   · obtain _ | i := j
+    -- Zero is one content byte, `0x00`.
     · have hzero : n = 0 := by simp at hj; omega
       subst hzero
       decide
@@ -1451,21 +1722,20 @@ theorem ecdsaInteger_eq {n k : Nat} (hn : n < 2 ^ 256) (high : n < 2 ^ (8 * k - 
         · omega
         · rw [show 8 * (i + 1 + 1 - 1) - 1 = 7 + 8 * i by omega, Nat.pow_add, Nat.pow_mul] at h
           simpa using h
-      have hi32 : i < 32 := (Nat.pow_lt_pow_iff_right (a := 256) (by decide)).mp (by omega)
-      have hdrop := dropWhile_natToBytes (n := n) hi32 (by omega) (by omega)
+      have hdrop := minimal_toBE (n := n) (i := i) hn (by omega) (by omega)
       have hdiv : 128 ≤ n / 256 ^ i :=
         (Nat.le_div_iff_mul_le (Nat.pow_pos (by decide))).mpr (by omega)
       have hdiv256 : n / 256 ^ i < 256 :=
         (Nat.div_lt_iff_lt_mul (Nat.pow_pos (by decide))).mpr
           (by rw [Nat.pow_succ] at hj; omega)
-      rw [natToBytes_succ_eq_cons i n] at hdrop
-      rw [natToBytes_succ_eq_cons (i + 1) n, Nat.div_eq_of_lt (by omega),
-        natToBytes_succ_eq_cons i n]
+      rw [toBE_succ_eq_cons i n] at hdrop
+      rw [toBE_succ_eq_cons (i + 1) n, Nat.div_eq_of_lt (by omega),
+        toBE_succ_eq_cons i n]
       have : (UInt8.ofNat (n / 256 ^ i)).toNat ≥ 128 := by
         rw [UInt8.toNat_ofNat_of_lt' hdiv256]; omega
       simp only [ecdsaInteger, hdrop]
       rw [ite_eq_left this]
-      simp [natToBytes_length]
+      simp
 
 -- The bound for 33 bytes is `2 ^ 263`, above the default threshold for evaluating a power.
 set_option exponentiation.threshold 263 in
@@ -1492,7 +1762,7 @@ theorem exists_derByteCount {n : Nat} (hn : n < 2 ^ 256) :
 /-- Every number below `2 ^ 256` has its DER INTEGER on at most 33 content bytes. -/
 private theorem exists_ecdsaInteger_eq {n : Nat} (hn : n < 2 ^ 256) :
     ∃ k, 1 ≤ k ∧ k ≤ 33 ∧ n < 256 ^ k ∧
-      ecdsaInteger n = [0x02, UInt8.ofNat k] ++ natToBytes k n := by
+      ecdsaInteger n = [0x02, UInt8.ofNat k] ++ (ByteOrder.toBE k n).toList := by
   obtain ⟨k, h1, h33, high, low⟩ := exists_derByteCount hn
   refine ⟨k, h1, h33, ?_, ecdsaInteger_eq hn high low⟩
   have : 2 ^ (8 * k - 1) ≤ 256 ^ k := by
@@ -1504,15 +1774,14 @@ private theorem exists_ecdsaInteger_eq {n : Nat} (hn : n < 2 ^ 256) :
 
 It returns those r and s.
 
-Its last check is that the encoder writes the same bytes back, so acceptance gives the encoding.
-
-The converse is the content: the reader parses back every encoding of scalars in that range.
-
 So each accepted pair r, s has exactly one byte encoding. -/
 theorem decodeEcdsaScalars_eq_some_iff {signature : ByteArray} {r s : Nat} :
     decodeEcdsaScalars signature = some (r, s) ↔
       0 < r ∧ r < 2 ^ 256 ∧ 0 < s ∧ s < 2 ^ 256 ∧ encodeEcdsaSignature r s = signature := by
   constructor
+  -- The last check of the reader is that the encoder writes the same bytes back.
+  --
+  -- So acceptance gives the encoding.
   · intro h
     unfold decodeEcdsaScalars at h
     split at h
@@ -1530,19 +1799,21 @@ theorem decodeEcdsaScalars_eq_some_iff {signature : ByteArray} {r s : Nat} :
             · simp at h
         · simp at h
     · simp at h
+  -- The converse is the content: the reader parses back every encoding of scalars in that range.
   · rintro ⟨hr, hr256, hs, hs256, rfl⟩
     obtain ⟨kr, hkr1, hkr, hrk, hder_r⟩ := exists_ecdsaInteger_eq hr256
     obtain ⟨ks, hks1, hks, hsk, hder_s⟩ := exists_ecdsaInteger_eq hs256
     have hdata : (encodeEcdsaSignature r s).data.toList =
         0x30 :: UInt8.ofNat (kr + ks + 4) :: 0x02 :: UInt8.ofNat kr ::
-          (natToBytes kr r ++ 0x02 :: UInt8.ofNat ks :: natToBytes ks s) := by
-      simp [encodeEcdsaSignature, hder_r, hder_s, natToBytes_length]
+          ((ByteOrder.toBE kr r).toList
+            ++ 0x02 :: UInt8.ofNat ks :: (ByteOrder.toBE ks s).toList) := by
+      simp [encodeEcdsaSignature, hder_r, hder_s]
       apply UInt8.toNat_inj.mp
       simp
       omega
     have hsize : (encodeEcdsaSignature r s).size = kr + ks + 6 := by
       rw [ByteArray.size, ← Array.length_toList, hdata]
-      simp [natToBytes_length]
+      simp
       omega
     have hkr8 : (UInt8.ofNat kr).toNat = kr := UInt8.toNat_ofNat_of_lt' (by rw [UInt8.size]; omega)
     have hks8 : (UInt8.ofNat ks).toNat = ks := UInt8.toNat_ofNat_of_lt' (by rw [UInt8.size]; omega)
@@ -1552,9 +1823,9 @@ theorem decodeEcdsaScalars_eq_some_iff {signature : ByteArray} {r s : Nat} :
         encodeEcdsaSignature r s = encodeEcdsaSignature r s := ⟨hr, hr256, hs, hs256, rfl⟩
     unfold decodeEcdsaScalars
     rw [hdata]
-    simp only [hsize, htotal, hkr8, hks8, List.take_left' (natToBytes_length kr r),
-      List.drop_left' (natToBytes_length kr r), natToBytes_length,
-      bytesToNat_natToBytes_of_lt hrk, bytesToNat_natToBytes_of_lt hsk]
+    simp only [hsize, htotal, hkr8, hks8, List.take_left' (ByteOrder.length_toList_toBE kr r),
+      List.drop_left' (ByteOrder.length_toList_toBE kr r), ByteOrder.length_toList_toBE,
+      ByteOrder.ofBE_toBE_of_lt hrk, ByteOrder.ofBE_toBE_of_lt hsk]
     simp only [hcond, and_self, ite_true]
     simp
 

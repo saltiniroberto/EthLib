@@ -1,15 +1,17 @@
 module
 
 public import EthLib.Base.ExecutionConfig
+import EthLib.Base.Except
 public import EthLib.Base.Proofs.ChainConfig
 public import EthLib.Base.Proofs.Json
+import EthLib.Base.Proofs.List
 
 /-!
 # Proofs: the fork times and blob schedules of a configuration file
 
 Reading what the writer wrote gives the configuration back, when a file can hold it whole.
 
-A file holds mainnet and Hoodi whole.
+A file holds mainnet, Hoodi and Sepolia whole.
 
 After a file is read, the blob schedule at a block is the latest entry that the block reached.
 
@@ -72,14 +74,6 @@ private theorem eq_filter_append {α : Type} {R : α → α → Prop} {p : α �
 private theorem append_filter_of_forall_false {α : Type} {front l : List α} {p : α → Bool}
     (h : ∀ x ∈ l, p x = false) : front ++ l.filter p = front := by
   rw [List.filter_eq_nil_iff.2 fun x hx => by simp [h x hx], List.append_nil]
-
-/-- Two maps that agree on a list keep the same elements of it. -/
-private theorem filterMap_congr {α β : Type} {f g : α → Option β} :
-    ∀ {l : List α}, (∀ a ∈ l, f a = g a) → l.filterMap f = l.filterMap g
-  | [], _ => rfl
-  | a :: l, h => by
-    rw [List.filterMap_cons, List.filterMap_cons, h a (by simp),
-      filterMap_congr fun b hb => h b (by simp [hb])]
 
 /-- Looking up each key of a sorted list of keys, in order, lists the elements back. -/
 private theorem filterMap_find? {α : Type} {key : α → Fork} :
@@ -411,20 +405,6 @@ private theorem ok_of_ite {ε α : Type} {b : Prop} [Decidable b] {x y : Except 
   · simpa [hb] using h
   · exact absurd (by simpa [hb] using h) (fails c)
 
-/-- A step followed by a pure result succeeds when the step does, with that result. -/
-private theorem ok_of_bind_pure {ε α β : Type} {x : Except ε α} {f : α → β} {c : β}
-    (h : (x >>= fun a => pure (f a)) = .ok c) : ∃ a, x = .ok a ∧ f a = c := by
-  cases x with
-  | error e => cases h
-  | ok a => exact ⟨a, rfl, Except.ok.inj h⟩
-
-/-- A step followed by another succeeds when the step does, and the rest succeeds after it. -/
-private theorem ok_of_bind {ε α β : Type} {x : Except ε α} {f : α → Except ε β} {c : β}
-    (h : (x >>= f) = .ok c) : ∃ a, x = .ok a ∧ f a = .ok c := by
-  cases x with
-  | error e => cases h
-  | ok a => exact ⟨a, rfl, h⟩
-
 /-- A configuration that passes the order check is the one given, and it is ordered. -/
 private theorem ok_of_check {x c : ChainConfig} {y : Except ConfigError ChainConfig}
     (fails : ∀ c, y ≠ .ok c) (h : (if decide x.Ordered = true then pure x else y) = .ok c) :
@@ -543,7 +523,7 @@ theorem readExecutionConfig_ordered {base config : ChainConfig} {j : Json}
   -- The file passed its checks, and the last one is the order check.
   unfold readExecutionConfig at h
   obtain ⟨read, -, hc⟩ :=
-    ok_of_bind (ok_of_ite (fun c hc => by cases hc) (ok_of_ite (fun c hc => by cases hc) h))
+    bind_ok_iff.mp (ok_of_ite (fun c hc => by cases hc) (ok_of_ite (fun c hc => by cases hc) h))
   exact (ok_of_check (fun c hc => by cases hc) hc).2
 
 /-- A file holds mainnet whole, since mainnet sets no blob schedule of its own. -/
@@ -562,6 +542,14 @@ theorem writable_hoodi : Writable ChainConfig.hoodi := by
   rcases h with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ <;>
     decide
 
+/-- A file holds Sepolia whole, since Sepolia sets no blob schedule of its own. -/
+theorem writable_sepolia : Writable ChainConfig.sepolia := by
+  refine ⟨by decide, ?_, by simp [ChainConfig.sepolia], by simp [ChainConfig.sepolia]⟩
+  intro f t h
+  simp [ChainConfig.sepolia] at h
+  rcases h with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ |
+    ⟨rfl, rfl⟩ <;> decide
+
 /-- After a file is read, the blob schedule at a block is the latest entry that the block reached.
 
 That entry belongs to a fork of the configuration, and activates with it.
@@ -578,13 +566,14 @@ theorem blobScheduleAt_read {base config : ChainConfig} {j : Json} {n t : Nat}
   -- The file passed the check of its schedules, and each fork was read.
   unfold readExecutionConfig at h
   obtain ⟨read, hread, hc⟩ :=
-    ok_of_bind (ok_of_ite (fun c hc => by cases hc) (ok_of_ite (fun c hc => by cases hc) h))
+    bind_ok_iff.mp (ok_of_ite (fun c hc => by cases hc) (ok_of_ite (fun c hc => by cases hc) h))
   replace hc := (ok_of_check (fun c hc => by cases hc) hc).1
   clear h
   -- The forks read come in the order of the names.
   have hfst : read.map Prod.fst = forkNames.map Prod.fst := by
     refine map_fst_of_mapM_eq_ok (fun ⟨f, n⟩ r hr => ?_) hread
-    obtain ⟨l, -, rfl⟩ := ok_of_bind_pure hr
+    obtain ⟨l, -, h⟩ := bind_ok_iff.mp hr
+    cases h
     rfl
   have sorted : read.Pairwise fun a b => a.1 < b.1 :=
     List.pairwise_map.1 (hfst ▸ List.pairwise_map.2 forkNames_sorted)

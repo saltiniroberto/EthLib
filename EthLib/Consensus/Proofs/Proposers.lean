@@ -10,14 +10,6 @@ public import EthLib.Consensus.Proposers
 The proposer of a slot is one of the candidates it is drawn from.
 
 Each candidate is active, so each proposer of an epoch names a validator active in it.
-
-From Gloas each candidate is also unslashed, so each proposer is too.
-
-A balance-weighted selection of one proposer draws the same proposer as the proposer search.
-
-So from Electra, the Gloas selection of a proposer agrees with the earlier draw.
-
-Moving the lookahead shifts every proposer back by one epoch, and fills the last epoch anew.
 -/
 
 @[expose] public section
@@ -207,6 +199,34 @@ theorem getBeaconProposerIndices_active {epoch : Epoch}
   intro proposer member
   exact (mem_iff_of_getActiveValidatorIndicesChecked_ok checked).mp (List.mem_toArray.mp
     (mem_of_mem_proposerCandidates (mem_of_computeProposerIndices drawn proposer member)))
+
+/-- Each entry of a lookahead drawn from a state is a proposer that the state draws for its epoch.
+
+Entry `k` belongs to the epoch that is `k / SLOTS_PER_EPOCH` epochs after the current one. -/
+theorem initializeProposerLookahead_drawn {lookahead : Vector ValidatorIndex
+      ((preset.MIN_SEED_LOOKAHEAD.toNat + 1) * preset.SLOTS_PER_EPOCH.toNat)}
+    (computed : initializeProposerLookahead state = .ok lookahead) (k : Nat)
+    (inside : k < (preset.MIN_SEED_LOOKAHEAD.toNat + 1) * preset.SLOTS_PER_EPOCH.toNat) :
+    ∃ epoch proposers, epoch.toNat =
+        (getCurrentEpoch state).toNat + k / preset.SLOTS_PER_EPOCH.toNat ∧
+      getBeaconProposerIndices state epoch = .ok proposers ∧ lookahead[k] ∈ proposers.toList := by
+  simp only [initializeProposerLookahead, bind_ok_iff, pure, Except.pure,
+    Except.ok.injEq] at computed
+  obtain ⟨epochs, mapped, rfl⟩ := computed
+  have div : k / preset.SLOTS_PER_EPOCH.toNat < preset.MIN_SEED_LOOKAHEAD.toNat + 1 :=
+    Nat.div_lt_of_lt_mul (by rw [Nat.mul_comm]; exact inside)
+  have drawn := vector_mapM_ok_getElem mapped (k / preset.SLOTS_PER_EPOCH.toNat) div
+  simp only [Vector.getElem_range, bind_ok_iff, liftArith, mapError_ok_iff] at drawn
+  obtain ⟨epoch, counted, drawn⟩ := drawn
+  have sum := Uint64.addChecked_ok_iff.mp counted
+  have small : (k / preset.SLOTS_PER_EPOCH.toNat).toUInt64.toNat =
+      k / preset.SLOTS_PER_EPOCH.toNat := by
+    refine UInt64.toNat_ofNat_of_lt' ?_
+    have := preset.MIN_SEED_LOOKAHEAD.toNat_lt
+    have : UInt64.size = 2 ^ 64 := rfl
+    omega
+  refine ⟨epoch, _, by rw [sum.2, small], drawn, ?_⟩
+  simp [Vector.getElem_flatten]
 
 /-- Moving the lookahead shifts every proposer back by one epoch.
 

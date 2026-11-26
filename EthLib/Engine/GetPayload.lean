@@ -15,26 +15,21 @@ The Engine API names Shanghai, Cancun, Prague, Osaka and Amsterdam by their exec
 
 They are Shapella, Dencun, Pectra, Fusaka and Glamsterdam here.
 
-The consensus layer also writes the parameters as JSON: the payload ID alone.
+Sources, at commit `1ca0818` of execution-apis:
 
-It also reads the result of a version as JSON, at the fork of the payload, and writes it back.
+- versions [1][v1], [2][v2], [3][v3], [4][v4], [5][v5] and [6][v6] of the method
+- the updates by [Cancun][c], [Prague][p], [Osaka][o] and [Amsterdam][a]: bounds of versions 2 to 5
 
-The method follows [version 1][v1], [2][v2], [3][v3], [4][v4], [5][v5] and [6][v6].
-
-The upper bounds of versions 2 to 5 come from the updates of later forks.
-
-They are in [Cancun][c], [Prague][p], [Osaka][o] and [Amsterdam][a].
-
-[v1]: https://github.com/ethereum/execution-apis/blob/3284ee80c3da3e516c53782dde75157cccf1ebdc/src/engine/paris.md#engine_getpayloadv1
-[v2]: https://github.com/ethereum/execution-apis/blob/3284ee80c3da3e516c53782dde75157cccf1ebdc/src/engine/shanghai.md#engine_getpayloadv2
-[v3]: https://github.com/ethereum/execution-apis/blob/3284ee80c3da3e516c53782dde75157cccf1ebdc/src/engine/cancun.md#engine_getpayloadv3
-[v4]: https://github.com/ethereum/execution-apis/blob/3284ee80c3da3e516c53782dde75157cccf1ebdc/src/engine/prague.md#engine_getpayloadv4
-[v5]: https://github.com/ethereum/execution-apis/blob/3284ee80c3da3e516c53782dde75157cccf1ebdc/src/engine/osaka.md#engine_getpayloadv5
-[v6]: https://github.com/ethereum/execution-apis/blob/3284ee80c3da3e516c53782dde75157cccf1ebdc/src/engine/amsterdam.md#engine_getpayloadv6
-[c]: https://github.com/ethereum/execution-apis/blob/3284ee80c3da3e516c53782dde75157cccf1ebdc/src/engine/cancun.md#update-the-methods-of-previous-forks
-[p]: https://github.com/ethereum/execution-apis/blob/3284ee80c3da3e516c53782dde75157cccf1ebdc/src/engine/prague.md#update-the-methods-of-previous-forks
-[o]: https://github.com/ethereum/execution-apis/blob/3284ee80c3da3e516c53782dde75157cccf1ebdc/src/engine/osaka.md#update-the-methods-of-previous-forks
-[a]: https://github.com/ethereum/execution-apis/blob/3284ee80c3da3e516c53782dde75157cccf1ebdc/src/engine/amsterdam.md#update-the-methods-of-previous-forks
+[v1]: https://github.com/ethereum/execution-apis/blob/1ca0818569467cff85b7f41372f22e728d5daa14/src/engine/paris.md#engine_getpayloadv1
+[v2]: https://github.com/ethereum/execution-apis/blob/1ca0818569467cff85b7f41372f22e728d5daa14/src/engine/shanghai.md#engine_getpayloadv2
+[v3]: https://github.com/ethereum/execution-apis/blob/1ca0818569467cff85b7f41372f22e728d5daa14/src/engine/cancun.md#engine_getpayloadv3
+[v4]: https://github.com/ethereum/execution-apis/blob/1ca0818569467cff85b7f41372f22e728d5daa14/src/engine/prague.md#engine_getpayloadv4
+[v5]: https://github.com/ethereum/execution-apis/blob/1ca0818569467cff85b7f41372f22e728d5daa14/src/engine/osaka.md#engine_getpayloadv5
+[v6]: https://github.com/ethereum/execution-apis/blob/1ca0818569467cff85b7f41372f22e728d5daa14/src/engine/amsterdam.md#engine_getpayloadv6
+[c]: https://github.com/ethereum/execution-apis/blob/1ca0818569467cff85b7f41372f22e728d5daa14/src/engine/cancun.md#update-the-methods-of-previous-forks
+[p]: https://github.com/ethereum/execution-apis/blob/1ca0818569467cff85b7f41372f22e728d5daa14/src/engine/prague.md#update-the-methods-of-previous-forks
+[o]: https://github.com/ethereum/execution-apis/blob/1ca0818569467cff85b7f41372f22e728d5daa14/src/engine/osaka.md#update-the-methods-of-previous-forks
+[a]: https://github.com/ethereum/execution-apis/blob/1ca0818569467cff85b7f41372f22e728d5daa14/src/engine/amsterdam.md#update-the-methods-of-previous-forks
 -/
 
 @[expose] public section
@@ -145,7 +140,7 @@ def requestsOfFork (fork : Fork) (requests : List ByteArray) : Bool :=
 
 It keeps the bounds of [its type][p] in the Engine API.
 
-[p]: https://github.com/ethereum/execution-apis/blob/3284ee80c3da3e516c53782dde75157cccf1ebdc/src/engine/paris.md#executionpayloadv1 -/
+[p]: https://github.com/ethereum/execution-apis/blob/1ca0818569467cff85b7f41372f22e728d5daa14/src/engine/paris.md#executionpayloadv1 -/
 def payloadOfBlock {fork : Fork} (block : Block fork Transaction) :
     Option (ExecutionPayload fork) :=
   if h : .paris ≤ fork then
@@ -227,7 +222,7 @@ def getPayloadParams (params : Lean.Json) : Json.Decode PayloadId := do
   -- The source names no error for another count, and EthLib gives `-32602`, invalid params.
   | values => Json.invalid s!"params: got {values.length}, expected 1"
 
-/-- The parameters of the request as JSON: the payload ID alone. -/
+/-- The request as the consensus layer writes it in JSON: the payload ID alone. -/
 def getPayloadParamsJson (id : PayloadId) : Lean.Json := .arr #[dataJson id.toList]
 
 /-! ## The result -/
@@ -246,8 +241,8 @@ def BlobsBundle.proofsPerBlob (version : Nat) : Nat :=
 
 They are those of [BlobsBundleV1][v1] and [BlobsBundleV2][v2].
 
-[v1]: https://github.com/ethereum/execution-apis/blob/3284ee80c3da3e516c53782dde75157cccf1ebdc/src/engine/cancun.md#blobsbundlev1
-[v2]: https://github.com/ethereum/execution-apis/blob/3284ee80c3da3e516c53782dde75157cccf1ebdc/src/engine/osaka.md#blobsbundlev2 -/
+[v1]: https://github.com/ethereum/execution-apis/blob/1ca0818569467cff85b7f41372f22e728d5daa14/src/engine/cancun.md#blobsbundlev1
+[v2]: https://github.com/ethereum/execution-apis/blob/1ca0818569467cff85b7f41372f22e728d5daa14/src/engine/osaka.md#blobsbundlev2 -/
 def BlobsBundle.lengthsHold (version : Nat) (b : BlobsBundle) : Bool :=
   -- `BlobsBundleV1`: the three arrays have one length.
   --
@@ -261,8 +256,8 @@ def blobsBundleJson (b : BlobsBundle) : Lean.Json :=
   --
   -- An object of JSON is an unordered collection of members.
   Lean.Json.mkObj [("blobs", listJson (dataJson ·.toList) b.blobs),
-    ("commitments", listJson (dataJson ·.toList) b.commitments),
-    ("proofs", listJson (dataJson ·.toList) b.proofs)]
+    ("commitments", listJson (dataJson ·.bytes.toList) b.commitments),
+    ("proofs", listJson (dataJson ·.bytes.toList) b.proofs)]
 
 /-- The three fields of a blobs bundle. -/
 def blobsBundleFields : List String := ["blobs", "commitments", "proofs"]
@@ -279,35 +274,33 @@ def blobsBundleOfJson (version : Nat) (j : Lean.Json) : Json.Decode BlobsBundle 
     -- Each blob is `FIELD_ELEMENTS_PER_BLOB * BYTES_PER_FIELD_ELEMENT = 4096 * 32 = 131072` bytes.
     blobs := ← array "blobs" (fixed "blob" _) (← get "blobs")
     -- Each commitment and each proof is 48 bytes.
-    commitments := ← array "commitments" (fixed "commitment" 48) (← get "commitments")
-    proofs := ← array "proofs" (fixed "proof" 48) (← get "proofs") }
+    commitments := (← array "commitments" (fixed "commitment" 48) (← get "commitments")).map .mk
+    proofs := (← array "proofs" (fixed "proof" 48) (← get "proofs")).map .mk }
   -- The length rules of the version of the bundle.
   unless bundle.lengthsHold version do Json.invalid "blobsBundle: lengths do not match"
   return bundle
 
 /-- What a consensus node reads from the result of the method, at the fork of the payload.
 
-The access list and the slot are those of a payload from Glamsterdam.
-
-The block value is present from version 2, the bundle and the override flag from version 3.
-
-The execution requests are present from version 4.
-
 The writer writes the options that are present, so they must follow the version. -/
 structure GetPayloadResult (fork : Fork) where
   /-- The execution payload. -/
   payload : ExecutionPayload fork
-  /-- The block access list, from Glamsterdam. -/
+  /-- The block access list of a payload from Glamsterdam. -/
   blockAccessList : Since .glamsterdam fork ByteArray
-  /-- The slot number, from Glamsterdam. -/
+  /-- The slot number of a payload from Glamsterdam. -/
   slotNumber : Since .glamsterdam fork UInt64
-  /-- The value of the block to its proposer, in wei. -/
+  /-- The value of the block to its proposer, in wei, present from version 2. -/
   blockValue : Option Nat
-  /-- The blobs, commitments and proofs of the blob transactions of the payload. -/
+  /-- The blobs, commitments and proofs of the blob transactions of the payload.
+
+  The bundle is present from version 3. -/
   blobsBundle : Option BlobsBundle
-  /-- Whether the execution layer suggests its own payload over one of an external builder. -/
+  /-- Whether the execution layer suggests its own payload over one of an external builder.
+
+  The flag is present from version 3. -/
   shouldOverrideBuilder : Option Bool
-  /-- The execution requests of the payload. -/
+  /-- The execution requests of the payload, present from version 4. -/
   executionRequests : Option (List ByteArray)
 
 /-- What a response holds at a version of the method: the fields of that version. -/
@@ -336,7 +329,9 @@ def GetPayloadResult.payloadJson {fork : Fork} (r : GetPayloadResult fork) : Lea
   -- Versions 1 to 5: version 1, 2 or 3 of the structure, the one of the fork.
   else Json.executionPayloadJson r.payload
 
-/-- A result as JSON: the bare payload without a block value, else an object of its fields. -/
+/-- A result as JSON: the bare payload without a block value, else an object of its fields.
+
+The consensus layer writes it back as JSON. -/
 def getPayloadResultJson {fork : Fork} (r : GetPayloadResult fork) : Lean.Json :=
   match r.blockValue with
   -- Version 1: the result is `ExecutionPayloadV1` itself, and only version 1 has no block value.
@@ -374,11 +369,13 @@ def resultPayloadOfJson (v4 : Bool) (fork : Fork) (j : Lean.Json) :
 
 /-- The result of a version of the method, for a payload of a fork that the version serves.
 
+The consensus layer reads it as JSON, at the fork of the payload.
+
 It reads the response of each version, as [version 1][v1], [version 4][v4] and [version 6][v6] say.
 
-[v1]: https://github.com/ethereum/execution-apis/blob/3284ee80c3da3e516c53782dde75157cccf1ebdc/src/engine/paris.md#engine_getpayloadv1
-[v4]: https://github.com/ethereum/execution-apis/blob/3284ee80c3da3e516c53782dde75157cccf1ebdc/src/engine/prague.md#engine_getpayloadv4
-[v6]: https://github.com/ethereum/execution-apis/blob/3284ee80c3da3e516c53782dde75157cccf1ebdc/src/engine/amsterdam.md#engine_getpayloadv6 -/
+[v1]: https://github.com/ethereum/execution-apis/blob/1ca0818569467cff85b7f41372f22e728d5daa14/src/engine/paris.md#engine_getpayloadv1
+[v4]: https://github.com/ethereum/execution-apis/blob/1ca0818569467cff85b7f41372f22e728d5daa14/src/engine/prague.md#engine_getpayloadv4
+[v6]: https://github.com/ethereum/execution-apis/blob/1ca0818569467cff85b7f41372f22e728d5daa14/src/engine/amsterdam.md#engine_getpayloadv6 -/
 def getPayloadResultOfJson (version : Nat) (fork : Fork) (j : Lean.Json) :
     Json.Decode (GetPayloadResult fork) := do
   -- Step 1 of versions 3 to 6, and the updates: the version serves the fork of the payload.

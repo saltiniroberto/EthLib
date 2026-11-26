@@ -4,37 +4,16 @@ public import EthLib.Base.Proofs.List
 public import EthLib.Networking.Devp2p.P2p
 public import EthLib.Networking.Proofs.Rlpx.Handshake
 public import EthLib.Networking.Proofs.Snappy.Compress
+import EthLib.Base.Proofs.CodeInjective
 
 /-!
 # Proofs: the messages of the "p2p" capability
 
 Each message reads back from its frame data, compressed or not.
 
-A reader of Hello ignores the list items after the five fields it knows, as EIP-8 asks.
-
-A message is read only from its own ID and its own items.
-
-Only Hello takes further items after its fields.
-
-Only the item of a capability reads as that capability.
-
-With Snappy, a reader rejects a message other than Hello whose preamble declares more than 16 MiB.
-
-A message other than Hello that such a reader accepts decompresses to at most 16 MiB.
-
-Two peers use Snappy exactly when both announce version 5 or more.
-
-The message IDs of the shared capabilities do not overlap, and none is below `0x10`.
-
-The shared capabilities, in alphabetic order, take adjacent blocks of message IDs from `0x10` on.
-
-So the IDs they use are exactly those from `0x10` on, below `0x10` plus the number they need.
-
-Of the versions of one name that both peers list, only the highest is negotiated.
+With Snappy, a message other than Hello that a reader accepts decompresses to at most 16 MiB.
 
 Both peers negotiate the same capabilities and message IDs, whichever of them asks.
-
-Two errors with one code come from one constructor.
 -/
 
 @[expose] public section
@@ -330,7 +309,10 @@ theorem snappyEnabled_comm (ours theirs : Nat) :
     snappyEnabled ours theirs = snappyEnabled theirs ours := by
   simp only [snappyEnabled, Bool.and_comm]
 
-/-! ## Message IDs of the shared capabilities -/
+/-! ## Message IDs of the shared capabilities
+
+The shared capabilities, in alphabetic order, take adjacent blocks of message IDs from `0x10` on.
+-/
 
 /-- Every offset is at least the first one. -/
 theorem le_of_mem_messageOffsets (length : Capability → Nat) :
@@ -492,8 +474,6 @@ theorem negotiate_comm (length : Capability → Nat) (ours theirs : List Capabil
 /-- Two errors with one code come from one constructor. -/
 theorem P2pError.code_injective (e₁ e₂ : P2pError) (h : e₁.code = e₂.code) :
     e₁.ctorIdx = e₂.ctorIdx := by
-  -- Two distinct constructors have two distinct literal codes, which `decide` separates.
-  cases e₁ <;> cases e₂ <;>
-    first | rfl | (simp only [P2pError.code] at h; exact absurd h (by decide))
+  code_injective P2pError.code
 
 end EthLib.Networking.Devp2p

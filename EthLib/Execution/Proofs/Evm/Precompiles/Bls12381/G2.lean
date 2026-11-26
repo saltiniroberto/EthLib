@@ -1,30 +1,35 @@
 module
 
 public import EthLib.Execution.Evm.Precompiles.Bls12381.G2
+public import EthLib.Execution.Proofs.Evm.Precompiles.Bls12381.Gas
 public import EthLib.Execution.Proofs.Evm.Precompiles.Bls12381.Encoding
 
 /-!
 # Proofs: `Evm.Precompiles.Bls12381.G2`
 
-- G2ADD rejects any length other than 512 bytes before it charges gas, and then runs out of gas below its price.
-- With enough gas, G2ADD succeeds exactly when both halves decode, and returns the encoded sum.
-- Every encoded G2 point, and so every output of G2ADD and G2MSM, has 256 bytes.
-- G2MSM rejects an empty input or a length that is not a whole number of 288-byte pairs.
-- Its discount never raises the price above that of `k` separate products.
-- MAP_FP2_TO_G2 rejects any length other than 128 bytes before it charges gas, and every output has 256 bytes.
-- With enough gas, it succeeds exactly when the element of `Fp2` decodes and its map succeeds.
+This file proves when G2ADD, G2MSM and MAP_FP2_TO_G2 fail and when they succeed.
+
+Each output of the three has 256 bytes.
+
+Each one rejects a wrong input length before it charges gas.
+
+The discount of G2MSM never raises the price above that of `k` separate products.
 -/
 
 @[expose] public section
 
 namespace EthLib.Execution.Evm.Precompiles.Bls12381
 
-open EthLib.Base (bind_ok_iff mapError_ok_iff natToBytes_length)
+open EthLib.Base (bind_ok_iff mapError_ok_iff ByteOrder.length_toList_toBE)
 open EthLib.Cryptography.Bls (G2 G2.add)
 
-/-- The raw bytes of a G2 point have 192 bytes, and its padded encoding 256. -/
+/-- The raw bytes of a G2 point have 192 bytes. -/
+theorem length_g2ToBytes (point : G2) : (g2ToBytes point).length = 192 := by
+  simp [g2ToBytes]
+
+/-- The padded encoding of a G2 point has 256 bytes. -/
 theorem length_padG2_g2ToBytes (point : G2) : (padG2 (g2ToBytes point)).length = 256 := by
-  simp [padG2, g2ToBytes, zeroPad, PAD_BYTES, natToBytes_length]
+  simp [padG2, g2ToBytes, zeroPad, PAD_BYTES]
 
 /-- G2ADD rejects any length other than 512 bytes, whatever the gas. -/
 theorem bls12G2Add_invalidInputLength {data : ByteArray} (hsize : data.size ≠ 512) (gas : Nat) :
@@ -151,25 +156,16 @@ theorem bls12G2Msm_size {data : ByteArray} {gas : Nat} {out : ByteArray} (h : bl
 theorem G2_K_DISCOUNT_le : ∀ i : Fin 128, G2_K_DISCOUNT[i] ≤ 1000 := by decide
 
 /-- Every discount is at most 1000 thousandths. -/
-theorem discountG2_le (k : Nat) : discountG2 k ≤ MULTIPLIER := by
-  unfold discountG2
-  split
-  · rename_i h
-    exact G2_K_DISCOUNT_le ⟨k - 1, by omega⟩
-  · decide
+theorem discountG2_le (k : Nat) : discountG2 k ≤ MULTIPLIER :=
+  msmDiscount_le G2_K_DISCOUNT_le (by decide) k
 
 /-- The price of `k` pairs is at most the price of `k` separate products. -/
-theorem bls12G2MsmGas_le (k : Nat) : bls12G2MsmGas k ≤ k * GAS_G2MUL := by
-  unfold bls12G2MsmGas
-  have := discountG2_le k
-  calc k * GAS_G2MUL * discountG2 k / MULTIPLIER
-      ≤ k * GAS_G2MUL * MULTIPLIER / MULTIPLIER := Nat.div_le_div_right (Nat.mul_le_mul_left _ this)
-    _ = k * GAS_G2MUL := by simp [MULTIPLIER]
+theorem bls12G2MsmGas_le (k : Nat) : bls12G2MsmGas k ≤ k * GAS_G2MUL :=
+  msmGas_le G2_K_DISCOUNT_le (by decide) GAS_G2MUL k
 
 /-- Past 128 pairs, the discount stays at 524 thousandths. -/
-theorem discountG2_of_lt {k : Nat} (hk : 128 < k) : discountG2 k = 524 := by
-  simp [discountG2, G2_MAX_DISCOUNT]
-  omega
+theorem discountG2_of_lt {k : Nat} (hk : 128 < k) : discountG2 k = 524 :=
+  msmDiscount_of_lt G2_K_DISCOUNT G2_MAX_DISCOUNT hk
 
 /-! ## MAP_FP2_TO_G2 -/
 

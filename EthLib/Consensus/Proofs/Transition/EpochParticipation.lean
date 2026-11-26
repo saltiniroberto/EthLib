@@ -18,13 +18,9 @@ The inactivity scores change nothing in the first epoch, and keep one score per 
 
 After the first epoch, each eligible validator gets its next score, and the other scores stay.
 
-An unslashed validator that set the target flag in the previous epoch loses one point.
-
-The other eligible validators gain the score bias.
-
-Outside a leak each of those scores then loses the recovery rate, stopping at zero.
-
-The value of each score needs a registry within its limit.
+- An unslashed validator with the previous target flag loses one point, stopping at zero.
+- The other eligible validators gain the score bias.
+- Outside a leak each of those scores then loses the recovery rate, stopping at zero.
 
 None of these steps changes the size of the registry or of the balances.
 -/
@@ -154,7 +150,10 @@ theorem processInactivityUpdates_sizes {config : Config} {altair : .altair ≤ f
       s.data.size = (state.inactivityScores altair).data.size)
       (fun _ _ _ hp step => (updateInactivityScore_size step).trans hp) rfl folded
 
-/-! ## The value of each inactivity score -/
+/-! ## The value of each inactivity score
+
+The value of each score needs a registry within its limit.
+-/
 
 /-- Take a score update that succeeds, with a leak test that has a result.
 
@@ -254,27 +253,34 @@ private theorem getD_markIndices_iff {flagIndex : UInt64} {epoch : Epoch}
 
 /-- From Altair and after the first epoch, take an update of the inactivity scores that succeeds.
 
-Each eligible validator gets its next score.
+Each eligible validator gets its next score, and the other scores stay.
 
-That depends on whether it is active, unslashed and set the target flag in the previous epoch.
+A validator with the target flag loses one point, stopping at zero.
 
-A hit loses one point, and a miss gains the score bias.
+Any other eligible validator gains the score bias.
 
-Outside a leak the score then loses the recovery rate, stopping at zero.
-
-The other scores stay. -/
+Outside a leak the score then loses the recovery rate, stopping at zero. -/
 theorem processInactivityUpdates_scores {config : Config} {altair : .altair ≤ fork}
     (later : getCurrentEpoch state ≠ GENESIS_EPOCH)
     (computed : processInactivityUpdates config state altair = .ok after) :
     ∃ eligible, getEligibleValidatorIndices state = .ok eligible ∧
+      -- The scores of the validators that are not eligible stay.
       (∀ i, (∀ index ∈ eligible, index.toNat ≠ i) →
         (after.inactivityScores altair).data[i]? = (state.inactivityScores altair).data[i]?) ∧
+      -- The next score depends on whether the validator is active and unslashed.
+      --
+      -- It also depends on whether it set the target flag in the previous epoch.
       ∀ index ∈ eligible, ∃ hitters leak score score',
         getUnslashedParticipatingIndices state altair TIMELY_TARGET_FLAG_INDEX
             (getPreviousEpoch state) = .ok hitters ∧
           isInInactivityLeak state = .ok leak ∧
           (state.inactivityScores altair).data[index.toNat]? = some score ∧
           (after.inactivityScores altair).data[index.toNat]? = some score' ∧
+          -- A validator with the target flag loses one point, stopping at zero.
+          --
+          -- Any other eligible validator gains the score bias.
+          --
+          -- Outside a leak the score then loses the recovery rate, stopping at zero.
           score'.toNat = (if index ∈ hitters then score.toNat - 1
               else score.toNat + config.INACTIVITY_SCORE_BIAS.toNat) -
             if leak then 0 else config.INACTIVITY_SCORE_RECOVERY_RATE.toNat := by

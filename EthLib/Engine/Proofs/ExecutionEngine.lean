@@ -12,25 +12,7 @@ The execution layer built from the checks of `engine_newPayload` answers from th
 
 It accepts a request exactly when the payload has a block at the active fork of the chain.
 
-That block must carry the versioned hashes of the request from Deneb, and pass the state transition.
-
-A payload whose block decodes holds no transaction of no bytes.
-
 The beacon chain calls a version of the method at each fork from Bellatrix to Gloas.
-
-At Gloas, the block of a payload is a block of Amsterdam.
-
-Its header holds the slot number of the payload and the hash of its block access list.
-
-A payload takes a fork exactly when its optional fields are present from their forks on.
-
-The withdrawals are from Shapella, and the two blob gas fields from Dencun.
-
-So a decoded payload of version 1 takes the forks before Shapella.
-
-Version 2 takes Shapella, and version 3 the forks from Dencun.
-
-The structure built from a payload of the beacon chain has the same shape, and takes its fork.
 -/
 
 public section
@@ -72,11 +54,6 @@ theorem decodeTransactions_of_toBlock {f : Fork}
   cases built
   cases result
   exact decoded
-
-/-- A computation whose option holds a value has succeeded with that value. -/
-theorem toOption_eq_some {ε α : Type} {x : Except ε α} {a : α}
-    (h : x.toOption = some a) : x = .ok a := by
-  cases x <;> simp_all [Except.toOption]
 
 /-- A payload at a fork keeps the transactions of the structure that it comes from. -/
 theorem atFork_transactions {any : Json.AnyPayload} {f : Fork} {q : ExecutionPayload f}
@@ -237,7 +214,8 @@ theorem executionEngine_accepts_newPayloadRequest_iff {chain : BlockChain}
   simp only [Consensus.NewPayloadRequest.requestsList_eq_ok_iff]
   refine exists_congr fun requests => and_congr Iff.rfl <| exists_congr fun f =>
     exists_congr fun b => and_congr Iff.rfl <| and_congr ?_ Iff.rfl
-  exact forall_congr' fun deneb => by simp [Consensus.BeaconBlockBody.newPayloadRequest]
+  exact forall_congr' fun deneb => by
+    simp [Consensus.BeaconBlockBody.newPayloadRequest]
 
 /-- From Bellatrix on, the version of the method at a fork takes some fork. -/
 theorem exists_acceptsFork_newPayloadVersion (h : .bellatrix ≤ fork) :

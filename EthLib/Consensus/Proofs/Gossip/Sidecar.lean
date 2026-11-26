@@ -6,41 +6,9 @@ public import EthLib.Networking.Proofs.Gossip.Validation
 /-!
 # Proofs: the outcomes of the sidecar topics
 
-A blob sidecar and a column sidecar share the checks of their signed header.
+Which blob, column and partial column sidecars each gossip topic accepts, ignores and rejects.
 
-Once their fallible steps are computed, the header checks are a chain.
-
-The finalized ancestor, the proofs of the data and the expected proposer complete that chain.
-
-Before the header, each topic checks the seen keys, the shape or index, and the subnet.
-
-The shape check of a column sidecar passes exactly when its index names a column.
-
-Its cells, proofs and commitments must also agree in one nonzero count, within the blob limit.
-
-From the chain follows which sidecars each topic accepts, ignores and rejects.
-
-A valid sidecar records its key, and the same sidecar is then ignored.
-
-A sidecar with another index keeps the outcome of the seen check.
-
-Before Gloas, a valid sidecar was unseen and has an index in range, whatever the store and clock.
-
-Its branch reaches the body root of its header, and its KZG proofs match its commitments.
-
-A partial column sidecar is checked in three parts: its counts, its header, then its cells.
-
-The counts read nothing but the sidecar, so they decide first whatever the store holds.
-
-A header that passes is recorded before the cells, so it stays recorded when they fail.
-
-From Gloas a column sidecar has no header, and its chain reads the block that it names.
-
-A valid one has the slot of that block, and one cell per commitment of its bid.
-
-From Gloas a partial sidecar has no header either, and its chain also reads its block.
-
-It is ignored only when that block is unseen.
+Each outcome follows from the chain of checks of the topic, once its fallible steps are computed.
 -/
 
 @[expose] public section
@@ -85,7 +53,16 @@ theorem Seen.recordDataColumnSidecar_contains_of_index_ne {before : fork < .glam
       seen.dataColumnSidecarTuples.contains (dataColumnSidecarKey before second) := by
   simp [Seen.recordDataColumnSidecar, dataColumnSidecarKey, Ne.symm other]
 
-/-! ## The signed header -/
+/-! ## The signed header
+
+A blob sidecar and a column sidecar share the checks of their signed header.
+
+Before the header, each topic checks the seen keys, the shape or index, and the subnet.
+
+The header checks form a chain.
+
+The finalized ancestor, the proofs of the data and the expected proposer complete it.
+-/
 
 section Header
 
@@ -241,7 +218,8 @@ variable {subnet : SubnetID} {future : Bool} {finalizedSlot : Slot}
 
 /-- Once its KZG check is computed, the proofs of a blob sidecar are a chain of two checks. -/
 theorem blobSidecarProofs_eq
-    (kzg : verifyBlobKzgProof setup sidecar.blob sidecar.kzgCommitment sidecar.kzgProof =
+    (kzg : verifyBlobKzgProof setup sidecar.blob sidecar.kzgCommitment.bytes
+      sidecar.kzgProof.bytes =
       .ok kzgValid) :
     blobSidecarProofs setup fork sidecar =
       .ok ((rejectUnless (verifyBlobSidecarInclusionProof preset fork sidecar)
@@ -269,7 +247,8 @@ theorem validateBlobSidecar_eq
       sidecar.signedBlockHeader.signature = .ok valid)
     (checkpoint : store.getCheckpointBlock sidecar.signedBlockHeader.message.parentRoot
       store.finalizedCheckpoint.epoch = .ok finalizedBlock)
-    (kzg : verifyBlobKzgProof setup sidecar.blob sidecar.kzgCommitment sidecar.kzgProof =
+    (kzg : verifyBlobKzgProof setup sidecar.blob sidecar.kzgCommitment.bytes
+      sidecar.kzgProof.bytes =
       .ok kzgValid)
     (proposerOf : expectedProposer config checks parentState
       sidecar.signedBlockHeader.message.slot = .ok expected) :
@@ -319,7 +298,8 @@ theorem validateBlobSidecar_eq_accept
       sidecar.signedBlockHeader.signature = .ok valid)
     (checkpoint : store.getCheckpointBlock sidecar.signedBlockHeader.message.parentRoot
       store.finalizedCheckpoint.epoch = .ok finalizedBlock)
-    (kzg : verifyBlobKzgProof setup sidecar.blob sidecar.kzgCommitment sidecar.kzgProof =
+    (kzg : verifyBlobKzgProof setup sidecar.blob sidecar.kzgCommitment.bytes
+      sidecar.kzgProof.bytes =
       .ok kzgValid)
     (proposerOf : expectedProposer config checks parentState
       sidecar.signedBlockHeader.message.slot = .ok expected) :
@@ -356,7 +336,8 @@ theorem validateBlobSidecar_ignored
       sidecar.signedBlockHeader.signature = .ok valid)
     (checkpoint : store.getCheckpointBlock sidecar.signedBlockHeader.message.parentRoot
       store.finalizedCheckpoint.epoch = .ok finalizedBlock)
-    (kzg : verifyBlobKzgProof setup sidecar.blob sidecar.kzgCommitment sidecar.kzgProof =
+    (kzg : verifyBlobKzgProof setup sidecar.blob sidecar.kzgCommitment.bytes
+      sidecar.kzgProof.bytes =
       .ok kzgValid)
     (proposerOf : expectedProposer config checks parentState
       sidecar.signedBlockHeader.message.slot = .ok expected) :
@@ -391,7 +372,8 @@ theorem validateBlobSidecar_rejected
       sidecar.signedBlockHeader.signature = .ok valid)
     (checkpoint : store.getCheckpointBlock sidecar.signedBlockHeader.message.parentRoot
       store.finalizedCheckpoint.epoch = .ok finalizedBlock)
-    (kzg : verifyBlobKzgProof setup sidecar.blob sidecar.kzgCommitment sidecar.kzgProof =
+    (kzg : verifyBlobKzgProof setup sidecar.blob sidecar.kzgCommitment.bytes
+      sidecar.kzgProof.bytes =
       .ok kzgValid)
     (proposerOf : expectedProposer config checks parentState
       sidecar.signedBlockHeader.message.slot = .ok expected) :
@@ -426,7 +408,8 @@ theorem validateBlobSidecar_accept
     blobSidecarKey sidecar ∉ seen.blobSidecarTuples ∧
       sidecar.index < blobSidecarLimit config fork ∧
       verifyBlobSidecarInclusionProof preset fork sidecar = true ∧
-      verifyBlobKzgProof setup sidecar.blob sidecar.kzgCommitment sidecar.kzgProof = .ok true := by
+      verifyBlobKzgProof setup sidecar.blob sidecar.kzgCommitment.bytes sidecar.kzgProof.bytes =
+        .ok true := by
   unfold validateBlobSidecar at accepted
   simp only [bind_ok_iff, andThenM_eq_ok_accept, ignoreUnless_eq_accept,
     rejectUnless_eq_accept] at accepted
@@ -438,7 +421,8 @@ theorem validateBlobSidecar_accept
   simp [pure, Except.pure] at final
   subst final
   refine ⟨by simpa using unseen, by simpa using inside, included, ?_⟩
-  cases checked : verifyBlobKzgProof setup sidecar.blob sidecar.kzgCommitment sidecar.kzgProof <;>
+  cases checked :
+      verifyBlobKzgProof setup sidecar.blob sidecar.kzgCommitment.bytes sidecar.kzgProof.bytes <;>
     simp_all [Except.mapError]
 
 end Blob
@@ -722,7 +706,10 @@ theorem validateDataColumnSidecar_index_lt
 
 end Column
 
-/-! ## Column sidecars from Gloas -/
+/-! ## Column sidecars from Gloas
+
+From Gloas a column sidecar has no header, and its chain reads the block that it names.
+-/
 
 section GloasColumn
 
@@ -815,7 +802,10 @@ theorem validateGloasDataColumnSidecar_shape
 
 end GloasColumn
 
-/-! ## Partial column sidecars, from Fulu -/
+/-! ## Partial column sidecars, from Fulu
+
+A partial column sidecar is checked in three parts: its counts, its header, then its cells.
+-/
 
 section Partial
 
@@ -837,7 +827,10 @@ theorem PartialHeaders.find?_record_of_ne (ne : other ≠ root) :
   funext entry
   by_cases same : entry.1 = other <;> simp_all
 
-/-! ### The counts, which read nothing but the sidecar -/
+/-! ### The counts, which read nothing but the sidecar
+
+They decide first, whatever the store holds.
+-/
 
 /-- The counts reject a sidecar as empty exactly when it has no header and no set bit. -/
 theorem partialCountsOutcome_eq_empty :
@@ -1343,7 +1336,12 @@ theorem validatePartialDataColumnSidecar_records_header {after : PartialHeaders 
 
 end Partial
 
-/-! ## Partial column sidecars, from Gloas -/
+/-! ## Partial column sidecars, from Gloas
+
+From Gloas a partial sidecar has no header either, and its chain also reads its block.
+
+It is ignored only when that block is unseen.
+-/
 
 section GloasPartial
 

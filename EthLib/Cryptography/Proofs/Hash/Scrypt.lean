@@ -2,8 +2,9 @@ module
 
 public import EthLib.Cryptography.Hash.Scrypt
 public import EthLib.Cryptography.Proofs.Hash.Pbkdf2
-public import EthLib.Base.Proofs.LittleEndian
+public import EthLib.Base.Proofs.ByteOrder
 public import EthLib.Base.Proofs.Nat
+import EthLib.Base.Proofs.CodeInjective
 
 /-!
 # Proofs: scrypt
@@ -190,14 +191,9 @@ No theorem states the read loop of RFC 7914 §5, step 3, or the values of Salsa2
 In ROMix, its remainder mod `N` is the index, RFC 7914 §5, step 3. -/
 theorem integerify_eq (r : Nat) (x : MixBlock r) :
     integerify r x
-      = Base.bytesToUint (x.val.extract (128 * r - 64) (128 * r)).data.toVector := by
-  unfold integerify
-  rw [Base.bytesToUint_eq_foldr]
-  simp only [Vector.toList, ← Array.foldr_toList]
-  -- The two folds differ only in the order of the sum at each byte.
-  induction (x.val.extract (128 * r - 64) (128 * r)).data.toList with
-  | nil => rfl
-  | cons byte rest ih => simp only [List.foldr_cons, ih]; omega
+      = Base.ByteOrder.ofLE (x.val.extract (128 * r - 64) (128 * r)).data.toVector :=
+  -- Integerify is defined as this reading.
+  rfl
 
 /-- The fill leaves every entry below its starting index unchanged, RFC 7914 §5, step 2. -/
 theorem romixFill_fst_get_lt (r : Nat) (positive : 0 < r) {n : Nat} (count i : Nat)
@@ -285,8 +281,6 @@ theorem mixBlocks_eq_append (input : ByteArray) (n r count offset : Nat) (out mi
 /-- Two errors with one code come from one constructor. -/
 theorem ScryptError.code_injective (e₁ e₂ : ScryptError) (h : e₁.code = e₂.code) :
     e₁.ctorIdx = e₂.ctorIdx := by
-  -- Two distinct constructors have two distinct literal codes, which `decide` separates.
-  cases e₁ <;> cases e₂ <;>
-    first | rfl | (simp only [ScryptError.code] at h; exact absurd h (by decide))
+  code_injective ScryptError.code
 
 end EthLib.Cryptography.Hash.Scrypt

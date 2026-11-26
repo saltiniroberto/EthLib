@@ -3,6 +3,7 @@ module
 public import EthLib.Execution.Blocks.Receipt
 public import EthLib.Execution.Proofs.Blocks.Bloom
 public import EthLib.Execution.Proofs.Transactions.Envelope
+import EthLib.Base.Proofs.CodeInjective
 
 /-!
 # Proofs: logs and receipts
@@ -11,19 +12,7 @@ The RLP codecs of a log, of an outcome and of a receipt are lawful at every fork
 
 The bytes of a receipt decode back to its transaction type and the receipt.
 
-They do so at each fork that has the type, and only the encoding decodes to them.
-
 The receipts of a block count the gas cumulatively, so the counts never decrease.
-
-Each receipt counts the gas of the transactions up to it.
-
-So two receipts in a row differ by the gas of the second transaction.
-
-The last count is the gas of all the transactions.
-
-The Bloom filter of each receipt is the filter of its logs.
-
-The filters of the receipts combine into the filter of all the logs of the block.
 -/
 
 @[expose] public section
@@ -34,6 +23,7 @@ open EthLib.Base
 open EthLib.Serialization.Rlp
 open EthLib.Execution.Transactions
 
+-- The RLP codec of a log is lawful.
 instance : LawfulCodec Log where
   ofItem_toItem _ := Item.fields_bind_eq_ok.mpr
     ⟨_, rfl, rfl, by simp [Item.field_toItem, bind, Except.bind, pure, Except.pure]⟩
@@ -47,6 +37,7 @@ instance : LawfulCodec Log where
 
 variable {fork : Fork}
 
+-- At every fork, the RLP codec of an outcome is lawful.
 instance : LawfulCodec (Outcome fork) where
   ofItem_toItem
     | .postState before root => by
@@ -66,6 +57,7 @@ instance : LawfulCodec (Outcome fork) where
     · obtain ⟨root, hRoot, rfl⟩ := map_ok_iff.mp h
       exact LawfulCodec.toItem_of_ofItem (α := Hash32) hRoot
 
+-- At every fork, the RLP codec of a receipt is lawful.
 instance : LawfulCodec (Receipt fork) where
   ofItem_toItem _ := Item.fields_bind_eq_ok.mpr
     ⟨_, rfl, rfl, by simp [Item.field_toItem, bind, Except.bind, pure, Except.pure]⟩
@@ -228,9 +220,7 @@ open EthLib.Serialization.Rlp
 theorem _root_.EthLib.Execution.Blocks.ReceiptError.code_injective
     (e₁ e₂ : ReceiptError) (h : e₁.code = e₂.code) :
     e₁.ctorIdx = e₂.ctorIdx := by
-  -- Two distinct constructors have two distinct literal codes, which `decide` separates.
-  cases e₁ <;> cases e₂ <;>
-    first | rfl | (simp only [ReceiptError.code] at h; exact absurd h (by decide))
+  code_injective ReceiptError.code
 
 /-- A receipt error never has the code of an RLP error, so one Python class carries both. -/
 theorem _root_.EthLib.Execution.Blocks.ReceiptError.code_ne_rlp

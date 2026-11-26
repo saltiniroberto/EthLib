@@ -11,9 +11,11 @@ Reading back the Python value of a value gives that value, for each type that cr
 
 So an export never sends two different results as one value of this type.
 
-A type built from these types by pairs, options, lists and arrays inherits the law.
+Pairs, lists and arrays of these types inherit the law, and so do options, with one condition.
 
-An option inherits it only when no value inside becomes `None`, so an option of an option does not.
+An option inherits it only when no value inside becomes `None`.
+
+So an option of an option does not.
 
 Lean writes a large `int` as lower-case digits in base 16, and reading them back gives the number.
 

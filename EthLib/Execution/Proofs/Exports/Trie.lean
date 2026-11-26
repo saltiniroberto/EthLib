@@ -26,7 +26,7 @@ private theorem rootExport_eq {secured : UInt8} {input : ByteArray} {items : Lis
     (hitems : readList input "pairs" = .ok items) (hpairs : items.mapM ofPairItem = .ok pairs) :
     rootExport secured input =
       match root Cryptography.Hash.Keccak.keccak256
-          (pairs.foldl (fun trie (key, value) => trieSet trie key value) ⟨secured != 0, []⟩) with
+          (⟨secured != 0, setPairs pairs⟩ : Trie) with
       | .ok hash => return ⟨hash.toArray⟩
       | .error e => throw (e.code, s!"trie has no root: {repr e}") := by
   simp only [rootExport, hitems, hpairs, bind, Except.bind]
@@ -61,7 +61,7 @@ theorem root_of_rootExport {secured : UInt8} {input out : ByteArray} {items : Li
     (hitems : readList input "pairs" = .ok items) (hpairs : items.mapM ofPairItem = .ok pairs)
     (h : rootExport secured input = .ok out) :
     root Cryptography.Hash.Keccak.keccak256
-        (pairs.foldl (fun trie (key, value) => trieSet trie key value) ⟨secured != 0, []⟩) =
+        (⟨secured != 0, setPairs pairs⟩ : Trie) =
       .ok ⟨out.data, size_of_rootExport h⟩ := by
   rw [rootExport_eq hitems hpairs] at h
   split at h
@@ -75,7 +75,7 @@ theorem rootExport_of_root {secured : UInt8} {input : ByteArray} {items : List I
     {pairs : List (ByteArray × ByteArray)} {hash : Hash32}
     (hitems : readList input "pairs" = .ok items) (hpairs : items.mapM ofPairItem = .ok pairs)
     (hroot : root Cryptography.Hash.Keccak.keccak256
-        (pairs.foldl (fun trie (key, value) => trieSet trie key value) ⟨secured != 0, []⟩) =
+        (⟨secured != 0, setPairs pairs⟩ : Trie) =
       .ok hash) :
     rootExport secured input = .ok ⟨hash.toArray⟩ := by
   rw [rootExport_eq hitems hpairs, hroot]

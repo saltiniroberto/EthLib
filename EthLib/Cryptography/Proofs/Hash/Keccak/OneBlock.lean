@@ -10,29 +10,11 @@ A message of at most 135 bytes pads to one block of 136 bytes.
 
 Keccak-256 of it is then one call to the permutation on that block, with a zero capacity.
 
-The output is the first 256 bits of the result.
-
-Here the permutation is uniform, and the adversary evaluates it and its inverse.
-
-An adversary with `q` such calls finds a collision with chance at most a ratio.
-
-Its numerator is `Q (Q - 1) / 2 * 2^1344 + Q * 2^1088`, with `Q = q + 2`.
-
-Its denominator is `2^1600 - Q`.
-
-That is about `Q (Q - 1) / 2^257 + Q / 2^512`.
-
-It finds a preimage of a given digest with chance at most `Q (2^1344 + 2^1088) / (2^1600 - Q)`.
-
-There `Q = q + 1`, and the bound is about `Q / 2^256 + Q / 2^512`.
-
 Appendix A.1, Table 4, of [FIPS 202][fips] covers SHA3-256, which has the same capacity.
 
 The table claims 128 bits against collisions for it.
 
 It claims 256 bits against preimages.
-
-The bounds above meet these two claims for one-block messages.
 
 [fips]: https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.202.pdf
 -/
@@ -51,16 +33,19 @@ open OracleComp OracleSpec ENNReal EthLib.Cryptography.LazyPermutation
 def oneBlockState (msg : ByteArray) : State :=
   Internal.absorbBlock RATE_256 State.zero (Internal.laneAt (pad RATE_256 msg)) 0
 
-/-- Below 136 bytes, the absorbing phase is one call to the permutation, whatever it is. -/
-theorem spongeAbsorb_of_size_lt (f : State → State) {msg : ByteArray} (h : msg.size < RATE_256) :
+/-- Below 136 bytes, the absorbing phase is one call to the permutation, whatever it is.
+
+It holds in every lawful monad. -/
+theorem spongeAbsorb_of_size_lt {m : Type → Type} [Monad m] [LawfulMonad m] (f : State → m State)
+    {msg : ByteArray} (h : msg.size < RATE_256) :
     Internal.spongeAbsorb f RATE_256 msg.size (Internal.laneAt msg) = f (oneBlockState msg) := by
   have hn : blockCount RATE_256 msg.size = 1 := by simp [blockCount, Nat.div_eq_of_lt h]
-  simp only [spongeAbsorb_eq, hn, Internal.absorbBlocks, oneBlockState]
+  simp only [spongeAbsorb_eq, hn, Internal.absorbBlocks, oneBlockState, bind_pure]
 
 /-- Below 136 bytes, Keccak-256 is the first 256 bits of one call to Keccak-f[1600]. -/
 theorem keccak256_of_size_lt {msg : ByteArray} (h : msg.size < RATE_256) :
     keccak256 msg = Internal.squeeze256 (keccakF (oneBlockState msg)) := by
-  rw [keccak256_eq_squeeze256, spongeAbsorb_of_size_lt keccakF h]
+  rw [keccak256_eq_squeeze256, spongeAbsorb_of_size_lt (fun S => pure (keccakF S)) h, Id.run_pure]
 
 /-! ## The state space -/
 
@@ -134,8 +119,8 @@ theorem oneBlockState_injective {m₁ m₂ : ByteArray} (h₁ : m₁.size < RATE
     rw [size_pad hr, blockCount, Nat.div_eq_of_lt hm]
     rfl
   -- Each byte of the block is read back from its lane.
-  have hbyte : ∀ j < 136, EthLib.Base.byteAt (pad RATE_256 m₁) j =
-      EthLib.Base.byteAt (pad RATE_256 m₂) j := by
+  have hbyte : ∀ j < 136, EthLib.Base.byteAtOrZero (pad RATE_256 m₁) j =
+      EthLib.Base.byteAtOrZero (pad RATE_256 m₂) j := by
     intro j hj
     have hx : j / 8 % 5 < 5 := Nat.mod_lt _ (by decide)
     have hy : j / 8 / 5 < 5 := by omega
@@ -156,7 +141,7 @@ theorem oneBlockState_injective {m₁ m₂ : ByteArray} (h₁ : m₁.size < RATE
         (by decide) (by omega))), Nat.testBit_lt_two_pow (lt_of_lt_of_le (UInt8.toNat_lt _)
         (Nat.pow_le_pow_right (by decide) (by omega)))]
   have hat (m : ByteArray) (i : Nat) (hi : i < m.data.size) :
-      EthLib.Base.byteAt m i = m.data[i] :=
+      EthLib.Base.byteAtOrZero m i = m.data[i] :=
     dite_eq_left_of_eq_true (eq_true hi)
   refine pad_injective hr (ByteArray.ext (Array.ext ((hsize m₁ h₁).trans (hsize m₂ h₂).symm)
     fun j hj₁ hj₂ => ?_))
@@ -204,7 +189,12 @@ theorem card_squeeze256_fiber_le (T : State) :
   · have : Fintype.card {p : Fin 5 × Fin 5 // ¬(p.2 = 0 ∧ p.1.val < 4)} = 21 := by decide
     rw [this, ← pow_mul]
 
-/-! ## The bounds -/
+/-! ## The bounds
+
+Here the permutation is uniform, and the adversary evaluates it and its inverse.
+
+The bounds meet the two claims of FIPS 202 for one-block messages.
+-/
 
 /-- A message of at most 135 bytes, which Keccak-256 absorbs in one block. -/
 abbrev ShortMessage := {m : ByteArray // m.size < RATE_256}
@@ -212,8 +202,9 @@ abbrev ShortMessage := {m : ByteArray // m.size < RATE_256}
 /-- With the permutation `π` in place of Keccak-f[1600], the game's hash is the spec's sponge. -/
 theorem oneCallHash_eq (π : State → State) (m : ShortMessage) :
     oneCallHash (fun m : ShortMessage => oneBlockState m.1) Internal.squeeze256 π m =
-      Internal.squeeze256 (Internal.spongeAbsorb π RATE_256 m.1.size (Internal.laneAt m.1)) := by
-  rw [oneCallHash, spongeAbsorb_of_size_lt π m.2]
+      Internal.squeeze256 (Id.run (Internal.spongeAbsorb (fun S => pure (π S)) RATE_256 m.1.size
+        (Internal.laneAt m.1))) := by
+  rw [oneCallHash, spongeAbsorb_of_size_lt (fun S => pure (π S)) m.2, Id.run_pure]
 
 /-- **Collisions of one-block Keccak-256 over a random permutation.**
 
@@ -222,6 +213,8 @@ The adversary makes at most `q` calls to the permutation and its inverse, and `Q
 It finds two messages below 136 bytes with one digest with chance at most this ratio.
 
 The numerator is `Q (Q - 1) / 2 * 2^1344 + Q * 2^1088`, and the denominator `2^1600 - Q`.
+
+That is about `Q (Q - 1) / 2^257 + Q / 2^512`.
 
 For `Q ≥ 2^1600` the denominator is zero and the bound is trivial. -/
 theorem keccak256_collisionAdvantage_le (adversary : PermComp State (ShortMessage × ShortMessage))
@@ -243,6 +236,8 @@ The adversary gets a digest, and makes at most `q` calls to the permutation and 
 It returns a message below 136 bytes with that digest with chance at most this ratio.
 
 The ratio is `Q (2^1344 + 2^1088) / (2^1600 - Q)`, with `Q = q + 1`.
+
+That is about `Q / 2^256 + Q / 2^512`.
 
 For `Q ≥ 2^1600` the denominator is zero and the bound is trivial. -/
 theorem keccak256_preimageAdvantage_le

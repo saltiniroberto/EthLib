@@ -8,19 +8,9 @@ public import EthLib.Cryptography.Proofs.Secp256k1.Encoding
 /-!
 # Proofs: public key recovery
 
-- A recovered key verifies the signature.
-- Recovery returns the key of the signer, with the parity of `R` as the id.
-- When `r + n >= p`, every key that verifies a signature is recovered by one of the two ids.
-- The swap of `s` for `n - s` swaps the two ids: EIP-2 removes that malleability.
-- The two ids give two different keys.
+Soundness and completeness of public key recovery, and the malleability of its two ids.
 
-The bound `r + n >= p` covers every `r` but the smallest `p - n`.
-
-That is about `2^128` values of `r` out of `2^256`.
-
-Below it, `R` could have `x = r + n`, which only the ids 2 and 3 reach.
-
-Ethereum does not use those ids.
+Source: SEC 1 v2 §4.1.6.
 -/
 
 @[expose] public section
@@ -102,8 +92,9 @@ theorem verify_recover {hash : Vector UInt8 32} {r s : Nat} {id : Fin 2} {q : Po
     obtain ⟨y, rfl, hc, -⟩ := decompress_eq_ok_iff.mp hd
     split_ifs at h with hne
     obtain rfl := Except.ok.inj h
-    · rw [verify, dite_eq_left hr, dite_eq_left hs, ite_eq_left ⟨hqi, hqc⟩]
-      dsimp only
+    · rw [verify, Cryptography.Ecdsa.Curve.verify, dite_eq_left hr, dite_eq_left hs,
+        ite_eq_left ⟨hqi, hqc⟩]
+      dsimp only [domain]
       have hG := isOnCurve_generator
       rw [mulAdd_eq _ _ hG hqc]
       -- The verifier rebuilds `R`: `e s^(-1) G + r s^(-1) (r^(-1) s R - r^(-1) e G) = R`.
@@ -210,38 +201,12 @@ That point has `x_R mod n = r`. -/
 theorem verify_rebuilt {q : Point} {hash : Vector UInt8 32} {r s : Nat} (hv : verify q hash r s = true) :
     ∃ (hr : 0 < r ∧ r < Fn.modulus) (hs : 0 < s ∧ s < Fn.modulus), q ≠ .infinity ∧ q.isOnCurve = true ∧
       ∃ x y : Fp, mul (Fin.ofNat _ (hashToInt hash) * Fn.inv ⟨s, hs.2⟩) generator
-        + mul ((⟨r, hr.2⟩ : Fn) * Fn.inv ⟨s, hs.2⟩) q = .affine x y ∧ x.val % Fn.modulus = r := by
-  obtain ⟨hr, hs⟩ := verify_range hv
-  have hq : q ≠ .infinity ∧ q.isOnCurve = true := by
-    by_cases hi : q = .infinity
-    · subst hi; rw [verify_infinity] at hv; cases hv
-    · cases hc : q.isOnCurve
-      · rw [verify_of_not_isOnCurve hc] at hv; cases hv
-      · exact ⟨hi, rfl⟩
-  refine ⟨hr, hs, hq.1, hq.2, ?_⟩
-  rw [verify, dite_eq_left hr, dite_eq_left hs, ite_eq_left hq] at hv
-  dsimp only at hv
-  rw [mulAdd_eq _ _ isOnCurve_generator hq.2] at hv
-  split at hv
-  · cases hv
-  · rename_i x y hR
-    exact ⟨x, y, hR, by simpa using hv⟩
+        + mul ((⟨r, hr.2⟩ : Fn) * Fn.inv ⟨s, hs.2⟩) q = .affine x y ∧ x.val % Fn.modulus = r :=
+  laws.verify_rebuilt hv
 
 /-- A scalar read from a natural number is that number in `ZMod n`. -/
-theorem toZMod_ofNat (e : Nat) : Fn.toZMod (Fin.ofNat _ e) = (e : ZMod Fn.modulus) := by
-  apply ZMod.val_injective
-  simp [Fn.toZMod, ZMod.val_natCast]
-  rfl
-
-/-- The scalars `e / s` and `r / s` that the verifier computes, in `ZMod n`. -/
-private theorem toZMod_scalars (e r s : Nat) (hr : r < Fn.modulus) (hs : s < Fn.modulus) :
-    Fn.toZMod (Fin.ofNat _ e * Fn.inv ⟨s, hs⟩) = (e : ZMod Fn.modulus) / s ∧
-      Fn.toZMod ((⟨r, hr⟩ : Fn) * Fn.inv ⟨s, hs⟩) = (r : ZMod Fn.modulus) / s := by
-  have hs' : (⟨s, hs⟩ : Fn) = Fin.ofNat _ s := Fin.ext (Nat.mod_eq_of_lt hs).symm
-  have hr' : (⟨r, hr⟩ : Fn) = Fin.ofNat _ r := Fin.ext (Nat.mod_eq_of_lt hr).symm
-  rw [map_mul, map_mul, Fn.toZMod_inv, hs', hr', toZMod_ofNat, toZMod_ofNat,
-    toZMod_ofNat, div_eq_mul_inv, div_eq_mul_inv]
-  exact ⟨rfl, rfl⟩
+theorem toZMod_ofNat (e : Nat) : Fn.toZMod (Fin.ofNat _ e) = (e : ZMod Fn.modulus) :=
+  Cryptography.Ecdsa.Curve.toZMod_ofNat Fn.toZMod e
 
 /-- Verification against a key is the verifying operation of SEC 1 v2 §4.1.4, in the group.
 
@@ -263,32 +228,16 @@ theorem verify_eq_true_iff {q : Point} {hash : Vector UInt8 32} {r s : Nat} :
         ∃ x y : Fp, (affine x y).isOnCurve = true ∧
           toPoint (affine x y) = ((hashToInt hash : ZMod Fn.modulus) / s) • toPoint generator
             + ((r : ZMod Fn.modulus) / s) • toPoint q ∧
-          x.val % Fn.modulus = r := by
-  have hG := isOnCurve_generator
-  constructor
-  · intro hv
-    obtain ⟨hr, hs, hqi, hqc, x, y, hR, hx⟩ := verify_rebuilt hv
-    obtain ⟨h1, h2⟩ := toZMod_scalars (hashToInt hash) r s hr.2 hs.2
-    have hc : (affine x y).isOnCurve = true :=
-      hR ▸ isOnCurve_add (isOnCurve_mul _ hG) (isOnCurve_mul _ hqc)
-    refine ⟨hr, hs, hqi, hqc, x, y, hc, ?_, hx⟩
-    rw [← hR, toPoint_rebuilt _ _ hqc, h1, h2]
-  · rintro ⟨hr, hs, hqi, hqc, x, y, hc, hR, hx⟩
-    obtain ⟨h1, h2⟩ := toZMod_scalars (hashToInt hash) r s hr.2 hs.2
-    rw [verify, dite_eq_left hr, dite_eq_left hs, ite_eq_left ⟨hqi, hqc⟩]
-    dsimp only
-    rw [mulAdd_eq _ _ isOnCurve_generator hqc]
-    -- The point that the verifier rebuilds is `(x, y)`, since both have one image in the group.
-    have heq : mul (Fin.ofNat _ (hashToInt hash) * Fn.inv ⟨s, hs.2⟩) generator
-        + mul ((⟨r, hr.2⟩ : Fn) * Fn.inv ⟨s, hs.2⟩) q = affine x y := by
-      apply (toPoint_inj (isOnCurve_add (isOnCurve_mul _ hG) (isOnCurve_mul _ hqc)) hc).mp
-      rw [toPoint_rebuilt _ _ hqc, h1, h2, hR]
-    rw [heq]
-    simp [hx]
+          x.val % Fn.modulus = r :=
+  laws.verify_eq_true_iff
 
 /-- Completeness of recovery: a key that verifies a signature is recovered by one of the two ids.
 
-The bound `p <= r + n` makes `x_R = r`: the other candidate `r + n` is not below `p`. -/
+The bound `p <= r + n` makes `x_R = r`: the other candidate `r + n` is not below `p`.
+
+The bound covers every `r` but the smallest `p - n`.
+
+That is about `2^128` values of `r` out of `2^256`. -/
 theorem recover_of_verify {q : Point} {hash : Vector UInt8 32} {r s : Nat} (hv : verify q hash r s = true)
     (hp : Fp.modulus ≤ r + Fn.modulus) : ∃ id : Fin 2, recover hash r s id = .ok q := by
   obtain ⟨hr, hs, hqi, hqc, x, y, hR, hx⟩ := verify_rebuilt hv
@@ -297,6 +246,10 @@ theorem recover_of_verify {q : Point} {hash : Vector UInt8 32} {r s : Nat} (hv :
     toZMod_ne_zero (fun h0 => by have h1 := congrArg Fin.val h0; simp at h1; omega)
   have hs0 : Fn.toZMod ⟨s, hs.2⟩ ≠ 0 :=
     toZMod_ne_zero (fun h0 => by have h1 := congrArg Fin.val h0; simp at h1; omega)
+  -- Below the bound, `R` could have `x = r + n`, which only the ids 2 and 3 reach.
+  --
+  -- Ethereum does not use those ids.
+  --
   -- `x_R = r`, since `x_R = r mod n` and `x_R < p <= r + n`.
   have hxr : x.val = r := Base.eq_of_mod_eq_of_lt hx x.isLt hp
   have hxx : (Fin.ofNat _ r : Fp) = x := Fin.ext (by rw [Fin.val_ofNat, ← hxr, Nat.mod_eq_of_lt x.isLt])

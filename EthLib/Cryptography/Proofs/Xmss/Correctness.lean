@@ -9,12 +9,11 @@ public import EthLib.Cryptography.Proofs.Xmss.Verify
 
 A signature this specification produces is one it accepts.
 
-```text
-    bottom:  Ots.leaf(0, idx, m, rho^0, y^0)   = X^0_{0,idx}     honest leaf
-             Tree.fold(0, idx, X^0_{0,idx}, pi^0) = X^0_{16,b}   the root the top key signed
-    top:     Ots.leaf(1, b, root, rho^1, y^1)  = X^1_{0,b}       honest leaf
-             Tree.fold(1, b, X^1_{0,b}, pi^1)  = X^1_{16,0}      the public key's root
-```
+- Bottom layer: the one-time signature of the message gives leaf `idx`, in bottom tree `b`.
+- The bottom tree is `b = floor(idx / 2^16)`.
+- Its path folds that leaf to the root of tree `b`, the root that the top key signed.
+- Top layer: the one-time signature of that root gives leaf `b` of the top tree.
+- Its path folds that leaf to the root of the public key.
 
 Correctness holds for every hash function `f`, run in the identity monad.
 
@@ -26,7 +25,11 @@ Every theorem here assumes that signing succeeded.
 
 Signing fails only when a one-time key finds no codeword in `2^32` trials.
 
-How often that happens is not proved: it needs the random oracle model.
+In the random oracle model, signing fails with probability at most `2 exp(-4000)`.
+
+The bound assumes that the oracle's cache holds no trial input of the two keys that sign.
+
+It also assumes that a bottom tree the key kept for this leaf holds a top signature.
 -/
 
 @[expose] public section
@@ -38,13 +41,15 @@ open EthLib.Cryptography.Xmss.Constants
 variable {f : Array UInt64 → Lanes4}
 
 /-- An honest one-time signature, with any path, leads to the root its key's leaf and path give. -/
-theorem layerRoot_of_otsSign {pp : PublicParam} {prf : SeedPrf Id} {layer : Layer} {e : Nat}
+theorem layerRoot_of_otsSign {publicParam : PublicParam} {prf : SeedPrf Id}
+    {layer : Layer} {e : Nat}
     {msg : Array UInt64} {sig : LayerSignature}
-    (hots : (otsSign (pureHash f) pp prf layer (UInt32.ofNat e) msg).run
+    (hots : (otsSign (pureHash f) publicParam prf layer (UInt32.ofNat e) msg).run
       = some (sig.randomizer, sig.chainValues)) :
-    (layerRoot (pureHash f) pp layer e msg sig).run
-      = some (fold (pureHash f) pp layer e
-          (otsPublicLeaf (pureHash f) pp prf layer (UInt32.ofNat e)).run sig.path).run := by
+    (layerRoot (pureHash f) publicParam layer e msg sig).run
+      = some (fold (pureHash f) publicParam layer e
+          (otsPublicLeaf (pureHash f) publicParam prf layer
+            (UInt32.ofNat e)).run sig.path).run := by
   rw [layerRoot_run, otsLeaf_otsSign hots, Option.map_some]
 
 /-- Correctness: the public key of a seed verifies every signature of a key it reaches.
@@ -59,7 +64,7 @@ theorem verifyWith_keyGenWith_signWith {seed : Seed} {sk : SecretKey} {idx : Lea
   -- Step 1: the bottom layer leads to the root of bottom tree `b`, which the top key signed.
   have hb := layerRoot_of_otsSign hbottom
   rw [hbpath] at hb
-  have hbroot := fold_path (f := f) (pp := (publicParamOf
+  have hbroot := fold_path (f := f) (publicParam := (publicParamOf
     (seedPrf (pureHash f) (schemeSeed (pureHash f) seed).run)).run)
     (prf := seedPrf (pureHash f) (schemeSeed (pureHash f) seed).run)
     (layer := .bottom) σ.leafIndex.toNat
@@ -69,7 +74,7 @@ theorem verifyWith_keyGenWith_signWith {seed : Seed} {sk : SecretKey} {idx : Lea
   have ht := layerRoot_of_otsSign htop
   rw [htpath] at ht
   -- Step 3: the top key's leaf and honest path reach the root of the top tree.
-  have hroot := fold_path_top (f := f) (pp := (publicParamOf
+  have hroot := fold_path_top (f := f) (publicParam := (publicParamOf
     (seedPrf (pureHash f) (schemeSeed (pureHash f) seed).run)).run)
     (prf := seedPrf (pureHash f) (schemeSeed (pureHash f) seed).run)
     (bottomTree_lt σ.leafIndex)

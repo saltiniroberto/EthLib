@@ -33,10 +33,6 @@ open Base Cryptography.Bls
 
 variable {preset : Preset} {fork : Fork}
 
-/-- A word of 64 bits that comes from a natural number is at most that number. -/
-private theorem toNat_ofNat_le (n : Nat) : (UInt64.ofNat n).toNat ≤ n := by
-  simp [Nat.mod_le]
-
 /-- An index names itself when it is below the size of the registry, and nothing otherwise. -/
 theorem resolveValidatorId_index {state : BeaconState preset fork} {i index : ValidatorIndex} :
     resolveValidatorId state (.index i) = some index ↔
@@ -79,6 +75,15 @@ theorem resolveValidatorId_pubkey {state : BeaconState preset fork} {pubkey : BL
       have := hbefore j hj _ (Array.getElem?_eq_getElem (by omega))
       simpa using this
 
+/-- A public key that some validator of the registry holds names a validator. -/
+theorem resolveValidatorId_pubkey_isSome {state : BeaconState preset fork} {pubkey : BLSPubkey}
+    (held : ∃ validator ∈ state.validators.data, validator.pubkey = pubkey) :
+    (resolveValidatorId state (.pubkey pubkey)).isSome := by
+  obtain ⟨validator, inside, rfl⟩ := held
+  obtain ⟨i, lt, read⟩ := Array.mem_iff_getElem.mp inside
+  simp only [resolveValidatorId, Option.isSome_map, Array.findIdx?_isSome]
+  exact Array.any_eq_true.mpr ⟨i, lt, by simp [read]⟩
+
 /-- An empty request selects every index below the size, and any other request each named index. -/
 private theorem mem_selectIndices {size : Nat} {resolve : ValidatorId → Option UInt64}
     {ids : List ValidatorId} {index : UInt64} :
@@ -91,7 +96,7 @@ private theorem mem_selectIndices {size : Nat} {resolve : ValidatorId → Option
       or_false, true_and, exists_false, false_and]
     constructor
     · rintro ⟨n, hn, rfl⟩
-      have := toNat_ofNat_le n
+      have := UInt64.toNat_ofNat_le (n := n)
       omega
     · intro h
       have := index.toNat_lt_size
@@ -473,7 +478,7 @@ theorem lt_of_mem_selectValidators {state : BeaconState preset fork} {ids : List
     | pubkey pubkey =>
       obtain ⟨position, validator, found, _, _, rfl⟩ := resolveValidatorId_pubkey.mp resolved
       have bound := (Array.getElem?_eq_some_iff.mp found).1
-      have : (UInt64.ofNat position).toNat ≤ position := by simp [Nat.mod_le]
+      have := UInt64.toNat_ofNat_le (n := position)
       omega
 
 end EthLib.Consensus.BeaconApi

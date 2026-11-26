@@ -7,13 +7,10 @@ public import EthLib.Execution.Proofs.Evm.Instructions.Storage
 public import EthLib.Execution.Proofs.Evm.Instructions.Return
 public import EthLib.Execution.Proofs.Evm.Instructions.EnvironmentData
 public import EthLib.Execution.Proofs.Evm.Instructions.LogData
+public import EthLib.Execution.Proofs.Evm.Instructions.AccountData
 
 /-!
 # Proofs: instructions that are monotone in gas
-
-The facts here are for the meter of one counter of gas, the meter of every fork before Glamsterdam.
-
-At a later fork they hold of that meter, not of the meter of the fork.
 
 Each instruction here is monotone in gas.
 
@@ -23,7 +20,9 @@ Its failure is an error, or a halt with an error.
 
 The rules of the opcodes over the steps from frames that are monotone in gas rest on these facts.
 
-An instruction that pushes a word of the frame is monotone when the word does not depend on gas.
+The facts here are for the meter of one counter of gas, the meter of every fork before Glamsterdam.
+
+At a later fork they hold of that meter, not of the meter of the fork.
 -/
 
 @[expose] public section
@@ -480,5 +479,48 @@ theorem runMono_sstore : RunMono (fork := fork) sstoreStep := by
   split
   · exact .inl fails_keepReads
   · exact .inr ⟨_, rfl, rfl⟩
+
+/-- EXTCODESIZE is monotone in gas. -/
+theorem runMono_extcodesize : RunMono (fork := fork) extcodesizeStep := by
+  intro evm k
+  simp only [extcodesizeStep, bind, Except.bind]
+  rw [popWord_addGas]
+  rcases popWord evm with e | ⟨word, a1⟩
+  · exact .inl (.inl ⟨e, rfl⟩)
+  simp only [Except.map]
+  have hacc : accessAddress (addGas k a1) (Base.toAddressMasked word) =
+      ((accessAddress a1 (Base.toAddressMasked word)).1,
+        addGas k (accessAddress a1 (Base.toAddressMasked word)).2) := by
+    simp only [accessAddress]
+    split <;> rfl
+  rw [hacc]
+  generalize accessAddress a1 (Base.toAddressMasked word) = p
+  rcases p with ⟨cold, b⟩
+  simp only
+  -- The charge fails with less gas, or leaves `k` more gas.
+  by_cases hc : b.gas < externalBaseCost fork cold
+  · rw [(chargeGas_eq_error_iff).mpr ⟨hc, rfl⟩]
+    exact .inl (.inl ⟨_, rfl⟩)
+  obtain ⟨h1, h2⟩ := chargeGas_addGas (k := k) hc
+  rw [h1, h2]
+  simp only
+  generalize ({ b with gas := b.gas - externalBaseCost fork cold } : Evm fork Nat) = c
+  -- The read of the account and the lookup of its code ignore the gas.
+  have hrec : recordAccountRead (addGas k c) (Base.toAddressMasked word) =
+      addGas k (recordAccountRead c (Base.toAddressMasked word)) := rfl
+  rw [hrec]
+  generalize recordAccountRead c (Base.toAddressMasked word) = d
+  have hcode : accountCode (addGas k d) (Base.toAddressMasked word) =
+      accountCode d (Base.toAddressMasked word) := rfl
+  rw [hcode]
+  rcases accountCode d (Base.toAddressMasked word) with e | code
+  · exact .inl (.inl ⟨e, rfl⟩)
+  -- The push fails on a full stack, or gives its frame with `k` more gas.
+  by_cases room : d.stack.val.length = STACK_LIMIT
+  · simp only [pushWord_of_length_eq room]
+    exact .inl (.inl ⟨_, rfl⟩)
+  · have room' : ¬(addGas k d).stack.val.length = STACK_LIMIT := room
+    simp only [pushWord, Stack.push, room, room', bind, Except.bind]
+    exact .inr ⟨_, rfl, rfl⟩
 
 end EthLib.Execution.Evm.Logic

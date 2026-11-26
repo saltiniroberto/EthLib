@@ -9,47 +9,11 @@ public import EthLib.Engine.Proofs.NewPayload
 
 Each step answers with the rule of its method, on a view of the node.
 
-A payload on the valid head gets the answer of the method on the chain of the head.
-
-That chain has the head as its last block, and the state after the head.
-
-A payload on another known parent that is not invalid is accepted, with no latest valid hash.
-
-That holds for a payload sent again too, and no other answer is accepted.
-
-A payload whose parent is invalid is invalid, with the latest valid hash of the parent's chain.
-
-A payload whose parent is unknown is syncing.
-
-A payload that fails the checks before execution gets their answer, and the node does not change.
-
-A valid payload is then known as valid, with the state after it.
-
-So the next update, with it as the head, is not syncing.
-
 A forkchoice update first validates the accepted blocks of the chain of its head.
 
 A block on a parent found invalid is invalid too.
 
-It keeps every valid block valid, and its forkchoice state as it was.
-
-It then gives the response of the method on the tree of the known blocks.
-
-On the validated node, it applies its forkchoice state exactly when it applies its head.
-
-That head is then a block that the node knows as valid.
-
-A request for a payload gives the answer of the method on the builds.
-
-An update that answers a payload ID stores the build of its request, on the chain of its head.
-
 Every step keeps each block that the node knows as valid or invalid, and the configuration.
-
-So a request whose checks pass, once answered valid or invalid, gets that answer again later.
-
-The checks before execution read the whole request, so they can still answer invalid for it.
-
-An invalid block hash depends on the request and the configuration alone.
 -/
 
 public section
@@ -1071,22 +1035,6 @@ theorem Reachable.lookup {start node : Node} {other : Hash32} {b : KnownBlock}
     exact forkchoiceUpdatedStep_lookup ih hb
   | getPayload setup version id _ ih => exact ih
 
-/-- A payload known as valid in a node is valid in every node that the steps reach from it.
-
-It keeps the same state after it. -/
-theorem Reachable.validState {start node : Node} {hash : Hash32} {post : Execution.State.State}
-    (hr : Reachable start node) (h : start.validState hash = some post) :
-    node.validState hash = some post := by
-  obtain ⟨b, hb, hv⟩ := validState_eq_some_iff.mp h
-  exact validState_eq_some_iff.mpr
-    ⟨b, hr.lookup hb (by simp [hv, Validity.isAccepted]), hv⟩
-
-/-- A payload known as invalid in a node is invalid in every node that the steps reach from it. -/
-theorem Reachable.invalid {start node : Node} {hash : Hash32} {b : KnownBlock}
-    (hr : Reachable start node) (h : start.blocks.lookup hash = some b)
-    (hInvalid : b.validity = .invalid) : node.blocks.lookup hash = some b :=
-  hr.lookup h (by simp [hInvalid, Validity.isAccepted])
-
 /-- A run keeps the configuration of the chain. -/
 theorem executeOn_config (node : Node) (hash : Hash32)
     (block : (fork : Fork) × Block fork Transaction)
@@ -1160,6 +1108,151 @@ theorem Reachable.config {start node : Node} (hr : Reachable start node) :
     rw [(forkchoiceUpdatedBuildStep_keeps _ _ _ _).2.1, forkchoiceUpdatedStep_config, ih]
   | getPayload setup version id _ ih => exact ih
 
+/-! ## The known hashes only grow -/
+
+/-- A run keeps the known blocks, behind any it records. -/
+private theorem executeOn_suffix (node : Node) (hash : Hash32)
+    (block : (fork : Fork) × Block fork Transaction)
+    (post : Execution.State.State) (version : Nat) (params : Lean.Json) :
+    node.blocks <:+ (node.executeOn hash block post version params).2.blocks := by
+  simp only [executeOn]
+  split
+  · exact List.suffix_refl _
+  · simp only [recordExecution]
+    split
+    · exact List.suffix_cons _ _
+    · split
+      · exact List.suffix_cons _ _
+      · exact List.suffix_refl _
+
+/-- The answer by the parent keeps the known blocks, behind any it records. -/
+private theorem onParent_suffix (node : Node) (hash : Hash32)
+    (block : (fork : Fork) × Block fork Transaction) (version : Nat) (params : Lean.Json) :
+    node.blocks <:+ (node.onParent hash block version params).2.blocks := by
+  simp only [onParent]
+  split
+  · split
+    · exact executeOn_suffix _ _ _ _ _ _
+    · exact List.suffix_cons _ _
+  · exact List.suffix_cons _ _
+  · exact List.suffix_cons _ _
+  · exact List.suffix_refl _
+
+/-- A step of `engine_newPayload` keeps the known blocks, behind any it records. -/
+private theorem newPayloadStep_suffix (node : Node) (version : Nat) (params : Lean.Json) :
+    node.blocks <:+ (node.newPayloadStep version params).2.blocks := by
+  unfold newPayloadStep
+  split
+  · exact List.suffix_refl _
+  · exact List.suffix_refl _
+  · dsimp only
+    split
+    · exact List.suffix_refl _
+    · split
+      · exact List.suffix_refl _
+      · exact List.suffix_refl _
+      · exact onParent_suffix _ _ _ _ _
+
+/-- Validation keeps the known blocks, behind any it records. -/
+private theorem validateChain_suffix (node : Node) (fuel : Nat) (hash : Hash32) :
+    node.blocks <:+ (node.validateChain fuel hash).blocks := by
+  induction fuel generalizing node hash with
+  | zero => exact List.suffix_refl _
+  | succ fuel ih =>
+    simp only [validateChain]
+    split
+    · rename_i block pow version params hb
+      have h := ih node block.2.header.parentHash
+      split
+      · exact h.trans (executeOn_suffix _ _ _ _ _ _)
+      · exact h.trans (List.suffix_cons _ _)
+      · exact h
+    · exact List.suffix_refl _
+
+/-- A step of `engine_forkchoiceUpdated` keeps the known blocks, behind any it records. -/
+private theorem forkchoiceUpdatedStep_suffix (node : Node) (version : Nat) (params : Lean.Json) :
+    node.blocks <:+ (node.forkchoiceUpdatedStep version params).2.blocks := by
+  have hv : node.blocks <:+ (node.validateHead version params).blocks := by
+    simp only [validateHead]
+    split
+    · exact validateChain_suffix _ _ _
+    · exact List.suffix_refl _
+  simp only [forkchoiceUpdatedStep]
+  split
+  · exact hv
+  · simp only [updateStep]
+    split <;> exact hv
+
+/-- Every node that the steps reach keeps the known blocks, behind any it records. -/
+private theorem Reachable.blocks_suffix {start node : Node} (hr : Reachable start node) :
+    start.blocks <:+ node.blocks := by
+  induction hr with
+  | refl => exact List.suffix_refl _
+  | newPayload version params _ ih => exact ih.trans (newPayloadStep_suffix _ _ _)
+  | forkchoiceUpdated version params _ ih =>
+    exact ih.trans (forkchoiceUpdatedStep_suffix _ _ _)
+  | forkchoiceUpdatedBuild builder version params _ ih =>
+    rw [(forkchoiceUpdatedBuildStep_keeps _ _ _ _).1]
+    exact ih.trans (forkchoiceUpdatedStep_suffix _ _ _)
+  | getPayload setup version id _ ih => exact ih
+
+/-- A hash missing from known blocks that end with those of a node is missing from that node. -/
+private theorem lookup_eq_none_of_suffix {later : Node} {hash : Hash32}
+    (hs : node.blocks <:+ later.blocks) (h : later.blocks.lookup hash = none) :
+    node.blocks.lookup hash = none := by
+  obtain ⟨l, hl⟩ := hs
+  rw [← hl, List.lookup_append, Option.or_eq_none_iff] at h
+  exact h.2
+
+/-- A hash that a reached node does not know is unknown to the node it is reached from. -/
+theorem Reachable.lookup_eq_none {start node : Node} {hash : Hash32} (hr : Reachable start node)
+    (h : node.blocks.lookup hash = none) : start.blocks.lookup hash = none :=
+  lookup_eq_none_of_suffix hr.blocks_suffix h
+
+/-! ## A later node keeps the blocks that are not accepted -/
+
+/-- A later node keeps the blocks that are not accepted, the known hashes and the configuration. -/
+structure Keeps (node later : Node) : Prop where
+  /-- Each known block that is not accepted stays as it was. -/
+  lookup : ∀ {hash : Hash32} {b : KnownBlock}, node.blocks.lookup hash = some b →
+    b.validity.isAccepted = false → later.blocks.lookup hash = some b
+  /-- A hash that the later node does not know was not known before. -/
+  lookup_eq_none : ∀ {hash : Hash32}, later.blocks.lookup hash = none →
+    node.blocks.lookup hash = none
+  /-- The configuration stays the same. -/
+  config : later.config = node.config
+
+/-- A node keeps its own blocks. -/
+theorem Keeps.refl (node : Node) : Keeps node node :=
+  ⟨fun h _ => h, fun h => h, rfl⟩
+
+/-- Every node that the steps reach keeps the blocks. -/
+theorem Reachable.keeps {later : Node} (hr : Reachable node later) : Keeps node later :=
+  ⟨fun h hb => hr.lookup h hb, fun h => hr.lookup_eq_none h, hr.config⟩
+
+/-- A later node keeps each valid block, with the same state after it. -/
+theorem Keeps.validState {later : Node} {hash : Hash32} {s : Execution.State.State}
+    (hk : Keeps node later) (h : node.validState hash = some s) :
+    later.validState hash = some s := by
+  obtain ⟨b, hb, hv⟩ := validState_eq_some_iff.mp h
+  exact validState_eq_some_iff.mpr ⟨b, hk.lookup hb (by simp [hv, Validity.isAccepted]), hv⟩
+
+/-- A payload known as valid in a node is valid in every node that the steps reach from it.
+
+It keeps the same state after it. -/
+theorem Reachable.validState {start node : Node} {hash : Hash32} {post : Execution.State.State}
+    (hr : Reachable start node) (h : start.validState hash = some post) :
+    node.validState hash = some post :=
+  hr.keeps.validState h
+
+/-- A payload known as invalid in a node is invalid in every node that the steps reach from it. -/
+theorem Reachable.invalid {start node : Node} {hash : Hash32} {b : KnownBlock}
+    (hr : Reachable start node) (h : start.blocks.lookup hash = some b)
+    (hInvalid : b.validity = .invalid) : node.blocks.lookup hash = some b :=
+  hr.lookup h (by simp [hInvalid, Validity.isAccepted])
+
+/-! ## A payload sent again -/
+
 /-- A payload that passes the checks and is answered invalid is then known as invalid. -/
 theorem newPayloadStep_invalid_known {checked : CheckedBlock version} {hash : Hash32}
     {status : PayloadStatus} {reason : Option PayloadError} {next : Node}
@@ -1218,7 +1311,11 @@ theorem newPayloadStep_invalid_known {checked : CheckedBlock version} {hash : Ha
 
 /-- A payload answered valid is valid again, with its own hash, in every node reached after.
 
-The request is the same, and its checks pass. -/
+The request is the same, and its checks pass.
+
+The checks before execution read the whole request.
+
+So another request for that block can fail them. -/
 theorem newPayloadStep_valid_again {checked : CheckedBlock version} {hash : Hash32}
     {status : PayloadStatus} {reason : Option PayloadError} {next later : Node}
     (hCheck : checkNewPayload node.config version params = .ok (.ok checked))

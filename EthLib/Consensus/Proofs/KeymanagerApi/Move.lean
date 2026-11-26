@@ -14,13 +14,11 @@ The new client then refuses every block and every vote of the key that the old c
 
 So the move opens no window in which the key can sign a slashable message.
 
-The old client no longer holds the key as a local key.
-
 The statement covers one key and one move, and does not compare the genesis validators root.
 
 The data passes from one call to the other as a value, so the step through JSON text is not covered.
 
-[use case]: https://github.com/ethereum/keymanager-APIs/blob/3e7c64e2118f819a51de7093ea2b2f03bb2f8f6e/use-cases/README.md#move-a-key
+[use case]: https://github.com/ethereum/keymanager-APIs/blob/2d8a02843cbf91f7ebc6274bf68a89b908019130/use-cases/README.md#move-a-key
 -/
 
 @[expose] public section
@@ -73,7 +71,7 @@ theorem checkAttestation_of_move {source target : Epoch} {root : Root}
   rwa [attestationsOf_slashingProtection_deleteKeys deleted (i := 0) rfl
     (data_deleteKeys_singleton active notReadonly deleted) rfl] at signed
 
-/-- After a move, the old client no longer holds the key. -/
+/-- After a move, the old client no longer holds the key as a local key. -/
 theorem isActive_of_move (notReadonly : old.isReadonly pubkey = false)
     (deleted : deleteKeys old ⟨[pubkey]⟩ = (response, old')) :
     old'.isActive pubkey = false := by

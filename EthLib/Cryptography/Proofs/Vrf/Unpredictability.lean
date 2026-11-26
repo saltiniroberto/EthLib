@@ -1,7 +1,8 @@
 module
 
 public import EthLib.Cryptography.Proofs.Vrf.Verify
-public import EthLib.Cryptography.Proofs.Merkle.Completeness
+public import EthLib.Cryptography.Proofs.Vrf.Oracle
+public import EthLib.Cryptography.Proofs.Merkle.QueryBound
 public import VCVio.OracleComp.QueryTracking.RandomOracle.HiddenSeed
 public import VCVio.OracleComp.EvalDist.Sum
 public import VCVio.OracleComp.Constructions.SampleableType.Measure
@@ -9,41 +10,21 @@ public import VCVio.OracleComp.Constructions.SampleableType.Measure
 /-!
 # Proofs: an output is unpredictable to anyone without its secret
 
-Here the hash is a random oracle.
+The bound holds in the random oracle model, at an index fixed in advance.
 
-The holder's secret at index `c` is uniform, and independent of its other secrets.
+The property is the residual unpredictability of [Micali, Rabin and Vadhan][mrv99], §3.2.
 
-The adversary gets the root, queries the hash, and asks for openings at any index but `c`.
-
-It then guesses the output at `c`.
-
-It wins with probability at most `(1 + 2 Q) / 2^256`, where `Q = q_H + (q_O + 1) 2^33`.
-
-Here `q_H` counts its hash queries and `q_O` its requests for an opening.
-
-The term `1 / 2^256` is the blind guess of a 32-byte output.
-
-The term `2 Q / 2^256` covers a hash query at an input that holds the challenge secret.
-
-It counts every hash call of the game, so it also covers another secret equal to the challenge one.
-
-The other secrets are arbitrary, so the adversary may even know them.
-
-The property is the residual unpredictability of Micali, Rabin and Vadhan, §3.2.
-
-Source: "Verifiable Random Functions", [FOCS 1999](https://doi.org/10.1109/SFFCS.1999.814584).
-
-There the adversary chooses the index after its queries; here the index is fixed in advance.
+There the adversary chooses the index after its queries.
 
 A separate theorem covers an adaptive index, with uniform secrets, at the cost of a factor `2^32`.
 
-A challenge secret derived from a seed is not covered.
+A challenge secret derived from a seed is not covered here.
 
 A separate theorem covers secrets derived from a seed, but only at an adaptive index.
 
-The theorem does not cover a holder who chooses its secrets.
+Source: "Verifiable Random Functions", FOCS 1999.
 
-Such a holder can bias its own outputs, because verification accepts any tree.
+[mrv99]: https://doi.org/10.1109/SFFCS.1999.814584
 -/
 
 @[expose] public section
@@ -53,45 +34,7 @@ namespace EthLib.Cryptography.Vrf
 open EthLib.Cryptography.Vrf.Constants
 open OracleSpec OracleComp ENNReal
 
-/-! ## The tree over a hash oracle -/
-
-section Oracle
-
-variable {m : Type → Type} [Monad m] (H : ByteArray → m Digest)
-
-/-- The node hash of the tree, with `H` in place of Keccak-256. -/
-def nodeWith (_p : Merkle.Position) (left right : Digest) : m Digest :=
-  H (nodeInput left right)
-
-/-- Leaf `j` of the tree over the secrets, with `H` in place of Keccak-256. -/
-def leafWith (secrets : UInt32 → Digest) (j : Nat) : m Digest :=
-  H (leafInput (secrets (UInt32.ofNat j)))
-
-/-- The root of the tree over the secrets, with `H` in place of Keccak-256. -/
-def rootWith (secrets : UInt32 → Digest) : m Digest :=
-  Merkle.root (nodeWith H) (leafWith H secrets) VRF_TREE_HEIGHT
-
-/-- The opening at index `i`, with `H` in place of Keccak-256. -/
-def openingWith (secrets : UInt32 → Digest) (i : UInt32) : m Opening := do
-  let path ← Merkle.path (nodeWith H) (leafWith H secrets) VRF_TREE_HEIGHT i.toNat
-  return ⟨secrets i, path⟩
-
-end Oracle
-
-/-- With Keccak-256 as `H`, the root is the root of the specification. -/
-theorem rootWith_hash (secrets : UInt32 → Digest) :
-    (rootWith (m := Id) (fun x => pure (hash x)) secrets).run = root secrets :=
-  rfl
-
-/-- With Keccak-256 as `H`, the opening is the opening of the specification. -/
-theorem openingWith_hash (secrets : UInt32 → Digest) (i : UInt32) :
-    (openingWith (m := Id) (fun x => pure (hash x)) secrets i).run = opening secrets i :=
-  rfl
-
 /-! ## The game -/
-
-/-- The hash as an oracle from byte strings to 32-byte values. -/
-abbrev HashSpec := ByteArray →ₒ Digest
 
 /-- The holder's opening oracle: an index in, an opening or nothing out. -/
 abbrev OpenSpec := UInt32 →ₒ Option Opening
@@ -227,54 +170,6 @@ theorem simulateQ_deriveImpl_gameD (others : UInt32 → Digest) (c : UInt32) (s 
     ← QueryImpl.simulateQ_compose, himpl]
   rfl
 
-/-! ## Counting hash queries
-
-A node of level `l` hashes its `2^l` leaves and its `2^l - 1` inner nodes. -/
-
-section Count
-
-variable {ι : Type} {spec : OracleSpec ι} {p : ι → Prop} [DecidablePred p] {α : Type}
-  {hash : Merkle.Position → α → α → OracleComp spec α} {leaves : Nat → OracleComp spec α}
-
-/-- A node of level `l` makes at most `2^(l + 1) - 1` queries, one per leaf and per hash. -/
-theorem isQueryBoundP_node (hleaves : ∀ j, IsQueryBoundP (leaves j) p 1)
-    (hhash : ∀ q a b, IsQueryBoundP (hash q a b) p 1) :
-    ∀ q : Merkle.Position,
-      IsQueryBoundP (Merkle.node hash leaves q) p (2 ^ (q.level + 1) - 1) := by
-  rintro ⟨level, j⟩
-  induction level generalizing j with
-  | zero => exact hleaves j
-  | succ level ih =>
-    rw [Merkle.node_succ]
-    have h1 : 1 ≤ 2 ^ (level + 1) := Nat.one_le_two_pow
-    have h2 : 2 ^ (level + 1 + 1) = 2 * 2 ^ (level + 1) := by rw [pow_succ]; ring
-    refine (isQueryBoundP_bind (ih _) fun _ _ =>
-      isQueryBoundP_bind (ih _) fun _ _ => hhash _ _ _).mono ?_
-    simp only at h1 h2 ⊢
-    omega
-
-/-- The `n` siblings above a node of level `l` make at most `2^(l + n + 1) - 2^(l + 1)` queries. -/
-theorem isQueryBoundP_siblings (hleaves : ∀ j, IsQueryBoundP (leaves j) p 1)
-    (hhash : ∀ q a b, IsQueryBoundP (hash q a b) p 1) :
-    ∀ (q : Merkle.Position) (n : Nat), IsQueryBoundP (Merkle.siblings hash leaves q n) p
-      (2 ^ (q.level + n + 1) - 2 ^ (q.level + 1))
-  | q, 0 => by simp [Merkle.siblings]
-  | q, n + 1 => by
-    simp only [Merkle.siblings]
-    have h1 : 1 ≤ 2 ^ (q.level + 1) := Nat.one_le_two_pow
-    have h2 : 2 ^ (q.level + 1 + 1) = 2 * 2 ^ (q.level + 1) := by rw [pow_succ]; ring
-    have h3 : 2 ^ (q.level + 1 + 1) ≤ 2 ^ (q.level + 1 + n + 1) :=
-      Nat.pow_le_pow_right (by norm_num) (by omega)
-    have h4 : q.level + (n + 1) + 1 = q.level + 1 + n + 1 := by omega
-    rw [h4]
-    refine (isQueryBoundP_bind (isQueryBoundP_node hleaves hhash q.sibling) fun _ _ =>
-      isQueryBoundP_bind (isQueryBoundP_siblings hleaves hhash q.parent n) fun _ _ =>
-        isQueryBoundP_pure _ _ 0).mono ?_
-    simp only [Merkle.Position.sibling_level, Merkle.Position.parent_level]
-    omega
-
-end Count
-
 /-! ## The budgets -/
 
 attribute [local irreducible] VRF_TREE_HEIGHT
@@ -322,16 +217,16 @@ theorem isQueryBoundP_leafD (others : UInt32 → Digest) (c : UInt32) (j : Nat) 
 /-- The path of an opening in a tree of height `n` makes fewer than `2^(n + 1)` hash queries. -/
 theorem isQueryBoundP_pathD (others : UInt32 → Digest) (c : UInt32) (n i : Nat) :
     IsQueryBoundP (Merkle.path (nodeWith hashD) (leafD others c) n i) IsHashD (2 ^ (n + 1)) := by
-  have h := isQueryBoundP_siblings (hash := nodeWith hashD) (leaves := leafD others c)
+  have h := Merkle.isQueryBoundP_siblings (hash := nodeWith hashD) (leaves := leafD others c)
     (isQueryBoundP_leafD others c) (fun _ a b => isQueryBoundP_hashD (nodeInput a b)) ⟨0, i⟩ n
-  exact h.mono (by simp)
+  exact h.mono (by dsimp only; rw [Nat.zero_add, pow_succ]; exact Nat.sub_le _ _)
 
 /-- The root of a tree of height `n` makes fewer than `2^(n + 1)` hash queries. -/
 theorem isQueryBoundP_rootD (others : UInt32 → Digest) (c : UInt32) (n : Nat) :
     IsQueryBoundP (Merkle.root (nodeWith hashD) (leafD others c) n) IsHashD (2 ^ (n + 1)) := by
-  have h := isQueryBoundP_node (hash := nodeWith hashD) (leaves := leafD others c)
+  have h := Merkle.isQueryBoundP_node (hash := nodeWith hashD) (leaves := leafD others c)
     (isQueryBoundP_leafD others c) (fun _ a b => isQueryBoundP_hashD (nodeInput a b)) ⟨n, 0⟩
-  exact h.mono (Nat.sub_le _ _)
+  exact h.mono (by dsimp only; rw [pow_succ]; exact Nat.sub_le _ _)
 
 /-- Answering an adversary of `qh` hash queries and `qo` requests costs `qh + qo 2^33` queries. -/
 theorem isQueryBoundP_simulateQ_openImplD (others : UInt32 → Digest) (c : UInt32) {α : Type}
@@ -381,12 +276,6 @@ theorem isQueryBoundP_gameD (others : UInt32 → Digest) (c : UInt32) (adversary
   exact h.mono (by simp only [VRF_TREE_HEIGHT]; omega)
 
 /-! ## One point of the secret -/
-
-/-- There are `2^256` values of 32 bytes. -/
-theorem natCard_digest : Nat.card Digest = 2 ^ 256 := by
-  rw [Nat.card_eq_fintype_card, Fintype.card_congr (arrayVectorEquivFin _ _), Fintype.card_fun,
-    Fintype.card_fin, ← FinEnum.card_eq_fintypeCard, FinEnum.card_UInt8, VRF_HASH_SIZE]
-  norm_num
 
 /-- A given input is one of the two points of a uniform secret with probability `<= 2 / 2^256`. -/
 theorem prEvent_mem_range_enc_le (c : UInt32) (t : ByteArray) :
@@ -496,7 +385,13 @@ Then its guess equals the output at `c` with probability at most `(1 + 2 Q) / 2^
 
 Here `Q = q_H + (q_O + 1) 2^33`.
 
-With `q_H = 2^64` and `q_O = 2^32`, the bound is below `2^-189`. -/
+With `q_H = 2^64` and `q_O = 2^32`, the bound is below `2^-189`.
+
+The other secrets are arbitrary, so the adversary may even know them.
+
+The theorem does not cover a holder who chooses its secrets.
+
+Such a holder can bias its own outputs, because verification accepts any tree. -/
 theorem prEvent_guess_le (others : UInt32 → Digest) (c : UInt32) (adversary : Adversary)
     {qh qo : ℕ} (hh : ∀ r, IsQueryBoundP (adversary r) IsHashQuery qh)
     (ho : ∀ r, IsQueryBoundP (adversary r) IsOpenQuery qo) :
@@ -511,12 +406,16 @@ theorem prEvent_guess_le (others : UInt32 → Digest) (c : UInt32) (adversary : 
   have hideal : Pr{let s ← $ᵗ Digest; let z ← (simulateQ
       (SecretEncoding.idealImpl HashSpec Bool Digest) (gameD others c adversary)).run (∅, ∅)}[
         z.1.1 = z.1.2] ≤ (2 ^ 256 : ℝ≥0∞)⁻¹ := by
+    -- The term `1 / 2^256` is the blind guess of a 32-byte output.
     rw [OracleComp.prEvent_bind_const]
     exact prEvent_idealImpl_gameD_le others c adversary
   calc _ = Pr{let s ← $ᵗ Digest; let z ← (simulateQ ((encoding c).realImpl s)
           (gameD others c adversary)).run ∅}[z.1.1 = z.1.2] := by
         simp only [hreal, map_eq_bind_pure_comp, bind_assoc, pure_bind, Function.comp_apply]
         rfl
+    -- The term `2 Q / 2^256` covers a hash query at an input that holds the challenge secret.
+    --
+    -- It counts every hash call of the game, so it also covers another secret equal to that one.
     _ ≤ _ := ((encoding c).prEvent_realImpl_le_add_mul (ms := $ᵗ Digest)
         (prEvent_mem_range_enc_le c) (p := IsHashD) (fun _ _ => trivial)
         (isQueryBoundP_gameD others c adversary hh ho) fun _ z => z.1.1 = z.1.2).trans

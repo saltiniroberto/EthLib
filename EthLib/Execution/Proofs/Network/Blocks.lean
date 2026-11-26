@@ -4,23 +4,16 @@ public import EthLib.Execution.Network.Blocks
 public import EthLib.Execution.Proofs.Blocks.Header
 public import EthLib.Serialization.Proofs.Rlp.Codec
 public import EthLib.Serialization.Proofs.Rlp.Item
+import EthLib.Base.Proofs.CodeInjective
 
 /-!
 # Proofs: the block exchange
 
 Each request reads back from its RLP item.
 
-Headers that pass the check of a request are at most as many as asked.
+In an answer that passes the check, each header is `skip + 1` blocks from the one before it.
 
-Each one is `skip + 1` blocks after the one before it, or before it when the request is reversed.
-
-An answer passes the check exactly when three conditions hold.
-
-It is not longer than asked, and its first header, if any, is the start block.
-
-Each header follows the one before it.
-
-So when the request skips no block, each later block names the earlier one by its hash.
+When the request skips no block, each later block names the earlier one by its hash.
 -/
 
 @[expose] public section
@@ -108,8 +101,7 @@ instance : LawfulCodec BlockAnnouncement where
 /-- Two errors with one code come from one constructor. -/
 theorem HeadersError.code_injective (e₁ e₂ : HeadersError) (h : e₁.code = e₂.code) :
     e₁.ctorIdx = e₂.ctorIdx := by
-  cases e₁ <;> cases e₂ <;>
-    first | rfl | (simp only [HeadersError.code] at h; exact absurd h (by decide))
+  code_injective HeadersError.code
 
 /-- A header follows another exactly when two conditions hold.
 
@@ -215,7 +207,7 @@ theorem followAll_of_checkHeaders {r : HeaderRequest} {headers : List Encoded}
 /--
 In an answer that passes the check, each header is `skip + 1` blocks after the one before it.
 
-When the answer is reversed, it is `skip + 1` blocks before it.
+When the request is reversed, it is `skip + 1` blocks before it.
 -/
 theorem numbers_of_checkHeaders {r : HeaderRequest} {headers : List Encoded}
     (h : checkHeaders r headers = .ok ()) (i : Nat) (hi : i + 1 < headers.length) :
@@ -225,16 +217,16 @@ theorem numbers_of_checkHeaders {r : HeaderRequest} {headers : List Encoded}
 
 /-- An answer passes the check of a request exactly when three conditions hold.
 
-It holds at most as many headers as asked, and its first header, if any, is the start block.
-
-Each header follows the one before it.
-
-The conditions do not ask for as many headers as asked, since a peer may send fewer.
-
 They read only the number, the hash and the parent hash of each header, not whether it is valid. -/
 theorem checkHeaders_eq_ok_iff {r : HeaderRequest} {headers : List Encoded} :
     checkHeaders r headers = .ok () ↔
+      -- It holds at most as many headers as asked.
+      --
+      -- Its first header, if any, is the start block.
+      --
+      -- It may hold fewer headers than asked, since a peer may send fewer.
       headers.length ≤ r.limit ∧ (∀ first ∈ headers.head?, isStart r.start first = .ok true) ∧
+        -- Each header follows the one before it.
         followAll r headers = .ok () := by
   constructor
   · intro h

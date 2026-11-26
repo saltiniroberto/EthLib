@@ -7,15 +7,7 @@ public import EthLib.Consensus.Proofs.KeymanagerApi.Types
 /-!
 # Proofs: the builder configuration of the Keymanager API
 
-A resolved configuration, stored with every value set, resolves to itself.
-
-The reader of a configuration reads back what the writer of a resolved one writes.
-
-It needs each entry within the bounds of the schema.
-
 A set, then a get, gives the configuration set, resolved.
-
-A set of a resolved configuration within the bounds of the schema, then a get, answers it again.
 
 A delete, then a get, gives what a key never set gets: the configuration of the client.
 -/
@@ -75,8 +67,7 @@ def ResolvedBuilderEntry.WithinBounds (entry : ResolvedBuilderEntry) : Prop :=
 private theorem readAuthData_authDataJson (path : String) {data : ByteArray}
     (low : 1 ≤ data.size) (high : data.size ≤ MAX_BUILDER_AUTH_DATA_SIZE) :
     readAuthData path (authDataJson data) = .ok data := by
-  have text : readString path (authDataJson data) = .ok (Serialization.Ssz.toHex data.data) :=
-    rfl
+  have text : readString path (authDataJson data) = .ok (Serialization.Ssz.toHex data) := rfl
   simp [readAuthData, text, Serialization.Ssz.ofHex_toHex, bind, Except.bind, low, high]
 
 /-- A resolved entry within the bounds of the schema reads back as its stored form. -/
@@ -144,7 +135,12 @@ private theorem refusal_toSetting (resolved : ResolvedBuilderConfig)
   simp only [BuilderConfigSetting.refusal, ResolvedBuilderConfig.toSetting, Option.getD_some,
     List.mapM_map]
   rw [Base.mapM_eq_ok_map (g := fun entry => (entry.url, entry.authData))]
-  · simp [distinct]
+  · -- A pair is read back from the bytes of its URL and its data, so distinct pairs stay apart.
+    have keyed := distinct.map (S := fun a b => a ≠ b)
+      (fun (url, data) => [String.toByteArray url, data])
+      fun _ _ differ same => differ (by simpa [String.toByteArray_inj, Prod.ext_iff] using same)
+    simp only [List.map_map] at keyed
+    simpa [List.map_map, List.Nodup] using keyed
   · intro _ _
     rfl
 

@@ -17,14 +17,6 @@ import EthLib.Consensus.Proofs.Transition.RegistryLifecycle
 A call of the fast confirmation rule counts honest stake in its pulled-up head state.
 
 A later state that counts the same voters is in the call's epoch or the next one.
-
-Within the epoch nothing drifts: the active set and its effective balances stay.
-
-Across one epoch transition the total rises by at most the reserve's gain.
-
-Across it the voters' stake falls by at most the reserve's loss.
-
-Inside the epoch, the balances at the call differ from those at its start by bounded corrections.
 -/
 
 @[expose] public section
@@ -77,64 +69,63 @@ private theorem blockDeposits_mono {c d : Prop} [Decidable c] [Decidable d] {k m
     · exact min_le_min (Nat.mul_le_mul_left _ counts) (Nat.le_refl _)
   · exact Nat.le_refl _
 
-/-- The quorum of a call drifts by at most the reserve from the call's state to a later state.
-
-An assumption on the run: its fork is Fulu or later, and before Gloas.
-
-The bounds read the epoch transition of Fulu; earlier and later forks are not covered.
-
-The call's state is in the epoch of a boundary state, which is right after its epoch transition.
-
-The bands of hysteresis hold at the boundary state, and genesis reaches it.
-
-A middle state follows the boundary state by at most one block.
-
-It holds the queue of partial withdrawals of the ancestor that the reserve reads.
-
-The call's state and the later state both follow the middle state.
-
-The blocks from the boundary state to the call's state number at most one per slot.
-
-The later state is in the call's epoch or the next one.
-
-Take voters that are active at the call's state and not slashed at the later state.
-
-Twice the later total and three times their stake at the call add up to at most a bound.
-
-That bound is twice the total at the call, three times their later stake, and the reserve.
-
-The seed lookahead covers at least one epoch, so activity in the next epoch is fixed in the current.
--/
+/-- The quorum of a call drifts by at most the reserve from the call's state to a later state. -/
 theorem quorumDrift_le_quorumReserve
     {g : ForkedBeaconState preset}
     {boundary middle pulled anc state : BeaconState preset fork}
+    -- Genesis reaches the boundary state.
     (genesis : Genesis config checks g) (history : Run config checks g ⟨fork, boundary⟩)
+    -- A middle state follows the boundary state.
     (edge : Run config checks ⟨fork, boundary⟩ ⟨fork, middle⟩)
+    -- The call's state and the later state both follow the middle state.
     (tailP : Run config checks ⟨fork, middle⟩ ⟨fork, pulled⟩)
     (tailS : Run config checks ⟨fork, middle⟩ ⟨fork, state⟩)
-    (early : fork < .glamsterdam) (fulu : .fusaka ≤ fork)
+    -- The counting state's registry is within the limit.
+    --
+    -- From Gloas the type of the registry does not give it.
+    --
+    -- An assumption on the run: its fork is Fulu or later.
+    --
+    -- The bounds read the epoch transition from Fulu on.
+    (within : state.RegistryWithinLimit) (fulu : .fusaka ≤ fork)
     (bands : preset.IncrementWithinUpwardBand)
     (withdrawDelay : 1 ≤ config.MIN_VALIDATOR_WITHDRAWABILITY_DELAY.toNat)
+    -- The seed lookahead covers at least one epoch.
+    --
+    -- So activity in the next epoch is fixed in the current.
     (caps : CapOrder preset) (maxLookahead : 1 ≤ preset.MAX_SEED_LOOKAHEAD.toNat)
+    -- The bands of hysteresis hold at the boundary state.
+    --
+    -- At most one block lies between the boundary state and the middle state.
     (hysteresis : Hysteresis boundary) (single : edge.blockCount ≤ 1)
+    -- The blocks from the boundary state to the call's state number at most one per slot.
     (counted : edge.blockCount + tailP.blockCount ≤
       pulled.slot.toNat - currentEpochStart pulled + 1)
+    -- The middle state holds the queue of partial withdrawals of the ancestor.
+    --
+    -- The reserve reads the ancestor's state.
     (queue : ∀ electra : .pectra ≤ fork,
       middle.pendingPartialWithdrawals electra = anc.pendingPartialWithdrawals electra)
     (middleEpoch : getCurrentEpoch middle = getCurrentEpoch boundary)
+    -- The call's state is in the epoch of a boundary state.
+    --
+    -- The boundary state is right after its epoch transition.
     (callEpoch : getCurrentEpoch pulled = getCurrentEpoch boundary)
+    -- The later state is in the call's epoch or the next one.
     (later : getCurrentEpoch pulled ≤ getCurrentEpoch state)
     (near : (getCurrentEpoch state).toNat ≤ (getCurrentEpoch pulled).toNat + 1)
     {voters : Finset ValidatorIndex} {total pulledTotal : Gwei}
+    -- Take voters that are active at the call's state and not slashed at the later state.
     (voting : ∀ v ∈ voters,
       v ∈ activeVoters pulled ∧ (slashedFlagAt state v.toNat).getD false = false)
     (totalOk : getTotalActiveBalance state = .ok total)
     (pulledOk : getTotalActiveBalance pulled = .ok pulledTotal) :
+    -- Twice the later total and three times their stake at the call add up to at most a bound.
+    --
+    -- That bound is twice the total at the call, three times their later stake, and the reserve.
     2 * total.toNat + 3 * stake (fun v => balanceAt pulled v.toNat) voters ≤
       2 * pulledTotal.toNat + 3 * stake (fun v => balanceAt state v.toNat) voters +
         quorumReserve config pulled anc := by
-  have notGloas : ¬Fork.glamsterdam ≤ fork := fun late =>
-    Nat.lt_irrefl _ (Nat.lt_of_lt_of_le early late)
   -- The reserve reads the queue of the ancestor, which the middle state holds.
   have sameQueue : quorumReserve config pulled anc = quorumReserve config pulled middle := by
     unfold quorumReserve
@@ -143,9 +134,9 @@ theorem quorumDrift_le_quorumReserve
   -- Each voter is active in the epoch of the call.
   have voterActive : ∀ v ∈ voters, isActiveAt pulled (getCurrentEpoch pulled) v.toNat = true := by
     intro v voter
-    obtain ⟨validator, found, active⟩ :=
-      (mem_getActiveValidatorIndices (pulled.validators.bound early)).mp
-        (List.mem_toFinset.mp (voting v voter).1)
+    obtain ⟨indices, checked, -⟩ := bind_ok_iff.mp pulledOk
+    obtain ⟨validator, found, active⟩ := (mem_iff_of_getActiveValidatorIndicesChecked_ok checked).mp
+      ((getActiveValidatorIndicesChecked_ok checked) ▸ List.mem_toFinset.mp (voting v voter).1)
     exact isActiveAt_eq_true_iff.mpr ⟨validator, found, active⟩
   have fixed : getCurrentEpoch boundary ≤ activityFixedEpoch boundary :=
     getCurrentEpoch_le_activityFixedEpoch boundary
@@ -153,7 +144,7 @@ theorem quorumDrift_le_quorumReserve
       isActiveAt boundary (getCurrentEpoch boundary) i :=
     activeKept_of_chainSteps (edge.append tailP).chainSteps _ fixed
   have keptP : EffectiveKept boundary pulled :=
-    (edge.append tailP).effectiveKept_of_same_epoch early callEpoch
+    (edge.append tailP).effectiveKept_of_same_epoch callEpoch
   have insideR {i : ℕ} (active : isActiveAt boundary (getCurrentEpoch boundary) i = true) :
       i < boundary.validators.data.size := by
     obtain ⟨_, found, -⟩ := isActiveAt_eq_true_iff.mp active
@@ -168,7 +159,7 @@ theorem quorumDrift_le_quorumReserve
         isActiveAt boundary (getCurrentEpoch boundary) i :=
       activeKept_of_chainSteps (edge.append tailS).chainSteps _ fixed
     have keptS : EffectiveKept boundary state :=
-      (edge.append tailS).effectiveKept_of_same_epoch early sameEpoch
+      (edge.append tailS).effectiveKept_of_same_epoch sameEpoch
     have totals : total.toNat = pulledTotal.toNat := by
       rw [getTotalActiveBalance_toNat totalOk, getTotalActiveBalance_toNat pulledOk,
         activeBalanceTotal, activeBalanceTotal, sameEpoch, callEpoch]
@@ -190,12 +181,16 @@ theorem quorumDrift_le_quorumReserve
   have invG : Invariant g.state := genesis.invariant
   have invR := Run.invariant invG history
   have invM := Run.invariant invG (history.append edge)
+  -- Inside the epoch, the balances at the call differ from those at its start.
+  --
+  -- Bounded corrections cover the difference.
+  --
   -- The branch corrections from the boundary state, and from the middle state.
   obtain ⟨debitedKeys, -, -, -, debitedCard, -, gainSide, -, -, -, -, -, -, -, capsKept, -, -⟩ :=
-    (edge.append tailP).balanceCorrections_of_same_epoch early fulu callEpoch invR.balancesMatch
+    (edge.append tailP).balanceCorrections_of_same_epoch fulu callEpoch invR.balancesMatch
       invR.exitsOrdered
   obtain ⟨-, creditedKeys, pc, deposit, -, creditedCard, -, lossSide, zeroOff, electraZero, budget,
-    -, -, -, -, -, -⟩ := tailP.balanceCorrections_of_same_epoch early fulu
+    -, -, -, -, -, -⟩ := tailP.balanceCorrections_of_same_epoch fulu
       (callEpoch.trans middleEpoch.symm) invM.balancesMatch invM.exitsOrdered
   have blocksLe : (edge.append tailP).blockCount ≤
       pulled.slot.toNat - currentEpochStart pulled + 1 := by
@@ -213,6 +208,8 @@ theorem quorumDrift_le_quorumReserve
   have lossEq : loss = ∑ i ∈ positions with current i = true, fall i +
       creditedP * (inc + 2 * preset.downwardBand + syncPMax) + maskBudget := rfl
   have nPLe : edge.blockCount + tailP.blockCount ≤ nP := counted
+  -- Across one epoch transition the total rises by at most the reserve's gain.
+  --
   -- The rise of the total: the active set of the next epoch is fixed at the boundary state.
   have nextEpoch : getCurrentEpoch state = epoch + 1 := by
     apply UInt64.toNat_inj.mp
@@ -240,7 +237,7 @@ theorem quorumDrift_le_quorumReserve
       min headroom (crossing + (recipients + debited) * preset.upwardBand + debited * creditMax +
         transfers + depositGain) :=
     effectiveRise_le genesis history (edge.append tailP) (edge.append tailS) caps withdrawDelay
-      bands maxLookahead hysteresis early fulu callEpoch next
+      bands maxLookahead hysteresis within fulu callEpoch next
       (n := nP) debitedKeys
       (debitedCard.trans (Nat.mul_le_mul_left _ blocksLe))
       (fun v off => (gainSide v off).trans
@@ -259,6 +256,8 @@ theorem quorumDrift_le_quorumReserve
   have riseBound : total.toNat ≤ pulledTotal.toNat + gain := by
     rw [totalS, totalP, totalEq, gainEq]
     omega
+  -- Across it the voters' stake falls by at most the reserve's loss.
+  --
   -- The fall of the voters.
   obtain ⟨below, owed, belowOff, belowSum, falls⟩ : ∃ (below : ValidatorIndex → ℕ)
       (owed : Finset ValidatorIndex), (∀ v, v ∉ owed → below v = 0) ∧
@@ -272,7 +271,7 @@ theorem quorumDrift_le_quorumReserve
           (if pc v + deposit v = 0 then 0
            else inc + 2 * preset.downwardBand + syncP v.toNat +
              min (pc v + deposit v) (below v)) :=
-    effectiveFall_le genesis history edge tailP tailS caps bands withdrawDelay hysteresis early
+    effectiveFall_le genesis history edge tailP tailS caps bands withdrawDelay hysteresis within
       fulu
       middleEpoch callEpoch next single counted (fun v => pc v + deposit v)
       (fun v => (lossSide v).trans (by rw [Nat.add_assoc]; exact Nat.le_refl _))

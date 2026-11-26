@@ -83,7 +83,7 @@ public theorem signerHead_of_duty {anchor : Store preset fork}
     (anchored : getForkchoiceStore config anchorState anchorBlock = .ok anchor)
     (start : ∀ w ∈ J, e.start w = anchor) (anchorSlot : anchorBlock.slot = anchorState.slot)
     (anchorBoundary : isStartSlotAtEpoch preset anchorBlock.slot = .ok true)
-    (preGloas : fork < .glamsterdam) {time first T : ℕ}
+    {time first T : ℕ}
     (roots : HeldBlockStateRootsNonzero (e := e) time)
     {root : Root} (covers : HonestHeadsCover (e := e) root first T)
     {v w : ValidatorIndex} (honest : v ∈ J) (receiver : w ∈ J) {k k' : ℕ}
@@ -103,24 +103,10 @@ public theorem signerHead_of_duty {anchor : Store preset fork}
   obtain ⟨signerHead, signerHeadOk, targetRead⟩ := honestData.target_read reachedV anchorSlot
     anchorBoundary (roots v honest k' k'Bound) reachedW checkpointKnown
   have supports := covers (e.world k').time low lt v honest k' signerHead rfl current signerHeadOk
-  have pending : signerHead = ⟨signerHead.root, .pending⟩ := by
-    have p := Store.getHead_pending preGloas signerHeadOk
-    cases signerHead
-    simp_all
-  rw [pending] at supports
+  rw [Store.isAncestor_getHead_root signerHeadOk] at supports
   exact ⟨signerHead.root, supports, targetRead⟩
 
 /-- A store's justified checkpoint descends from a root, given an honest duty vote for it.
-
-The duty falls between the call and the store's time.
-
-The root's block is at or before the first slot of the checkpoint's epoch.
-
-The coverage at the duty puts the signer's head above the root.
-
-The checkpoint is that head's block at the first slot of its epoch, so it sits above the root.
-
-The store agrees with the signer on that walk, as honest stores agree on blocks.
 
 Otherwise two honest stores collide on a block. -/
 public theorem justified_descends_of_duty {anchor : Store preset fork} {time T : ℕ}
@@ -128,19 +114,21 @@ public theorem justified_descends_of_duty {anchor : Store preset fork} {time T :
     (anchored : getForkchoiceStore config anchorState anchorBlock = .ok anchor)
     (start : ∀ w ∈ J, e.start w = anchor) (anchorSlot : anchorBlock.slot = anchorState.slot)
     (anchorBoundary : isStartSlotAtEpoch preset anchorBlock.slot = .ok true)
-    (preGloas : fork < .glamsterdam) (roots : HeldBlockStateRootsNonzero (e := e) time)
+    (roots : HeldBlockStateRootsNonzero (e := e) time)
     (caller : u ∈ J) (callerHeld : ((e.world n).state u).blocks[root]? = some block)
     (callerTime : (e.world n).time ≤ time)
     (covers : HonestHeadsCover (e := e) root (e.world n).time T) (high : T ≤ time)
     {w : ValidatorIndex} (receiver : w ∈ J) {k : ℕ} (atTime : (e.world k).time = T)
     (justifiedKnown : ∃ b, ((e.world k).state w).blocks[
       ((e.world k).state w).justifiedCheckpoint.root]? = some b)
+    -- The root's block is at or before the first slot of the checkpoint's epoch.
     (blockLe : block.slot.toNat ≤
       ((e.world k).state w).justifiedCheckpoint.epoch.toNat * preset.SLOTS_PER_EPOCH.toNat)
     {v : ValidatorIndex} (honest : v ∈ J) {k' : ℕ} {data : AttestationData}
     (duty : MaySign config checks sources anchorState anchorBlock assignment genesisTimeMs v
       (e.world k').time ((e.world k').view v) ((e.world k').state v) data)
     (target : data.target = ((e.world k).state w).justifiedCheckpoint)
+    -- The duty falls between the call and the store's time.
     (afterCall : (e.world n).time ≤ (e.world k').time)
     (beforeStore : (e.world k').time < (e.world k).time) :
     ((e.world k).state w).isAncestor
@@ -158,8 +146,13 @@ public theorem justified_descends_of_duty {anchor : Store preset fork} {time T :
   -- The store holds its justified block, which is the signer's target.
   obtain ⟨justifiedBlock, justifiedKnown⟩ := justifiedKnown
   rw [← target] at justifiedKnown blockLe ⊢
+  -- The coverage at the duty puts the signer's head above the root.
+  --
+  -- The checkpoint is that head's block at the first slot of its epoch, so it sits above the root.
+  --
+  -- The store agrees with the signer on that walk, as honest stores agree on blocks.
   obtain ⟨head, supports, targetRead⟩ := signerHead_of_duty anchored start anchorSlot
-    anchorBoundary preGloas roots covers honest receiver duty afterCall (by omega) k'Bound
+    anchorBoundary roots covers honest receiver duty afterCall (by omega) k'Bound
     justifiedKnown
   -- The signer holds the root, as the same block as the caller.
   have rootRead := supports
@@ -168,7 +161,7 @@ public theorem justified_descends_of_duty {anchor : Store preset fork} {time T :
   have b'Found := Store.block_ok_iff.mp b'Ok
   rw [agree v honest u caller k' n k'Bound callerTime root b' block b'Found callerHeld] at b'Found
   -- The target is the head's ancestor at the first slot of its epoch, which is above the block.
-  have up := Store.isAncestor_of_getCheckpointBlock_above preGloas b'Found supports targetRead
+  have up := Store.isAncestor_of_getCheckpointBlock_above b'Found supports targetRead
       blockLe
   -- The store agrees with the signer on the walk.
   exact Store.isAncestor_of_same_blocks reachedW

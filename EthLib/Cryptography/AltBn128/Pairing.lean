@@ -1,5 +1,6 @@
 module
 
+public import EthLib.Base.Pow
 public import EthLib.Cryptography.AltBn128.Curve
 public import EthLib.Cryptography.Fp2
 
@@ -17,14 +18,6 @@ It uses two extension fields of `Fp`:
 - `Fp2 = Fp[i] / (i^2 + 1)`, where the points of `G_2` live.
 - `Fp12 = Fp[w] / (w^12 - 18 w^6 + 82)`, where the pairing lands.
 - `Fp2` sits inside `Fp12` by `a + b i -> (a - 9 b) + b w^6`, since `(w^6 - 9)^2 = -1` there.
-
-`G_2` lies on the twist `y^2 = x^3 + 3 / (9 + i)` over `Fp2`.
-
-The twist sends `(x, y)` to `(x w^2, y w^3)` on `y^2 = x^3 + 3` over `Fp12`.
-
-The Miller loop adds and doubles points on the twist, over `Fp2`.
-
-Each line of the loop is evaluated in `Fp12`, at the twisted points.
 -/
 
 @[expose] public section
@@ -61,6 +54,9 @@ end Fp2
 
 /-! ## The twist and `G_2` -/
 
+-- `G_2` lies on the twist `y^2 = x^3 + 3 / (9 + i)` over `Fp2`.
+--
+-- The twist sends `(x, y)` to `(x w^2, y w^3)` on `y^2 = x^3 + 3` over `Fp12`.
 /-- `b2 = 3 / (9 + i)`, the constant of the twist, from EIP-197. -/
 def b2 : Fp2 := Fp2.mul (Fp2.ofFp 3) (Fp2.inv ⟨9, 1⟩)
 
@@ -136,12 +132,6 @@ def sub (a b : Fp12) : Fp12 := Vector.ofFn fun k => a[k] - b[k]
 
 /-- The product: the product of the polynomials, reduced with `w^12 = 18 w^6 - 82`.
 
-The coefficient of `w^m` in the product of the polynomials is `c_m`, for `m ≤ 22`.
-
-Each `w^m` with `m ≥ 12` is `18 w^(m - 6) - 82 w^(m - 12)`.
-
-So the terms of `w^18` to `w^22` first fold into those of `w^12` to `w^16`.
-
 The sums are taken on the values in `Nat`, and each coefficient is reduced modulo `p` once. -/
 def mul (a b : Fp12) : Fp12 :=
   let x0 := a[0].val; let x1 := a[1].val; let x2 := a[2].val; let x3 := a[3].val
@@ -150,6 +140,7 @@ def mul (a b : Fp12) : Fp12 :=
   let y0 := b[0].val; let y1 := b[1].val; let y2 := b[2].val; let y3 := b[3].val
   let y4 := b[4].val; let y5 := b[5].val; let y6 := b[6].val; let y7 := b[7].val
   let y8 := b[8].val; let y9 := b[9].val; let y10 := b[10].val; let y11 := b[11].val
+  -- The coefficient of `w^m` in the product of the polynomials is `c_m`, for `m ≤ 22`.
   let c0 := x0 * y0
   let c1 := x0 * y1 + x1 * y0
   let c2 := x0 * y2 + x1 * y1 + x2 * y0
@@ -179,6 +170,10 @@ def mul (a b : Fp12) : Fp12 :=
   let c20 := x9 * y11 + x10 * y10 + x11 * y9
   let c21 := x10 * y11 + x11 * y10
   let c22 := x11 * y11
+  -- Each `w^m` with `m ≥ 12` is `18 w^(m - 6) - 82 w^(m - 12)`.
+  --
+  -- So the terms of `w^18` to `w^22` first fold into those of `w^12` to `w^16`.
+  --
   -- The terms of `w^12` to `w^16`, once those of `w^18` to `w^22` folded into them.
   let d12 := c12 + 18 * c18
   let d13 := c13 + 18 * c19
@@ -195,12 +190,7 @@ instance : Add Fp12 := ⟨add⟩
 instance : Sub Fp12 := ⟨sub⟩
 instance : Mul Fp12 := ⟨mul⟩
 
-/-- `a^e`, for `e < 2^fuel`, by square and multiply on the bits of `e`. -/
-def powBits : Nat → Fp12 → Nat → Fp12
-  | 0, _, _ => one
-  | fuel + 1, a, e =>
-    let half := powBits fuel (a * a) (e / 2)
-    if e % 2 = 1 then a * half else half
+instance : One Fp12 := ⟨one⟩
 
 /-- `c a`, coefficient by coefficient. -/
 def scale (c : Fp) (a : Fp12) : Fp12 := Vector.ofFn fun k => c * a[k]
@@ -215,7 +205,7 @@ def frobeniusGamma : Fp2 := Fp2.powNat ⟨9, 1⟩ ((Fp.modulus - 1) / 6)
 Each exponent `k` is below `2^4`, so four bits of square and multiply reach it. -/
 def frobeniusCoefficients : Vector Fp12 12 :=
   let wp := wPow 1 * ofFp2 frobeniusGamma
-  Vector.ofFn fun k => powBits 4 wp k.val
+  Vector.ofFn fun k => Base.powBits 4 wp k.val
 
 /-- The `p`-th power.
 
@@ -255,15 +245,13 @@ def LOG_ATE_LOOP_COUNT : Nat := 63
 
 /-- The line of slope `l w` through the twisted point `(x1 w^2, y1 w^3)`, at `(xt, yt)`.
 
-It is `l w (xt - x1 w^2) - (yt - y1 w^3)`.
-
-An element `a + b i` of `Fp2` is `(a - 9 b) + b w^6` in `Fp12`, so the line has a closed form.
-
-Write `l = l0 + l1 i` and `y1 - l x1 = d0 + d1 i`.
-
-Then the line is `-yt + xt (l0 - 9 l1) w + (d0 - 9 d1) w^3 + xt l1 w^7 + d1 w^9`. -/
+It is `l w (xt - x1 w^2) - (yt - y1 w^3)`. -/
 def slopeLine (l x1 y1 : Fp2) (xt yt : Fp) : Fp12 :=
+  -- An element `a + b i` of `Fp2` is `(a - 9 b) + b w^6` in `Fp12`, so the line has a closed form.
+  --
+  -- Write `l = l0 + l1 i` and `y1 - l x1 = d0 + d1 i`.
   let d := y1 - l * x1
+  -- Then the line is `-yt + xt (l0 - 9 l1) w + (d0 - 9 d1) w^3 + xt l1 w^7 + d1 w^9`.
   #v[-yt, xt * (l.c0 - 9 * l.c1), 0, d.c0 - 9 * d.c1, 0, 0, 0, xt * l.c1, 0, d.c1, 0, 0]
 
 /-- The vertical line `xt - x1 w^2` through the twisted point with `x` coordinate `x1 w^2`.
@@ -274,10 +262,6 @@ def verticalLine (x1 : Fp2) (xt : Fp) : Fp12 :=
 
 /-- The line through the twisted points `r` and `q`, at the point `(xt, yt)` of `G_1`.
 
-A twisted point has `x` times `w^2` and `y` times `w^3`.
-
-So a slope `l` of the twist is the slope `l w` of the twisted points.
-
 It follows the line function of [the pairing-friendly curves draft][pfc], Appendix A.
 
 The draft writes it on `E`, and here it runs on the twisted points.
@@ -285,6 +269,11 @@ The draft writes it on `E`, and here it runs on the twisted points.
 [pfc]: https://datatracker.ietf.org/doc/html/draft-irtf-cfrg-pairing-friendly-curves-11#appendix-A
 -/
 def linefunc (r q : Point2) (xt yt : Fp) : Fp12 :=
+  -- Each line of the loop is evaluated in `Fp12`, at the twisted points.
+  --
+  -- A twisted point has `x` times `w^2` and `y` times `w^3`.
+  --
+  -- So a slope `l` of the twist is the slope `l w` of the twisted points.
   match r, q with
   | .affine x1 y1, .affine x2 y2 =>
     -- The draft tests `Q_1 = Q_2`, then `Q_1 = -Q_2`; on the curve, both have `x_1 = x_2`.
@@ -323,6 +312,8 @@ Their `t` is the BN parameter `u`.
 
 It takes `Q` of `G_2` on the twist, and `P = (xp, yp)` of `G_1`. -/
 def millerLoop (q : Point2) (xp yp : Fp) : Fp12 :=
+  -- The loop adds and doubles points on the twist, over `Fp2`.
+  --
   -- Line 1: write `s = 6t + 2` as `s = sum_{i=0}^{L-1} s_i 2^i`, with `s_i` in `{-1, 0, 1}`.
   --
   -- The digits here are the bits of `s`, so no `s_i` is `-1`, and lines 5 and 6 never apply.
@@ -373,9 +364,9 @@ def finalExponentiation (f : Fp12) : Fp12 :=
   -- §5: `m^x`, `m^(x^2) = (m^x)^x` and `m^(x^3) = (m^(x^2))^x`.
   --
   -- `u` is below `2^64`, so 64 bits of square and multiply reach it.
-  let fu := Fp12.powBits 64 f BN_U
-  let fu2 := Fp12.powBits 64 fu BN_U
-  let fu3 := Fp12.powBits 64 fu2 BN_U
+  let fu := Base.powBits 64 f BN_U
+  let fu2 := Base.powBits 64 fu BN_U
+  let fu3 := Base.powBits 64 fu2 BN_U
   -- §3: after the first part, the element is unitary, so an inversion is a conjugation.
   --
   -- The conjugation is the power `p^6`, since `m^(p^6) = m^(-1)` for a unitary `m`.
@@ -385,7 +376,7 @@ def finalExponentiation (f : Fp12) : Fp12 :=
   -- §3: its power is `(m^(p^3))^lambda3 * (m^(p^2))^lambda2 * (m^p)^lambda1 * m^lambda0`.
   --
   -- The coefficients in the digits are at most 36, below `2^6`.
-  let small (a : Fp12) (e : Nat) := Fp12.powBits 6 a e
+  let small (a : Fp12) (e : Nat) := Base.powBits 6 a e
   -- §5: `m^lambda0`, with `lambda0(x) = -36 x^3 - 30 x^2 - 18 x - 2`.
   let y0 := conj (small fu3 36 * small fu2 30 * small fu 18 * small f 2)
   -- §5: `m^lambda1`, with `lambda1(x) = -36 x^3 - 18 x^2 - 12 x + 1`.

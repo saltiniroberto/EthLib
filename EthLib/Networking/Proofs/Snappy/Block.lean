@@ -2,35 +2,30 @@ module
 
 public import EthLib.Networking.Snappy.Block
 public import EthLib.Base.Proofs.ByteList
-public import EthLib.Base.Proofs.LittleEndian
+public import EthLib.Base.Proofs.ByteOrder
 public import EthLib.Networking.Encoding.Varint
 public import EthLib.Networking.Proofs.Encoding.Varint
+import EthLib.Base.Proofs.CodeInjective
 
 /-!
 # `Networking.Proofs.Snappy.Block`
 
 Properties of Snappy block decompression, against `format_description.txt` of `google/snappy`:
 <https://github.com/google/snappy/blob/7406111ac4ae539ea0db8b7ea2dc76730cd957f4/format_description.txt>.
-
-- The preamble is a little-endian varint, and it reads back every length up to 2^32 - 1 (§1).
-- A copy writes exactly the bytes §2.2 describes, overlapping copies included.
-- A block cannot start with a copy (§2).
-- A block that decompresses yields exactly the length it declared, at most 2^32 - 1.
-- Its first five bytes alone declare that length.
-- The fuel that bounds the element loop never changes the result.
-- A literal element appends its data to the output (§2.1).
 -/
 
 @[expose] public section
 
 namespace EthLib.Networking.Proofs.Snappy.Block
 
-open EthLib.Base (bytesToUint uintToBytes)
+open EthLib.Base (ByteOrder.ofLE ByteOrder.toLE)
 open EthLib.Networking.Snappy
 
 /-! ## The preamble (§1) -/
 
-/-- The preamble reads back the varint of every length up to 2^32 - 1, whatever follows it. -/
+/-- The preamble reads back the varint of every length up to 2^32 - 1, whatever follows it.
+
+The preamble is a little-endian varint (§1). -/
 theorem readPreamble_encode {n : Nat} (rest : List UInt8) (hn : n ≤ maxUncompressedLength) :
     readPreamble (EthLib.Networking.Encoding.Varint.encodeAux n preambleMaxLength ++ rest) =
       .ok (n, rest) := by
@@ -108,13 +103,14 @@ The result `r`:
 - starts with the output `o` it was given,
 - is `n` bytes longer,
 - has each new byte equal to the byte `offset` places before it.
-
-The last rule is read on the bytes already written, so a copy longer than its offset repeats itself.
 -/
 theorem copyBytes_spec {o : List UInt8} {offset : Nat} (n : Nat)
     (hpos : 0 < offset) (hle : offset ≤ o.length) :
     ∃ r, copyBytes o.toByteArray offset n = .ok r.toByteArray ∧ r.length = o.length + n ∧ o <+: r ∧
       ∀ (j : Nat) (hj : o.length ≤ j) (hjr : j < r.length),
+        -- Each new byte is read from `r` itself, so it may be one that this copy wrote.
+        --
+        -- So a copy longer than its offset repeats itself.
         r[j] = r[j - offset]'(by omega) := by
   induction n generalizing o with
   | zero => exact ⟨o, rfl, rfl, List.prefix_refl o, fun j hj hjr => by omega⟩
@@ -195,7 +191,7 @@ theorem decompressElements_fuel (declared : Nat) (input : List UInt8) (out : Byt
 theorem decompressElements_copy_first {declared : Nat} {tag : UInt8} {rest : List UInt8}
     {fuel : Nat} (hcopy : tag.toNat % 4 ≠ 0) :
     ∃ e, decompressElements declared (tag :: rest) ByteArray.empty (fuel + 1) = .error e := by
-  simp only [decompressElements, beq_iff_eq, hcopy, ↓reduceIte, EthLib.Base.bytesToUint_toVector]
+  simp only [decompressElements, beq_iff_eq, hcopy, ↓reduceIte, EthLib.Base.ByteOrder.ofLE_toVector]
   repeat' split
   -- Every branch is an error, since a copy of at least 1 byte cannot read an empty output.
   all_goals first
@@ -307,12 +303,12 @@ theorem decompressElements_literal_append {declared : Nat} {o data s : List UInt
     generalize literalLengthBytes (data.length - 1) = k at *
     have ht : (UInt8.ofNat ((59 + k) * 4)).toNat = (59 + k) * 4 := by
       rw [UInt8.toNat_ofNat']; omega
-    have hv : (uintToBytes k (data.length - 1)).toList.foldr
+    have hv : (ByteOrder.toLE k (data.length - 1)).toList.foldr
         (fun byte acc => byte.toNat + 256 * acc) 0 = data.length - 1 := by
-      simpa using EthLib.Base.foldr_uintToBytes_of_lt hlt
-    have hk' : (uintToBytes k (data.length - 1)).toList.length = k := by simp
+      simpa using EthLib.Base.ByteOrder.foldr_toLE_of_lt hlt
+    have hk' : (ByteOrder.toLE k (data.length - 1)).toList.length = k := by simp
     simp only [List.cons_append, List.append_assoc]
-    simp only [decompressElements, ht, EthLib.Base.bytesToUint_toVector]
+    simp only [decompressElements, ht, EthLib.Base.ByteOrder.ofLE_toVector]
     simp [show ¬ 59 + k < 60 by omega, show 59 + k - 59 = k by omega, hv, hk',
       show data.length - 1 + 1 = data.length by omega,
       show ¬ declared < o.length + data.length by omega,
@@ -348,9 +344,7 @@ open EthLib.Networking.Snappy
 theorem _root_.EthLib.Networking.Snappy.SnappyError.code_injective
     (e₁ e₂ : SnappyError) (h : e₁.code = e₂.code) :
     e₁.ctorIdx = e₂.ctorIdx := by
-  -- Two distinct constructors have two distinct literal codes, which `decide` separates.
-  cases e₁ <;> cases e₂ <;>
-    first | rfl | (simp only [SnappyError.code] at h; exact absurd h (by decide))
+  code_injective SnappyError.code
 
 end
 

@@ -15,10 +15,6 @@ This file restates it for `y^2 = x^3 + a x + b`, case by case as SEC 1 v2 §2.2.
 Over `ZMod p`, it also counts the points.
 
 The points of the specification map into that group, through a map of their field into a field.
-
-Addition and negation are the group's, and points on the curve and group elements correspond.
-
-So the group law is proved once, and each curve gives only its map.
 -/
 
 @[expose] public section
@@ -224,7 +220,12 @@ theorem card_point_eq (hp : p % 2 = 1) (hroot : ∀ x : ZMod p, x * x * x + a * 
 
 end ZMod
 
-/-! ## The points of the specification -/
+/-! ## The points of the specification
+
+Addition and negation are the group's, and points on the curve and group elements correspond.
+
+So the group law is proved once, and each curve gives only its map.
+-/
 
 section Points
 
@@ -278,7 +279,7 @@ def toPoint [DecidableEq K] [(curve A B).IsElliptic] : Point F → (curve A B).P
 /-- The curve test, as an equation in the field. -/
 theorem isOnCurve_affine (hf : Embedding f A B) (x y : F) :
     (affine x y).isOnCurve = true ↔ f y * f y = f x * f x * f x + A * f x + B := by
-  simp only [isOnCurve, beq_iff_eq]
+  simp only [isOnCurve, rhs, beq_iff_eq]
   rw [← hf.injective.eq_iff]
   split_ifs with ha
   · -- When `a = 0`, the rule skips the term `a x`, which is `0` in the field.

@@ -1,6 +1,7 @@
 module
 
 public import EthLib.Cryptography.Aes.Block
+public import EthLib.Base.Proofs.Bytes
 
 /-!
 # Proofs: `Aes.Block`
@@ -20,10 +21,6 @@ AES-128 and AES-256 equal a model of FIPS 197, for every key and every block.
 The model has its own multiplication in GF(2^8), its own S-box and its own key schedule.
 
 EthLib has no AES-192, so no theorem here covers it.
-
-No theorem compares the inverse cipher with a model of Algorithm 3 of §5.3.
-
-The inverse cipher undoes the cipher, so it also undoes the model's cipher.
 -/
 
 @[expose] public section
@@ -125,21 +122,21 @@ def single (j : Fin 4) (x : UInt8) : Word :=
 theorem single_xor (j : Fin 4) (x y : UInt8) :
     single j (x ^^^ y) = xorWord (single j x) (single j y) := by
   ext r hr
-  simp only [single, xorWord, Vector.getElem_ofFn, Vector.getElem_zipWith]
+  simp only [single, xorWord, Base.xorBytes, Vector.getElem_ofFn, Vector.getElem_zipWith]
   split <;> simp
 
 theorem eq_xor_singles (b : Word) :
     b = xorWord (xorWord (xorWord (single 0 b[0]) (single 1 b[1])) (single 2 b[2]))
       (single 3 b[3]) := by
   ext r hr
-  simp only [single, xorWord, Vector.getElem_ofFn, Vector.getElem_zipWith]
+  simp only [single, xorWord, Base.xorBytes, Vector.getElem_ofFn, Vector.getElem_zipWith]
   match r, hr with
   | 0, _ | 1, _ | 2, _ | 3, _ => simp
 
 theorem mulWord_xor (a u v : Word) :
     mulWord a (xorWord u v) = xorWord (mulWord a u) (mulWord a v) := by
   ext r hr
-  simp only [mulWord, xorWord, Vector.getElem_zipWith, mul_xor]
+  simp only [mulWord, xorWord, Base.xorBytes, Vector.getElem_zipWith, mul_xor]
   match r, hr with
   | 0, _ | 1, _ | 2, _ | 3, _ =>
     simp only [Vector.getElem_mk, List.getElem_toArray, List.getElem_cons_zero,
@@ -241,9 +238,8 @@ theorem invSubBytes_subBytes (s : Block) : invSubBytes (subBytes s) = s := by
   simp [invSubBytes, subBytes]
 
 /-- ADDROUNDKEY is its own inverse, as FIPS 197 §5.3.4 states. -/
-theorem addRoundKey_addRoundKey (s k : Block) : addRoundKey (addRoundKey s k) k = s := by
-  ext i hi
-  simp [addRoundKey, UInt8.xor_assoc]
+theorem addRoundKey_addRoundKey (s k : Block) : addRoundKey (addRoundKey s k) k = s :=
+  Base.xorBytes_xorBytes_cancel_right s k
 
 /-! ## The inverse cipher
 
@@ -586,8 +582,9 @@ theorem toState_addRoundKey (s : Block) {Nr : Nat} (w : Vector Word (4 * (Nr + 1
     (h : round ≤ Nr) :
     toState (addRoundKey s (roundKey w round h)) = Spec.addRoundKey (toState s) W round := by
   funext r c
-  simp only [toState, addRoundKey, roundKey, Spec.addRoundKey, Vector.getElem_zipWith,
-    Vector.getElem_ofFn, ← hw _ (by omega : 4 * round + c.val < 4 * (Nr + 1)), toWord]
+  simp only [toState, addRoundKey, Base.xorBytes, roundKey, Spec.addRoundKey,
+    Vector.getElem_zipWith, Vector.getElem_ofFn,
+    ← hw _ (by omega : 4 * round + c.val < 4 * (Nr + 1)), toWord]
   have hc : (r.val + 4 * c.val) / 4 = c.val := by omega
   have hr : (r.val + 4 * c.val) % 4 = r.val := by omega
   simp only [hc, hr]
@@ -597,7 +594,7 @@ theorem toState_addRoundKey (s : Block) {Nr : Nat} (w : Vector Word (4 * (Nr + 1
 theorem toWord_xorWord (a b : Word) :
     toWord (xorWord a b) = fun r => toWord a r ^^^ toWord b r := by
   funext r
-  simp [toWord, xorWord]
+  simp [toWord, xorWord, Base.xorBytes]
 
 theorem toWord_subWord (a : Word) : toWord (subWord a) = Spec.subWord (toWord a) := by
   funext r
@@ -695,9 +692,12 @@ theorem ciph_eq_spec (k : KeySize) (key : Key k) (x : Block) :
   · exact cipher_eq_spec _ _ _ (toWord_keyExpansion 4 10 (by decide) key) x
   · exact cipher_eq_spec _ _ _ (toWord_keyExpansion 8 14 (by decide) key) x
 
-/-- The inverse cipher undoes the model's cipher, for AES-128 and AES-256. -/
+/-- The inverse cipher undoes the model's cipher, for AES-128 and AES-256.
+
+No theorem compares the inverse cipher with a model of FIPS 197 §5.3, Algorithm 3. -/
 theorem ciphInv_spec_ciph (k : KeySize) (key : Key k) (x : Block) :
     ciphInv k key (Spec.ciph k key x) = x := by
+  -- The inverse cipher undoes the cipher, so it also undoes the model's cipher.
   rw [← ciph_eq_spec, ciphInv_ciph]
 
 end EthLib.Cryptography.Aes

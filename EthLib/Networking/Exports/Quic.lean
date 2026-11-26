@@ -225,7 +225,7 @@ Any acknowledgement must be for this sender in the same connection and packet-nu
 
 With no acknowledgement, the selected bytes hold the full number.
 
-Otherwise the byte window exceeds twice the gap from the largest acknowledged number.
+Otherwise the selected bytes hold more than twice the gap from the largest acknowledged number.
 
 An acknowledged number that is not earlier raises code 10.
 

@@ -9,23 +9,9 @@ import EthLib.Base.Proofs.Bytes
 /-!
 # Proofs: the upgrade of light client data to a later fork
 
-An upgrade keeps the beacon header of a light client header.
+An upgrade keeps the beacon header of a light client header, and the beacon headers of a store.
 
-So the upgrade of a store keeps its finalized and optimistic beacon headers, and their slots.
-
-Before Gloas, the upgrade of a header from Capella carries the upgrade of its execution header.
-
-The Gloas header of a valid Electra header is valid too, under three conditions.
-
-The header is not the empty one, and its slot comes before Gloas.
-
-The configuration activates Capella no later than Deneb.
-
-The new branch joins the proof of the block hash in the execution header to the old branch.
-
-Before Gloas, an upgrade keeps a header valid when its slot needs no field that the header lacks.
-
-A header of an earlier fork reaches Gloas through its Electra form, so it stays valid as well.
+It keeps a valid header valid, under conditions on its slot and on the configuration.
 -/
 
 @[expose] public section
@@ -60,22 +46,6 @@ theorem LightClientHeader.toGloas_beacon {config : Config} {post : Fork}
     | (cases computed; done)
     | (cases computed; rfl)
 
-/-- Nodes that convert to 32-byte vectors are the bytes of those vectors. -/
-private theorem mapM_toChunk_eq_map :
-    ∀ {nodes : List Bytes} {chunks : List Bytes32},
-    nodes.mapM toChunk = .ok chunks → nodes = chunks.map Vector.toArray
-  | [], chunks, built => by
-    simp only [List.mapM_nil, pure, Except.pure, Except.ok.injEq] at built
-    subst built
-    rfl
-  | node :: rest, chunks, built => by
-    simp only [List.mapM_cons, Base.bind_ok_iff] at built
-    obtain ⟨chunk, converted, tail, restBuilt, done⟩ := built
-    simp only [pure, Except.pure, Except.ok.injEq] at done
-    subst done
-    have same : node = chunk.toArray := toChunk_ok_iff.mp converted
-    rw [List.map_cons, same, mapM_toChunk_eq_map restBuilt]
-
 /-- A branch vector holds the list it was made from. -/
 theorem branchVector_toList {depth : Nat} {branch : List Bytes32}
     {vector : Vector Bytes32 depth} (made : branchVector depth branch = .ok vector) :
@@ -100,7 +70,8 @@ private theorem verifyMerkleProof_of_isValidMerkleBranch {leaf root : Bytes32}
     {branch : List Bytes32} {gindex subtree : Nat} (named : 2 ≤ gindex)
     (indexed : getSubtreeIndex gindex = .ok subtree)
     (valid : isValidMerkleBranch leaf branch (Nat.log2 gindex) subtree root = true) :
-    verifyMerkleProof leaf.toArray (branch.map Vector.toArray) gindex root.toArray = .ok true := by
+    verifyMerkleProof ⟨leaf.toArray⟩ (branch.map fun node => ⟨node.toArray⟩) gindex
+      ⟨root.toArray⟩ = .ok true := by
   have depthIs : gindexDepth gindex = .ok (Nat.log2 gindex) := by
     simp [gindexDepth]
     omega
@@ -114,8 +85,8 @@ private theorem verifyMerkleProof_of_isValidMerkleBranch {leaf root : Bytes32}
 /-- A branch that verifies at an index passes the normalized check there, with zeros in front. -/
 private theorem isValidNormalizedMerkleBranch_of_verify {leaf root : Bytes32}
     {branch : List Bytes32} {gindex target : Nat} (named : 2 ≤ gindex)
-    (verified : verifyMerkleProof leaf.toArray (branch.map Vector.toArray) gindex root.toArray =
-      .ok true) :
+    (verified : verifyMerkleProof ⟨leaf.toArray⟩ (branch.map fun node => ⟨node.toArray⟩) gindex
+      ⟨root.toArray⟩ = .ok true) :
     isValidNormalizedMerkleBranch leaf (normalizeMerkleBranch branch target) gindex root =
       .ok true := by
   have length := verifyMerkleProof_length verified
@@ -136,7 +107,7 @@ private theorem hashTreeRoot_of_fieldRoots {σ β : Type} [SszFields β] {names 
     {root : Bytes32}
     (rooted : @SszType.hashTreeRoot σ (SszType.container names fields build) value = .ok root) :
     Serialization.Ssz.hashTreeRoot (.container names (SszFields.descs β))
-      (.seq (SszFields.toValues (fields value))) = .ok root.toArray := by
+      (.seq (SszFields.toValues (fields value))) = .ok ⟨root.toArray⟩ := by
   simp only [SszType.hashTreeRoot, Base.bind_ok_iff] at rooted
   obtain ⟨node, built, chunked⟩ := rooted
   rw [toChunk_ok_iff] at chunked
@@ -154,7 +125,7 @@ private theorem ExecutionPayloadHeader.hashTreeRoot_untyped {payloadFork : Fork}
     (execution : ExecutionPayloadHeader preset payloadFork) {root : Bytes32}
     (rooted : SszType.hashTreeRoot execution = .ok root) :
     Serialization.Ssz.hashTreeRoot (SszType.desc (ExecutionPayloadHeader preset payloadFork))
-      (SszType.toValue execution) = .ok root.toArray := by
+      (SszType.toValue execution) = .ok ⟨root.toArray⟩ := by
   -- Every field type takes the root of its untyped value.
   have bytes : ∀ {n : Nat} (field : Vector UInt8 n),
       SszType.root field =
@@ -174,9 +145,10 @@ private theorem ExecutionPayloadHeader.hashTreeRoot_untyped {payloadFork : Fork}
     fun _ => rfl
   rcases named with rfl | rfl
   all_goals
-    refine hashTreeRoot_of_fieldRoots execution ?_ rfl rooted
-    simp +decide [SszFields.roots, SszFields.descs, SszFields.toValues, List.mapM_cons, bytes,
-      list, word, wide]
+    have untyped := hashTreeRoot_of_fieldRoots execution (rooted := rooted)
+      (by simp +decide [SszFields.roots, SszFields.descs, SszFields.toValues, List.mapM_cons,
+        bytes, list, word, wide]) rfl
+    exact untyped
 
 /-- The proof of a node of a value, then a branch from the value's root, proves the node.
 
@@ -186,20 +158,21 @@ The joined branch passes the normalized check at the joined index, with zeros in
 private theorem computeMerkleProof_append {α : Type} [SszType α] (value : α)
     {inner outer index target : Nat} {leaf root top : Bytes32} {proof rest : List Bytes32}
     (joined : gindexConcat outer inner = .ok index) (named : 2 ≤ inner) (deep : 2 ≤ index)
-    (read : nodeRoot (SszType.desc α) (SszType.toValue value) inner = .ok leaf.toArray)
+    (read : nodeRoot (SszType.desc α) (SszType.toValue value) inner = .ok ⟨leaf.toArray⟩)
     (rooted : Serialization.Ssz.hashTreeRoot (SszType.desc α) (SszType.toValue value) =
-      .ok root.toArray)
+      .ok ⟨root.toArray⟩)
     (proved : computeMerkleProof value inner = .ok proof)
-    (climbs : verifyMerkleProof root.toArray (rest.map Vector.toArray) outer top.toArray =
-      .ok true) :
+    (climbs : verifyMerkleProof ⟨root.toArray⟩ (rest.map fun node => ⟨node.toArray⟩) outer
+      ⟨top.toArray⟩ = .ok true) :
     isValidNormalizedMerkleBranch leaf (normalizeMerkleBranch (proof ++ rest) target) index top =
       .ok true := by
   obtain ⟨indices, indexed⟩ := getBranchIndices_ok named
   obtain ⟨nodes, built, verified⟩ := buildProof_verifies _ _ _ rooted inner _ read indices indexed
   -- The proof is the built branch, each node read back as a vector.
-  have same : nodes = proof.map Vector.toArray := by
+  have same : nodes = proof.map fun node => ⟨node.toArray⟩ := by
     simp only [computeMerkleProof, built, bind, Except.bind] at proved
-    exact mapM_toChunk_eq_map proved
+    simpa using (map_of_mapM_ok (p := fun node : Bytes32 => (⟨node.toArray⟩ : Bytes)) (q := id)
+      (fun _ _ step => (toChunk_ok_iff.mp step).symm) proved).symm
   subst same
   apply isValidNormalizedMerkleBranch_of_verify deep
   rw [List.map_append]
@@ -221,11 +194,7 @@ private theorem gindexConcat_payloadHeaderBlockHash :
 
 The Electra header is not the empty one, and its slot comes before Gloas.
 
-The configuration activates Capella no later than Deneb.
-
-The new branch proves the block hash inside the execution header, then climbs as the old one did.
-
-A header of a slot before Capella keeps a zero block hash and a zero branch. -/
+The configuration activates Capella no later than Deneb. -/
 theorem LightClientHeader.isValidLightClientHeader_toGloas {config : Config} {post : Fork}
     {gloas : .glamsterdam ≤ post} {header : LightClientHeader preset .pectra}
     {upgraded : LightClientHeader preset post}
@@ -260,6 +229,9 @@ theorem LightClientHeader.isValidLightClientHeader_toGloas {config : Config} {po
     subst built
     refine ⟨(), trivial, LightClientError.liftRoot_ok.mpr ?_⟩
     rw [branchVector_toList made]
+    -- The new branch first proves the block hash inside the execution header.
+    --
+    -- It then climbs as the old branch did.
     exact computeMerkleProof_append _ gindexConcat_payloadHeaderBlockHash.1 (by decide)
       (by decide) (ExecutionPayloadHeader.nodeRoot_blockHash (by decide) (by decide) _)
       (ExecutionPayloadHeader.hashTreeRoot_untyped (.inr rfl) _
@@ -280,6 +252,9 @@ theorem LightClientHeader.isValidLightClientHeader_toGloas {config : Config} {po
     subst built
     refine ⟨(), trivial, LightClientError.liftRoot_ok.mpr ?_⟩
     rw [branchVector_toList made]
+    -- The new branch first proves the block hash inside the execution header.
+    --
+    -- It then climbs as the old branch did.
     exact computeMerkleProof_append _ gindexConcat_payloadHeaderBlockHash.2 (by decide)
       (by decide) (ExecutionPayloadHeader.nodeRoot_blockHash (by decide) (by decide) _)
       (ExecutionPayloadHeader.hashTreeRoot_untyped (.inl rfl) _
@@ -362,7 +337,7 @@ theorem ExecutionPayloadHeader.hashTreeRoot_upgrade {pre post : Fork}
 
 /-- A vector cast to an equal length is all zero exactly when the vector is. -/
 private theorem cast_beq_replicate {n m : Nat} (h : n = m) (v : Vector Bytes32 n) :
-    (v.cast h == Vector.replicate m zeroBytes32) = (v == Vector.replicate n zeroBytes32) := by
+    (v.cast h == Vector.replicate m ZERO_HASH) = (v == Vector.replicate n ZERO_HASH) := by
   subst h
   rfl
 
@@ -445,8 +420,8 @@ theorem LightClientHeader.isValidLightClientHeader_upgradeFields {config : Confi
       simp only [LightClientHeader.upgradeFields, capella, ↓reduceDIte]
       exact cast_toList _ _
     have same : ∀ h, ((header.upgradeFields post before postBefore).executionBranch h ==
-        Vector.replicate _ zeroBytes32) = (header.executionBranch capella ==
-        Vector.replicate _ zeroBytes32) := fun h => by
+        Vector.replicate _ ZERO_HASH) = (header.executionBranch capella ==
+        Vector.replicate _ ZERO_HASH) := fun h => by
       simp only [LightClientHeader.upgradeFields, capella, ↓reduceDIte]
       exact cast_beq_replicate _ _
     have root := root_upgradeFields (config := config) capella postCapella before postBefore
@@ -505,7 +480,7 @@ theorem LightClientHeader.isValidLightClientHeader_upgradeFields {config : Confi
         ExecutionPayloadHeader.empty preset post := fun h => by
       simp [LightClientHeader.upgradeFields, capella]
     have branch : ∀ h, (header.upgradeFields post before postBefore).executionBranch h =
-        Vector.replicate _ zeroBytes32 := fun h => by
+        Vector.replicate _ ZERO_HASH := fun h => by
       simp [LightClientHeader.upgradeFields, capella]
     have slot := capellaSlot.resolve_left capella
     unfold isValidLightClientHeader at valid ⊢
@@ -548,6 +523,7 @@ theorem LightClientHeader.isValidLightClientHeader_upgrade {config : Config} {pr
   · simp only [preGloas, gloas, ↓reduceDIte] at computed
     have preBefore : pre < .glamsterdam := Nat.lt_of_not_le preGloas
     have epoch := beforeGloas.resolve_left preGloas
+    -- A header of an earlier fork reaches Gloas through its Electra form, so it stays valid.
     refine LightClientHeader.isValidLightClientHeader_toGloas (header := header.upgradeFields
       .pectra preBefore (by decide)) ?_ ?_ ordered epoch computed
     · exact LightClientHeader.isValidLightClientHeader_upgradeFields (by decide)

@@ -12,10 +12,14 @@ public import EthLib.Engine.Proofs.GetInclusionList
 public import EthLib.Engine.Proofs.GetPayload
 public import EthLib.Engine.Proofs.Json
 public import EthLib.Engine.Proofs.Jwt
-public import EthLib.Engine.Proofs.Jwt.Json
 public import EthLib.Engine.Proofs.NewPayload
 public import EthLib.Engine.Proofs.Node
+public import EthLib.Engine.Proofs.Node.Ancestry
+public import EthLib.Engine.Proofs.Node.Grounded
+public import EthLib.Engine.Proofs.Node.LatestValid
 public import EthLib.Engine.Proofs.Node.Proposal
+public import EthLib.Engine.Proofs.Node.Replay
+public import EthLib.Engine.Proofs.Node.ReplayRuns
 public import EthLib.Engine.Proofs.Node.View
 public import EthLib.Engine.Proofs.PayloadBodies
 public import EthLib.Engine.Proofs.PreparePayload

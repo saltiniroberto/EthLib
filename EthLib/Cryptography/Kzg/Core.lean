@@ -6,6 +6,7 @@ public import EthLib.Cryptography.Kzg.BitReversal
 public import EthLib.Cryptography.Kzg.Polynomials
 public import EthLib.Cryptography.Kzg.TrustedSetup
 public import EthLib.Cryptography.Kzg.Errors
+public import EthLib.Cryptography.Kzg.Types
 
 /-!
 # `Kzg.Core`
@@ -18,17 +19,10 @@ Each operation that reads the trusted setup takes it as its first argument.
 
 Each operation that can reject its input returns `Except KzgError`.
 
-The scheme is PolyCommit_DL, §3.2 of Kate, Zaverucha and Goldberg, ASIACRYPT 2010:
-<https://www.iacr.org/archive/asiacrypt2010/6477178/6477178.pdf>
+- [Kate, Zaverucha and Goldberg, ASIACRYPT 2010][kzg10], §3.2: the scheme, PolyCommit_DL.
+- [EIP-4844, Cryptographic helpers][eip-4844]: the opening check and the batch check of blob proofs.
 
-[EIP-4844, Cryptographic helpers][eip-4844] uses two operations of this module.
-
-They are the check of one opening and the batch check of blob proofs.
-
-The proof function of the text that EIP-4844 points to returns no `y`.
-
-Here the proof function also returns `y = p(z)`.
-
+[kzg10]: https://www.iacr.org/archive/asiacrypt2010/6477178/6477178.pdf
 [eip-4844]: https://eips.ethereum.org/EIPS/eip-4844#cryptographic-helpers
 -/
 
@@ -40,14 +34,6 @@ open EthLib.Cryptography.Kzg.Constants
 open EthLib.Cryptography.Kzg.BitReversal
 open EthLib.Base (Bytes32)
 open EthLib.Cryptography.Bls (G1 G2 Fr)
-
-/-! ## Type aliases -/
-
-/-- A commitment: a compressed `G1` point. -/
-abbrev KZGCommitment := Bytes48
-
-/-- A proof: a compressed `G1` point. -/
-abbrev KZGProof := Bytes48
 
 /-- The 48-byte compressed encoding of a point. -/
 def compressG1 (p : G1) : Bytes48 := Bls.G1.compress p
@@ -89,21 +75,22 @@ def uncompressG1 (b : Bytes48) : Except KzgError G1 :=
 /-- Validate untrusted bytes as a `KZGCommitment`. -/
 def bytesToKzgCommitment (b : Bytes48) : Except KzgError KZGCommitment :=
   -- The bytes are a commitment when they are a valid `G1` point, at infinity or not.
-  if validateKzgG1 b then .ok b else .error (.invalidCommitment none)
+  if validateKzgG1 b then .ok ⟨b⟩ else .error (.invalidCommitment none)
 
 /-- Validate untrusted bytes as a `KZGProof`. -/
 def bytesToKzgProof (b : Bytes48) : Except KzgError KZGProof :=
   -- The bytes are a proof when they are a valid `G1` point, at infinity or not.
-  if validateKzgG1 b then .ok b else .error (.invalidProof none)
+  if validateKzgG1 b then .ok ⟨b⟩ else .error (.invalidProof none)
 
 /-- Fiat-Shamir challenge for a (blob, commitment) pair. -/
 def computeChallenge (blob : Blob) (commitment : KZGCommitment) : Fr :=
   -- The degree bound 4096, as 16 big-endian bytes.
-  let degreePoly : ByteArray := ⟨(Base.natToBytes 16 FIELD_ELEMENTS_PER_BLOB).toArray⟩
+  let degreePoly : ByteArray := ⟨(Base.ByteOrder.toBE 16 FIELD_ELEMENTS_PER_BLOB).toArray⟩
   -- The hash input is the 16 ASCII bytes `FSBLOBVERIFY_V1_`, then the degree bound.
   --
   -- Then come the blob and the commitment.
-  let data := FIAT_SHAMIR_PROTOCOL_DOMAIN ++ degreePoly ++ ⟨blob.toArray⟩ ++ ⟨commitment.toArray⟩
+  let data :=
+    FIAT_SHAMIR_PROTOCOL_DOMAIN ++ degreePoly ++ ⟨blob.toArray⟩ ++ ⟨commitment.bytes.toArray⟩
   -- The challenge is the SHA-256 of that input, read as a big-endian integer.
   --
   -- It is reduced modulo the modulus of `Fr`.
@@ -193,7 +180,7 @@ def computeKzgProofImpl (setup : TrustedSetup)
   -- The proof is `sum_i q_i L_i`, for the Lagrange setup `L_i` of `G1` in bit-reversed order.
   let proofG1 ← g1LincombPoints g1LagrangeBrp quotient
   -- The proof, compressed, and the value `y`.
-  return (compressG1 proofG1, y)
+  return (⟨compressG1 proofG1⟩, y)
 
 /-- The KZG proof at `z` for the polynomial of a blob, with the value `p(z)`.
 
@@ -206,6 +193,9 @@ def computeKzgProof (setup : TrustedSetup) (blob : Blob) (zBytes : Bytes32) :
   let polynomial ← blobToPolynomial blob
   -- The point `z` is decoded into `Fr`, then the proof and `y = p(z)` are computed.
   let z ← bytesToBlsField zBytes
+  -- The proof function of the text that EIP-4844 points to returns no `y`.
+  --
+  -- Here the proof function also returns `y = p(z)`.
   let (proof, y) ← computeKzgProofImpl setup polynomial z
   -- The proof and `y` as 32 big-endian bytes.
   return (proof, blsFieldToBytes y)
@@ -259,8 +249,8 @@ def verifyKzgProof (setup : TrustedSetup)
   -- The pairing check reads the points, so both are decoded here, as in EIP-4844.
   --
   -- Bytes that passed validation always decode, so neither decoding below fails.
-  let commitmentG1 ← uncompressG1 commitment
-  let proofG1 ← uncompressG1 proof
+  let commitmentG1 ← uncompressG1 commitment.bytes
+  let proofG1 ← uncompressG1 proof.bytes
   -- The pairing check of the proof.
   return verifyKzgProofImpl setup commitmentG1 z y proofG1
 
@@ -270,19 +260,19 @@ It hashes the domain, the degree bound, the number of openings, and each opening
 def computeVerifyKzgProofBatchChallenge (commitments : Array KZGCommitment) (zs ys : Array Fr)
     (proofs : Array KZGProof) : Fr :=
   -- The degree bound 4096, as 8 big-endian bytes.
-  let degreePoly : ByteArray := ⟨(Base.natToBytes 8 FIELD_ELEMENTS_PER_BLOB).toArray⟩
+  let degreePoly : ByteArray := ⟨(Base.ByteOrder.toBE 8 FIELD_ELEMENTS_PER_BLOB).toArray⟩
   -- The number of openings, as 8 big-endian bytes.
-  let numCommitments : ByteArray := ⟨(Base.natToBytes 8 commitments.size).toArray⟩
+  let numCommitments : ByteArray := ⟨(Base.ByteOrder.toBE 8 commitments.size).toArray⟩
   -- The hash input is the 16 ASCII bytes `RCKZGBATCH___V1_`, the bound and the number.
   --
   -- Then, per opening: the commitment, `z` and `y` as 32 big-endian bytes each, and the proof.
   let data := ((commitments.zip zs).zip (ys.zip proofs)).foldl
     (init := RANDOM_CHALLENGE_KZG_BATCH_DOMAIN ++ degreePoly ++ numCommitments)
     fun data ((commitment, z), (y, proof)) => data
-        ++ ⟨commitment.toArray⟩
+        ++ ⟨commitment.bytes.toArray⟩
         ++ ⟨(blsFieldToBytes z).toArray⟩
         ++ ⟨(blsFieldToBytes y).toArray⟩
-        ++ ⟨proof.toArray⟩
+        ++ ⟨proof.bytes.toArray⟩
   -- The challenge is the SHA-256 of that input, read as a big-endian integer.
   --
   -- It is reduced modulo the modulus of `Fr`.
@@ -352,7 +342,7 @@ def blobToKzgCommitment (setup : TrustedSetup) (blob : Blob) :
   -- Here `L_i` is the Lagrange form of the `G1` setup in bit-reversed order.
   let polynomial ← blobToPolynomial blob
   let commitmentG1 ← g1LincombPoints setup.g1LagrangeBrp.toArray polynomial
-  return compressG1 commitmentG1
+  return ⟨compressG1 commitmentG1⟩
 
 /-- Compute the KZG proof of a blob against a commitment.
 
@@ -395,8 +385,8 @@ def verifyBlobKzgProof (setup : TrustedSetup)
   -- The proof is validated as a `G1` point.
   let proof ← bytesToKzgProof proofBytes
   -- The pairing check reads the points, so both are decoded here, as in EIP-4844.
-  let commitmentG1 ← uncompressG1 commitment
-  let proofG1 ← uncompressG1 proof
+  let commitmentG1 ← uncompressG1 commitment.bytes
+  let proofG1 ← uncompressG1 proof.bytes
   -- The pairing check of the proof that `p(z) = y`.
   return verifyKzgProofImpl setup commitmentG1 evaluationChallenge y proofG1
 
@@ -442,8 +432,8 @@ def verifyBlobKzgProofBatch (setup : TrustedSetup)
                     | .ok p    => pure p
                     | .error _ => throw (.invalidProof (some i))
         -- The pairing check reads the points, so both are decoded here, as in EIP-4844.
-        let commitmentG1 ← uncompressG1 commitment
-        let proofG1 ← uncompressG1 proof
+        let commitmentG1 ← uncompressG1 commitment.bytes
+        let proofG1 ← uncompressG1 proof.bytes
 
         pure (commitments.push commitment, commitmentsG1.push commitmentG1,
               challenges.push challenge, ys.push y, proofs.push proof, proofsG1.push proofG1)

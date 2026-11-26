@@ -8,15 +8,7 @@ public import EthLib.Cryptography.Proofs.Secp256k1.Recovery
 
 Two parties with keys `a` and `b` derive the same secret: `a (b G) = b (a G)`.
 
-The equality holds for every pair of keys, the zero key included, with the same error.
-
-Two nonzero keys always derive a secret.
-
-The primitive returns `z` exactly when the key `Q` is a point of the curve other than `O`.
-
-The key `d` must also be nonzero.
-
-Then `z` is the `x` of `d Q`, as 32 big-endian bytes.
+Source: SEC 1 v2 §3.3.1.
 -/
 
 @[expose] public section
@@ -55,7 +47,9 @@ private theorem mul_generator_eq_infinity (k : Fn) : mul k generator = .infinity
   · rintro rfl
     exact mul_zero_left isOnCurve_generator
 
-/-- The two parties of an exchange derive the same secret, or the same error. -/
+/-- The two parties of an exchange derive the same secret, or the same error.
+
+It holds for every pair of keys, the zero key included. -/
 theorem ecdh_comm (a b : Fn) : ecdh a (mul b generator) = ecdh b (mul a generator) := by
   have hG := isOnCurve_generator
   unfold ecdh
@@ -111,7 +105,7 @@ theorem ecdh_eq_ok_iff {sk : Fn} {pk : Point} {z : Vector UInt8 32} :
       pk ≠ .infinity ∧ pk.isOnCurve = true ∧ sk ≠ 0 ∧
         ∃ x y : Fp, (Point.affine x y).isOnCurve = true ∧
           toPoint (.affine x y) = Fn.toZMod sk • toPoint pk ∧
-          z.toList = Base.natToBytes 32 x.val := by
+          z.toList = (Base.ByteOrder.toBE 32 x.val).toList := by
   constructor
   · intro h
     unfold ecdh at h

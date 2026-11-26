@@ -104,15 +104,15 @@ theorem canonical_option : ∀ selectors options selector data value,
 
 /-- A nonempty byte sequence is its first byte followed by its remaining bytes. -/
 theorem firstByte_append_tail (data : Bytes) (nonempty : 0 < data.size) :
-    #[data[0]?.getD 0] ++ data.extract 1 data.size = data := by
+    ⟨#[data[0]?.getD 0]⟩ ++ data.extract 1 data.size = data := by
   -- The first one-byte slice contains exactly the selector byte.
-  have first : data.extract 0 1 = #[data[0]?.getD 0] := by
+  have first : data.extract 0 1 = ⟨#[data[0]?.getD 0]⟩ := by
     have encoded := uintBytes_readUint_slice data 0 1 (by omega)
     simpa [uintBytes_zero, uintBytes_succ, readUint_zero, readUint_succ, nonempty,
-      Array.getElem?_eq_getElem nonempty]
+      getElem?_pos data 0 nonempty]
       using encoded.symm
   -- The selector slice and payload slice are adjacent and cover the whole message.
-  rw [← first, extract_join data (by omega) (by omega), Array.extract_size]
+  rw [← first, extract_join data (by omega) (by omega), ByteArray.extract_zero_size]
 
 /-- Canonical option encodings give a canonical union encoding, including its selector. -/
 theorem canonical_union {selectors : List Nat} {options : List Desc} {data : Bytes} {value : Value}
@@ -149,7 +149,7 @@ theorem canonical_vector {element : Desc} {count : Nat} {data : Bytes} {value : 
   -- Re-encoding each element recovers its slice, and canonical assembly recovers the whole byte string.
   cases domain with
   | vector sized _ =>
-    simp [serialize, sized, serializeSequence,
+    simp [serialize, sized, assembleSequence,
       serializeEach_of_deserializeEach canonical slices values decoded,
       Bind.bind, Except.bind, vectorSlices_assemble positive parts]
 
@@ -168,7 +168,7 @@ theorem canonical_list {element : Desc} {limit : Nat} {data : Bytes} {value : Va
   -- Re-encoding each element recovers its slice, and canonical assembly recovers the whole byte string.
   cases domain with
   | list within _ =>
-    simp [serialize, within, serializeSequence,
+    simp [serialize, within, assembleSequence,
       serializeEach_of_deserializeEach canonical slices values decoded,
       Bind.bind, Except.bind, listSlices_assemble parts]
 
@@ -187,7 +187,7 @@ theorem canonical_progressiveList {element : Desc} {limit : Option Nat} {data : 
   -- Re-encoding each element recovers its slice, and canonical assembly recovers the whole byte string.
   have counted : values.length = slices.length :=
     (deserializeEach_length slices values decoded).symm
-  simp [serialize, serializeSequence,
+  simp [serialize, assembleSequence,
     boundCheck_of_withinBound limit _ (counted ▸ listSlices_within parts),
     serializeEach_of_deserializeEach canonical slices values decoded,
     Bind.bind, Except.bind, listSlices_assemble parts]

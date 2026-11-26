@@ -536,6 +536,11 @@ eth_consensus_reqresp_response_bounds(
 );
 
 extern lean_object*
+eth_consensus_reqresp_decode_chunk(
+  lean_object* args
+);
+
+extern lean_object*
 eth_consensus_reqresp_response_valid(
   lean_object* args
 );
@@ -1287,7 +1292,7 @@ py_consensus_builder_preferences_failures(
   PyObject* self,
   PyObject* args
 ) {
-  return call_pyvalue_export(eth_consensus_builder_preferences_failures, args, 8, SSZ_ERROR);
+  return call_pyvalue_export(eth_consensus_builder_preferences_failures, args, 9, SSZ_ERROR);
 }
 
 PyObject*
@@ -1304,6 +1309,17 @@ py_consensus_relay_submission_bid(
   PyObject* args
 ) {
   return call_pyvalue_export(eth_consensus_relay_submission_bid, args, 4, SSZ_ERROR);
+}
+
+extern lean_object*
+eth_consensus_relay_verify_bid_value(lean_object* args);
+
+PyObject*
+py_consensus_relay_verify_bid_value(
+  PyObject* self,
+  PyObject* args
+) {
+  return call_pyvalue_export(eth_consensus_relay_verify_bid_value, args, 6, SSZ_ERROR);
 }
 
 extern lean_object*
@@ -2622,6 +2638,14 @@ py_consensus_reqresp_response_bounds(
   PyObject* args
 ) {
   return call_pyvalue_export(eth_consensus_reqresp_response_bounds, args, 3, CONSENSUS_ERROR);
+}
+
+PyObject*
+py_consensus_reqresp_decode_chunk(
+  PyObject* self,
+  PyObject* args
+) {
+  return call_pyvalue_export(eth_consensus_reqresp_decode_chunk, args, 6, CONSENSUS_ERROR);
 }
 
 PyObject*

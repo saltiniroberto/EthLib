@@ -1,6 +1,7 @@
 module
 
-public import EthLib.Base.BigEndian
+public import EthLib.Networking.Encoding.ByteReader
+public import EthLib.Base.ByteOrder
 
 /-!
 # yamux frames
@@ -9,7 +10,7 @@ yamux carries many streams over one connection, with flow control for each strea
 
 The source is the section Framing of [yamux][yamux].
 
-[yamux]: https://github.com/libp2p/specs/blob/4facaf9876da1eb7d6e066982010c81495ebb965/yamux/README.md#framing
+[yamux]: https://github.com/libp2p/specs/blob/1a084b699d9d424ca7027edf350cf4184cd6f5bd/yamux/README.md#framing
 -/
 
 @[expose] public section
@@ -26,9 +27,9 @@ def headerSize : Nat :=
   -- Framing: 8 + 8 + 16 + 32 + 32 bits, so each header has a 12 byte overhead.
   12
 
-/-- The window of a new stream in bytes: 256 KiB, from the section Flow Control. -/
+/-- The window of a new stream in bytes, from the section Flow Control. -/
 def initialWindow : Nat :=
-  -- The section writes 256KiB, then 256KB; EthLib reads both as 256 KiB, that is `2^18` bytes.
+  -- Flow Control: each stream starts with a window of 256KiB, that is `2^18` bytes.
   262144
 
 /-- The flag that starts a stream, from the section Flag Field. -/
@@ -136,8 +137,9 @@ def encode (frame : Frame) : List UInt8 :=
   -- All fields are big endian, and the version is always 0, the initial version.
   --
   -- The data of a data frame follows the header.
-  [0, frame.kind.toUInt8] ++ Base.natToBytes 2 frame.flags.toNat ++
-    Base.natToBytes 4 frame.streamId.toNat ++ Base.natToBytes 4 frame.length.toNat ++
+  [0, frame.kind.toUInt8] ++ (Base.ByteOrder.toBE 2 frame.flags.toNat).toList ++
+    (Base.ByteOrder.toBE 4 frame.streamId.toNat).toList
+      ++ (Base.ByteOrder.toBE 4 frame.length.toNat).toList ++
     frame.data.data.toList
 
 /-- The frame at the start of the input, and the bytes after it. -/
@@ -153,15 +155,14 @@ def decode (bytes : List UInt8) : Except YamuxError (Frame × List UInt8) := do
   let kindByte := header.getD 1 0
   let some kind := Kind.ofUInt8? kindByte | throw (.unknownKind kindByte)
   -- Flags (16 bits), big endian; bits other than SYN, ACK, FIN and RST are kept, not checked.
-  let flags := (Base.bytesToNat ((header.drop 2).take 2)).toUInt16
+  let flags := (Base.ByteOrder.ofBE ((header.drop 2).take 2)).toUInt16
   -- StreamID (32 bits), big endian.
-  let streamId := (Base.bytesToNat ((header.drop 4).take 4)).toUInt32
+  let streamId := (Base.ByteOrder.ofBE ((header.drop 4).take 4)).toUInt32
   -- Length (32 bits), big endian.
-  let length := (Base.bytesToNat (header.drop 8)).toUInt32
+  let length := (Base.ByteOrder.ofBE (header.drop 8)).toUInt32
   -- Length Field: a Data frame has that many bytes after the header, and other types none.
   let size := if kind = .data then length.toNat else 0
-  let body := rest.take size
-  if body.length < size then throw (.truncated size body.length)
-  return (⟨kind, flags, streamId, length, ⟨body.toArray⟩⟩, rest.drop size)
+  let (body, after) ← Encoding.ByteReader.bytes (.truncated size) size rest
+  return (⟨kind, flags, streamId, length, ⟨body.toArray⟩⟩, after)
 
 end EthLib.Networking.Libp2p.Yamux

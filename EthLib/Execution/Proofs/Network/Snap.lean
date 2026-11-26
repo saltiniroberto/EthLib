@@ -5,39 +5,16 @@ public import EthLib.Execution.Proofs.Network.Protocol
 public import EthLib.Execution.Proofs.Network.Status
 public import EthLib.Execution.Proofs.Trie.HexPrefix
 public import EthLib.Serialization.Proofs.Rlp.Encodings
+import EthLib.Base.Proofs.CodeInjective
 
 /-!
 # Proofs: the snap capability
-
-A snap version and its number determine each other.
-
-The count of message IDs for snap and eth is nonzero exactly on the capabilities of their versions.
-
-An account reads back from its slim form.
-
-The slim form of an account converts to its full encoding, and a byte string is never a body.
 
 Each message reads back from its ID and its RLP item on the versions that use its ID.
 
 The decoder reads no other ID or item, so it takes no field more or less than the writer writes.
 
-Each access list that the decoder reads keeps the bytes of its own encoding.
-
-snap/2 rejects the trie node messages of snap/1, and snap/1 the access list messages of snap/2.
-
-A version rejects every ID from its count of IDs on as unknown, but not the ID just below it.
-
 The codes and the access lists of a checked answer are the requested ones.
-
-A full trie node path reads as its 64 nibbles.
-
-A compact path of fewer than 32 bytes reads as the nibbles it encodes.
-
-The lists of paths read as one group each, in order.
-
-A group of paths asks for one node per path after the first, and for one node if it has one path.
-
-Every prefix of an accepted TrieNodes answer is accepted.
 -/
 
 @[expose] public section
@@ -253,6 +230,30 @@ theorem kept_of_decode {version : SnapVersion} {id : Nat} {data : ByteArray} {m 
     -- The data is the encoding of the item, so the reader pairs each list with its encoding.
     exact ((ofItem_eq_ok_iff (encode_decode data _ hd)).mp h).2.2.2
 
+/-- A message whose ID a version uses reads back from its ID and the bytes of its encoding.
+
+Its access lists must keep the bytes of their own encodings. -/
+theorem decode_encode {version : SnapVersion} {m : SnapMessage} {data : ByteArray}
+    (hm : usesId version m.id) (hk : m.Kept) (h : m.encode = .ok data) :
+    decode version m.id data = .ok m := by
+  -- The encoder writes the RLP item of the message, so the RLP decoder reads that item back.
+  have hd : Serialization.Rlp.encode m.toItem = .ok data := by
+    unfold encode at h
+    cases he : Serialization.Rlp.encode m.toItem <;> simp_all [Except.mapError]
+  simp [decode, Serialization.Rlp.decode_encode _ _ hd, ofItem_toItem hm hk hd, Except.mapError,
+    bind, Except.bind]
+
+/-- Two messages whose ID a version uses, with one ID and one encoding, are the same message.
+
+The access lists of each must keep the bytes of their own encodings. -/
+theorem eq_of_encode_eq {version : SnapVersion} {m₁ m₂ : SnapMessage} {data : ByteArray}
+    (hm₁ : usesId version m₁.id) (hk₁ : m₁.Kept) (h₁ : m₁.encode = .ok data)
+    (hk₂ : m₂.Kept) (h₂ : m₂.encode = .ok data) (hid : m₁.id = m₂.id) : m₁ = m₂ := by
+  -- Both decode from the same ID and the same bytes, and decoding is a function.
+  have e₂ := decode_encode (hid ▸ hm₁) hk₂ h₂
+  rw [← hid, decode_encode hm₁ hk₁ h₁] at e₂
+  exact Except.ok.inj e₂
+
 /-- snap/2 rejects GetTrieNodes and TrieNodes, which it removes. -/
 theorem ofItem_snap2_trieNodes (item : Item) (data : ByteArray) :
     ofItem .snap2 0x06 item data = .error (.unknownId 0x06) ∧
@@ -299,8 +300,7 @@ end SnapMessage
 /-- Two errors with one code come from one constructor. -/
 theorem SnapError.code_injective (e₁ e₂ : SnapError) (h : e₁.code = e₂.code) :
     e₁.ctorIdx = e₂.ctorIdx := by
-  cases e₁ <;> cases e₂ <;>
-    first | rfl | (simp only [SnapError.code] at h; exact absurd h (by decide))
+  code_injective SnapError.code
 
 /-- The codes of a checked answer hash to requested hashes, in the order of the request. -/
 theorem sublist_of_codesAnswer {requested : List Hash32} {codes : List ByteArray}

@@ -7,23 +7,11 @@ public import EthLib.Execution.Proofs.Evm.Gas.StateGas
 /-!
 # Proofs: `Evm.Call.Create`
 
-From Glamsterdam, a creation costs 12000 execution gas, and a dead new address 183600 state gas.
+The theorems below cover the prices, the first checks and the refill of a creation.
 
-No creation pays state gas before Glamsterdam.
+They also cover the code that it deploys and the memory that it leaves.
 
-A creation that fails its first checks leaves the state and the accessed addresses as they were.
-
-A creation whose init code fails gives back the state gas of the new account.
-
-From Glamsterdam, the code of a creation costs 1530 state gas a byte.
-
-No creation deploys code longer than 65536 bytes from Glamsterdam.
-
-A creation keeps the size of memory a multiple of 32, and so does the creator once it ends.
-
-So does every instruction that may send a message.
-
-A successful CREATE or CREATE2 reads its operands from the stack, grows memory, then launches.
+Every instruction that may send a message keeps the size of memory a multiple of 32.
 -/
 
 @[expose] public section
@@ -40,13 +28,13 @@ variable {fork : Fork} {Meter : Type} [GasMeter Meter]
 
 /-- From Glamsterdam, a creation costs 12000 before memory, init code and hash. -/
 theorem createBaseCost_of_glamsterdam (h : fork ≥ .glamsterdam) : createBaseCost fork = 12000 := by
-  simp only [createBaseCost, h, ite_true]
+  simp only [createBaseCost, gasSchedule, h, ite_true]
   rfl
 
 /-- Before Glamsterdam, a creation costs 32000 before memory, init code and hash. -/
 theorem createBaseCost_of_lt (h : fork < .glamsterdam) : createBaseCost fork = 32000 := by
   have : ¬fork ≥ .glamsterdam := Nat.not_le_of_lt h
-  simp only [createBaseCost, this, ite_false]
+  simp only [createBaseCost, gasSchedule, this, ite_false]
   rfl
 
 /-- Before Glamsterdam, a creation pays no state gas. -/
@@ -59,6 +47,7 @@ theorem createNewAccountStateGas_of_lt (h : fork < .glamsterdam) (state : Transa
 theorem createNewAccountStateGas_of_glamsterdam (h : fork ≥ .glamsterdam)
     (state : TransactionState) (address : Address) :
     createNewAccountStateGas fork state address =
+      -- A dead new address costs 183600 state gas.
       if state.isAccountAlive address then 0 else NEW_ACCOUNT_STATE_GAS := by
   by_cases alive : state.isAccountAlive address <;>
     simp [createNewAccountStateGas, h, alive]
@@ -248,7 +237,7 @@ theorem stateGasUsed_chargeCodeDeposit (h : fork ≥ .glamsterdam) {meter after 
 theorem depositCode_size_le (h : fork ≥ .glamsterdam) {snapshot : TransactionState}
     {evm after : Evm fork Meter} (hd : depositCode fork snapshot evm = .ok after)
     (ok : after.error = none) : evm.output.size ≤ 65536 := by
-  have hm : maxCodeSize fork = some 65536 := by simp only [maxCodeSize, h, ite_true]
+  have hm : maxCodeSize fork = some 65536 := by simp only [maxCodeSize, gasSchedule, h, ite_true]
   unfold depositCode at hd
   dsimp only at hd
   split at hd

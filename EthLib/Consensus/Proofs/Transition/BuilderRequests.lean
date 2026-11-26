@@ -7,13 +7,13 @@ public import EthLib.Consensus.Transition.BuilderRequests
 /-!
 # Proofs: the deposits and exits of builders
 
-A deposit without the builder prefix changes nothing.
-
-A new builder takes the index of a builder only if that builder is withdrawable with no balance.
+These proofs state what a builder deposit and a builder exit request do to the registry of builders.
 
 A deposit adds its amount to the sum of the builder balances, or changes nothing.
 
-It adds the amount when its key is known, or when its key is new and its signature is valid.
+It adds the amount only when its credentials carry the builder prefix.
+
+It then adds it when its key is known, or when its key is new and its signature is valid.
 
 An exit request either changes nothing, or starts the exit of one builder.
 

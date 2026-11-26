@@ -1,27 +1,16 @@
 module
 
-public import EthLib.Base.Proofs.BigEndian
+public import EthLib.Base.Proofs.ByteOrder
 public import EthLib.Cryptography.Proofs.Aes.Ctr
 public import EthLib.Cryptography.Proofs.Aes.Gcm
 public import EthLib.Networking.Discv5.Packet
 import EthLib.Base.Proofs.Bytes
+import EthLib.Base.Proofs.CodeInjective
 
 /-!
 # `Networking.Proofs.Discv5.Packet`
 
-Properties of the discv5 packet encoding.
-
-- Masking twice under one key and IV gives the data back.
-- The mask of a prefix is the prefix of the mask.
-- The authdata of each flag decodes back from its bytes.
-- A packet that the encoder writes decodes back.
-- Bytes decode to authdata or a packet exactly when they encode it and pass the decoder's checks.
-- The additional data of a message is the masking IV and the unmasked bytes up to the message.
-- A destination reads that additional data from the packet bytes and their masking IV.
-- A message that the encryption writes decrypts back, also after encoding and decoding.
-- A message that decrypts is the encryption of its plaintext.
-- A sealed message packet decodes back and opens to its plaintext.
-- A decoded packet that opens under a key seals to its packet bytes under that key.
+Properties of the discv5 packet encoding, of its masking and of the encryption of its messages.
 -/
 
 @[expose] public section
@@ -80,7 +69,7 @@ theorem length_mask (destId : NodeId) (iv : Vector UInt8 16) (data : List UInt8)
   simp only [mask, Array.length_toList]
   exact this
 
-/-- Masking twice gives the data back. -/
+/-- Masking twice under one key and IV gives the data back. -/
 theorem mask_mask (destId : NodeId) (iv : Vector UInt8 16) (data : List UInt8) :
     mask destId iv (mask destId iv data) = data := by
   have := Aes.ctr_ctr (Aes.ciph .aes128 (maskingKey destId)) 128 iv ⟨data.toArray⟩
@@ -120,9 +109,10 @@ theorem Authdata.decode_encode (a : Authdata) (h : a.fits = true) :
   cases a with
   | message srcId => simp [Authdata.decode, Authdata.flag, Authdata.encode, vectorOf_toList]
   | whoareyou idNonce enrSeq =>
-    have hl : (Base.natToBytes 8 enrSeq.toNat).length = 8 := Base.natToBytes_length 8 _
-    have hv : Base.bytesToNat (Base.natToBytes 8 enrSeq.toNat) = enrSeq.toNat :=
-      Base.bytesToNat_natToBytes_of_lt (by have := enrSeq.toNat_lt; simpa using this)
+    have hl : ((Base.ByteOrder.toBE 8 enrSeq.toNat).toList).length
+        = 8 := Base.ByteOrder.length_toList_toBE 8 _
+    have hv : Base.ByteOrder.ofBE ((Base.ByteOrder.toBE 8 enrSeq.toNat).toList) = enrSeq.toNat :=
+      Base.ByteOrder.ofBE_toBE_of_lt (by have := enrSeq.toNat_lt; simpa using this)
     simp [Authdata.decode, Authdata.flag, Authdata.encode, List.take_left',
       List.drop_left', vectorOf_toList, hl, hv]
   | handshake srcId idSignature ephemeralPubkey record =>
@@ -164,14 +154,14 @@ private theorem Authdata.encode_of_decode {flag : UInt8} {bytes : List UInt8} {a
         cases h
         -- The last 8 bytes are below 2^64, so they read back as the sequence number.
         have hd : (bytes.drop 16).length = 8 := by simp [hl]
-        have hlt : Base.bytesToNat (bytes.drop 16) < 2 ^ 64 := by
-          have := Base.bytesToNat_lt (bytes.drop 16)
+        have hlt : Base.ByteOrder.ofBE (bytes.drop 16) < 2 ^ 64 := by
+          have := Base.ByteOrder.ofBE_lt (bytes.drop 16)
           rw [hd] at this
           simpa using this
         refine ⟨h1.symm, rfl, ?_⟩
         simp only [Authdata.encode, toList_of_vectorOf hv, UInt64.toNat_ofNat',
           Nat.mod_eq_of_lt hlt]
-        rw [← hd, Base.natToBytes_bytesToNat, List.take_append_drop]
+        rw [← hd, Base.ByteOrder.toList_toBE_ofBE, List.take_append_drop]
       · cases h
     · cases h
   split at h
@@ -224,7 +214,7 @@ theorem Authdata.le_length_encode (a : Authdata) : 24 ≤ a.encode.length := by
   cases a with
   | message srcId => simp [Authdata.encode]
   | whoareyou idNonce enrSeq =>
-    simp [Authdata.encode, Base.natToBytes_length]
+    simp [Authdata.encode]
   | handshake srcId idSignature ephemeralPubkey record =>
     simp only [Authdata.encode, List.length_append, List.length_cons, List.length_nil,
       Vector.length_toList]
@@ -275,10 +265,10 @@ theorem Packet.decode_encode {destId : NodeId} {p : Packet} {bytes : ByteArray}
   subst hh
   -- Name the parts of the header.
   generalize hae : a.encode = ae at hL hmax ⊢
-  generalize hnb : Base.natToBytes 2 ae.length = nb at hmax ⊢
-  have hnbl : nb.length = 2 := by rw [← hnb]; exact Base.natToBytes_length 2 _
-  have hnbv : Base.bytesToNat nb = ae.length := by
-    rw [← hnb]; exact Base.bytesToNat_natToBytes_of_lt (by simpa using hL)
+  generalize hnb : (Base.ByteOrder.toBE 2 ae.length).toList = nb at hmax ⊢
+  have hnbl : nb.length = 2 := by rw [← hnb]; exact Base.ByteOrder.length_toList_toBE 2 _
+  have hnbv : Base.ByteOrder.ofBE nb = ae.length := by
+    rw [← hnb]; exact Base.ByteOrder.ofBE_toBE_of_lt (by simpa using hL)
   have hnl : nonce.toList.length = 12 := by simp
   let pre : List UInt8 := [0x64, 0x69, 0x73, 0x63, 0x76, 0x35, 0x00, 0x01, a.flag]
   have hH : PROTOCOL_ID ++ VERSION ++ [a.flag] ++ nonce.toList ++ nb ++ ae =
@@ -415,25 +405,25 @@ private theorem Packet.encode_and_checks_of_decode {destId : NodeId} {bytes : By
   -- Name the bytes after the IV, their unmasked form and the size of the authdata.
   generalize hR : bytes.data.toList.drop 16 = R at *
   generalize hP : mask destId iv R = P at *
-  generalize hL : Base.bytesToNat ((P.drop 21).take 2) = L at *
+  generalize hL : Base.ByteOrder.ofBE ((P.drop 21).take 2) = L at *
   unfold STATIC_HEADER_SIZE at *
   have hPl : P.length = R.length := by rw [← hP, length_mask]
   obtain ⟨hflagEq, hfits, hae⟩ := Authdata.encode_of_decode ha
   -- The size field has two bytes, so the authdata has fewer than 2^16 bytes.
   have hsizeBytes : ((P.drop 21).take 2).length = 2 := by simp; omega
   have hLlt : L < 2 ^ 16 := by
-    have := Base.bytesToNat_lt ((P.drop 21).take 2)
+    have := Base.ByteOrder.ofBE_lt ((P.drop 21).take 2)
     rw [hsizeBytes] at this
     omega
   have hael : a.encode.length = L := by rw [hae]; simp; omega
-  have hsizeField : Base.natToBytes 2 a.encode.length = (P.drop 21).take 2 := by
-    have := Base.natToBytes_bytesToNat ((P.drop 21).take 2)
+  have hsizeField : (Base.ByteOrder.toBE 2 a.encode.length).toList = (P.drop 21).take 2 := by
+    have := Base.ByteOrder.toList_toBE_ofBE ((P.drop 21).take 2)
     rwa [hsizeBytes, hL, ← hael] at this
   -- The unmasked header is the first `23 + L` bytes of the unmasked data.
   have h8 : 8 < P.length := by omega
   have hPflag : P[8] = flag := (List.getElem?_eq_some_iff.mp hflag).2
   have hheader : PROTOCOL_ID ++ VERSION ++ [a.flag] ++ nonce.toList ++
-      Base.natToBytes 2 a.encode.length ++ a.encode = P.take (23 + L) := by
+      (Base.ByteOrder.toBE 2 a.encode.length).toList ++ a.encode = P.take (23 + L) := by
     rw [show 23 + L = 8 + (1 + (12 + (2 + L))) by omega, List.take_add, List.take_add,
       List.take_add, List.take_add, ← hprotocol, hflagEq, toList_of_vectorOf hnonce, hsizeField,
       hae, List.drop_eq_getElem_cons h8, hPflag]
@@ -479,7 +469,7 @@ theorem Packet.decode_eq_ok_iff (destId : NodeId) (bytes : ByteArray) (p : Packe
 /-- The header bytes that the encoder writes, with the size of the authdata below 2^16. -/
 private theorem Header.encode_eq_ok {h : Header} {hb : List UInt8} (he : h.encode = .ok hb) :
     hb = PROTOCOL_ID ++ VERSION ++ [h.authdata.flag] ++ h.nonce.toList ++
-        Base.natToBytes 2 h.authdata.encode.length ++ h.authdata.encode ∧
+        (Base.ByteOrder.toBE 2 h.authdata.encode.length).toList ++ h.authdata.encode ∧
       h.authdata.encode.length < 2 ^ 16 ∧ h.authdata.fits = true := by
   unfold Header.encode at he
   dsimp only at he
@@ -496,18 +486,19 @@ The size field is read from the bytes that follow the header too. -/
 private theorem Header.encode_size_field {h : Header} {hb : List UInt8} (X : List UInt8)
     (he : h.encode = .ok hb) :
     hb.length = STATIC_HEADER_SIZE + h.authdata.encode.length ∧
-      Base.bytesToNat (((hb ++ X).drop 21).take 2) = h.authdata.encode.length := by
+      Base.ByteOrder.ofBE (((hb ++ X).drop 21).take 2) = h.authdata.encode.length := by
   obtain ⟨rfl, hL, -⟩ := Header.encode_eq_ok he
   generalize h.authdata.encode = ae at hL ⊢
-  have hnb : (Base.natToBytes 2 ae.length).length = 2 := Base.natToBytes_length 2 _
+  have hnb : ((Base.ByteOrder.toBE 2 ae.length).toList).length
+      = 2 := Base.ByteOrder.length_toList_toBE 2 _
   have hs : (PROTOCOL_ID ++ VERSION ++ [h.authdata.flag] ++ h.nonce.toList).length = 21 := by
     simp [PROTOCOL_ID, VERSION]
   generalize PROTOCOL_ID ++ VERSION ++ [h.authdata.flag] ++ h.nonce.toList = s at hs ⊢
   refine ⟨by simp only [List.length_append, hnb, hs]; unfold STATIC_HEADER_SIZE; omega, ?_⟩
-  rw [show s ++ Base.natToBytes 2 ae.length ++ ae ++ X =
-    s ++ (Base.natToBytes 2 ae.length ++ (ae ++ X)) by simp, List.drop_left' hs,
+  rw [show s ++ (Base.ByteOrder.toBE 2 ae.length).toList ++ ae ++ X =
+    s ++ ((Base.ByteOrder.toBE 2 ae.length).toList ++ (ae ++ X)) by simp, List.drop_left' hs,
     List.take_left' hnb]
-  exact Base.bytesToNat_natToBytes_of_lt (by simpa using hL)
+  exact Base.ByteOrder.ofBE_toBE_of_lt (by simpa using hL)
 
 /-- Two headers whose bytes start the same list are equal, and so are their bytes. -/
 private theorem Header.eq_of_encode_append {h h' : Header} {hb hb' X Y : List UInt8}
@@ -524,7 +515,7 @@ private theorem Header.eq_of_encode_append {h h' : Header} {hb hb' X Y : List UI
   obtain ⟨e2, -, hf'⟩ := Header.encode_eq_ok he'
   have h12 := e1.symm.trans e2
   obtain ⟨h12, hA⟩ := List.append_inj' h12 hae
-  obtain ⟨h12, -⟩ := List.append_inj' h12 (by simp [Base.natToBytes_length])
+  obtain ⟨h12, -⟩ := List.append_inj' h12 (by simp)
   obtain ⟨h12, hN⟩ := List.append_inj' h12 (by simp)
   have hflag : h.authdata.flag = h'.authdata.flag := by
     have := (List.append_inj' h12 (by simp)).2
@@ -573,7 +564,7 @@ theorem Packet.messageAd_of_decode {destId : NodeId} {bytes : ByteArray} {p : Pa
     (hd : Packet.decode destId bytes = .ok p) :
     let plain := mask destId p.maskingIv (bytes.data.toList.drop 16)
     p.messageAd = .ok ⟨(bytes.data.toList.take 16 ++
-      plain.take (STATIC_HEADER_SIZE + Base.bytesToNat ((plain.drop 21).take 2))).toArray⟩ := by
+      plain.take (STATIC_HEADER_SIZE + Base.ByteOrder.ofBE ((plain.drop 21).take 2))).toArray⟩ := by
   obtain ⟨hb, hh, e1, -⟩ := Packet.encode_eq_ok (Packet.encode_of_decode hd)
   obtain ⟨X, hX⟩ : ∃ X, mask destId p.maskingIv (mask destId p.maskingIv hb ++
       p.message.data.toList) = hb ++ X := ⟨_, mask_masked_append ..⟩
@@ -723,9 +714,7 @@ open EthLib.Networking.Discv5
 theorem _root_.EthLib.Networking.Discv5.PacketError.code_injective
     (e₁ e₂ : PacketError) (h : e₁.code = e₂.code) :
     e₁.ctorIdx = e₂.ctorIdx := by
-  -- Two distinct constructors have two distinct literal codes, which `decide` separates.
-  cases e₁ <;> cases e₂ <;>
-    first | rfl | (simp only [PacketError.code] at h; exact absurd h (by decide))
+  code_injective PacketError.code
 
 end
 

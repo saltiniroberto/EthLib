@@ -65,20 +65,12 @@ def forkchoiceUpdatedVersion (method : String) : Option Nat :=
 
 /-- The response to an `engine_forkchoiceUpdated` request, against a tree of known blocks.
 
-The execution layer may know a finalized block, from an earlier update.
-
-The terminal block hash and number are zero, since the check of the method does not read them. -/
+The execution layer may know a finalized block, from an earlier update. -/
 def forkchoiceUpdatedOf (args : PyValue × PyValue × PyValue × Nat × PyValue) :
     Result PyValue := do
   let (config, tree, finalized, terminalTotalDifficulty, request) := args
-  -- The terminal total difficulty is a Python integer below `2^256`.
-  unless terminalTotalDifficulty < 2 ^ 256 do
-    rejectArgument none
-      s!"config: a terminal total difficulty of {terminalTotalDifficulty}, not below 2^256"
-  let transition : TransitionConfiguration := {
-    terminalTotalDifficulty := BitVec.ofNat 256 terminalTotalDifficulty
-    terminalBlockHash := 0
-    terminalBlockNumber := 0 }
+  -- The terminal total difficulty must be below `2^256`.
+  let transition ← transitionOf terminalTotalDifficulty
   -- The configuration is an object as for `engine_newPayload`.
   --
   -- It holds the chain ID, the deposit contract address and the activations.
@@ -87,7 +79,8 @@ def forkchoiceUpdatedOf (args : PyValue × PyValue × PyValue × Nat × PyValue)
   let .arr entries := tree.toJson | rejectArgument none "tree: not an array"
   let tree ← entries.toList.mapM knownOfJson
   -- A tree holds each block once, so two payloads with one block hash are malformed input.
-  unless (tree.map (·.1)).Nodup do rejectArgument none "tree: two payloads with one block hash"
+  unless (Base.firstRepeated (tree.map (·.1))).isNone do
+    rejectArgument none "tree: two payloads with one block hash"
   -- The finalized block that the execution layer knows is a block hash, or `null` for none.
   let finalized := finalized.toJson
   -- The known finalized block is an input that the export reads itself, so its errors have code 0.

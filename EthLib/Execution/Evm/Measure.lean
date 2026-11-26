@@ -13,15 +13,7 @@ public import EthLib.Execution.Evm.Instructions.TransientStorage
 /-!
 # `Evm.Measure`
 
-The measure of a frame is twice the execution gas it holds, plus one while it runs.
-
-The gas it holds is its gas left, plus the gas that a rollback of its state gas gives back.
-
 Each instruction that succeeds lowers the measure of a running frame.
-
-An instruction that lets the frame run charges at least 1 gas, so it lowers the measure by 2.
-
-STOP, RETURN and REVERT can charge nothing, but they stop the frame, so they lower it by 1.
 
 So the execution of a frame ends, and needs no bound on its number of steps.
 
@@ -43,6 +35,7 @@ variable {fork : Fork} {Meter : Type} [GasMeter Meter]
 
 /-- The measure of a frame: twice the execution gas it holds, plus one while it runs. -/
 def measure (evm : Evm fork Meter) : Nat :=
+  -- The gas it holds is its gas left, plus the gas that a rollback of its state gas gives back.
   2 * GasMeter.gasHeld evm.gas + evm.running.toNat
 
 /-- A step lowers the measure of the frame `evm`.
@@ -92,6 +85,7 @@ theorem Pays.drain [LawfulGasMeter Meter] {a b : Evm fork Meter} {n : Nat} (h : 
 /-- A frame that pays at least 1 gas and still runs has a lower measure. -/
 theorem Pays.measure_lt {a b : Evm fork Meter} (h : Pays 1 a b) (running : a.running = true) :
     measure b < measure a := by
+  -- An instruction that lets the frame run charges at least 1 gas, so it lowers the measure by 2.
   have := h.gasHeld
   simp only [measure, h.running, running]
   omega
@@ -100,6 +94,9 @@ theorem Pays.measure_lt {a b : Evm fork Meter} (h : Pays 1 a b) (running : a.run
 theorem measure_lt_of_stop {a b : Evm fork Meter}
     (gas : GasMeter.gasHeld b.gas ≤ GasMeter.gasHeld a.gas) (stops : b.running = false)
     (running : a.running = true) : measure b < measure a := by
+  -- STOP, RETURN and REVERT can charge nothing, but they stop the frame.
+  --
+  -- So they lower the measure by 1.
   simp only [measure, stops, running]
   simp only [Bool.toNat_false, Bool.toNat_true]
   omega
@@ -191,19 +188,22 @@ theorem popTopics_pays {evm after : Evm fork Meter} {n : Nat} {topics : List Byt
 
 /-- The price of BALANCE is at least 1 at every fork. -/
 theorem one_le_balanceCost (fork : Fork) (cold : Bool) : 1 ≤ balanceCost fork cold := by
-  unfold balanceCost accountAccessCost gasSchedule
+  unfold balanceCost accountAccessCost
+  dsimp only [gasSchedule]
   repeat' split
   all_goals decide
 
 /-- The price of EXTCODESIZE is at least 1 at every fork. -/
 theorem one_le_externalBaseCost (fork : Fork) (cold : Bool) : 1 ≤ externalBaseCost fork cold := by
-  unfold externalBaseCost accountAccessCost gasSchedule
+  unfold externalBaseCost accountAccessCost
+  dsimp only [gasSchedule]
   repeat' split
   all_goals decide
 
 /-- The price of EXTCODEHASH is at least 1 at every fork. -/
 theorem one_le_extcodehashCost (fork : Fork) (cold : Bool) : 1 ≤ extcodehashCost fork cold := by
-  unfold extcodehashCost accountAccessCost gasSchedule
+  unfold extcodehashCost accountAccessCost
+  dsimp only [gasSchedule]
   repeat' split
   all_goals decide
 
@@ -216,9 +216,11 @@ theorem one_le_sloadCost (fork : Fork) (cold : Bool) : 1 ≤ sloadCost fork cold
 /-- The price of SSTORE is at least 1 at every fork. -/
 theorem one_le_sstoreCost (fork : Fork) (original current new : U256) (cold : Bool) :
     1 ≤ sstoreCost fork original current new cold := by
-  unfold sstoreCost sstoreReadCost sstoreResetCost sloadCost
+  unfold sstoreCost sstoreReadCost sstoreResetCost
+  dsimp only [gasSchedule]
+  unfold sloadCost
   repeat' split
-  all_goals simp only [COLD_STORAGE_ACCESS, STORAGE_SET, COLD_STORAGE_WRITE, WARM_ACCESS,
+  all_goals try simp only [COLD_STORAGE_ACCESS, STORAGE_SET, COLD_STORAGE_WRITE, WARM_ACCESS,
     STORAGE_WRITE]
   all_goals omega
 

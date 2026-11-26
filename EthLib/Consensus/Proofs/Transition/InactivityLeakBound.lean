@@ -11,17 +11,9 @@ Each epoch it then loses at least its effective balance times its new score, ove
 
 Its effective balance follows its balance with some hysteresis.
 
-It falls only once the balance is more than a quarter of an increment below it, on mainnet.
-
 While the effective balance stays above a threshold, the losses add up quadratically.
 
 So after an explicit number of epochs the effective balance is at most the threshold.
-
-That number is about the square root of twice the divisor times the loss needed, over the slope.
-
-The slope is the threshold plus an increment, times the score bias.
-
-The divisor is the score bias times the penalty quotient, `2^26` on mainnet from Bellatrix.
 
 Take a bias of 4, a score of zero, and a threshold of 16 ETH.
 
@@ -124,6 +116,11 @@ private theorem quadratic_le_leakLoss {floor score bias divisor : Nat} (divisorP
 
 The slope is a floor of the effective balance times the score bias. -/
 def leakEpochs (floor bias divisor amount : Nat) : Nat :=
+  -- The number is about the square root of twice the divisor times the loss needed, over the slope.
+  --
+  -- In a leak, the slope is the threshold plus an increment, times the score bias.
+  --
+  -- The divisor is the score bias times the penalty quotient, `2^26` on mainnet from Bellatrix.
   Nat.sqrt (2 * divisor * amount / (floor * bias)) + 2 * divisor / (floor * bias) + 2
 
 /-- After that number of epochs the leak has taken at least the amount, from any score.
@@ -194,49 +191,59 @@ In it the score gains the bias, and the balance pays the effective balance times
 
 That product is divided by the divisor, and the balance stops at zero.
 
-So the validator may leave the leak, or the leak may end, once its effective balance is that low.
-
 In every epoch of the traces the balance does not rise, so the validator never votes again.
-
-The penalty may be larger, and later steps of the epoch may lower the balance further.
-
-The effective balance then follows the balance at that point, with its hysteresis.
-
-The balance may fall again before the next epoch, and it is assumed never to rise.
-
-So no reward, deposit or consolidation reaches this validator during the traces.
 
 The largest effective balance stays fixed.
 
-At the start, the balance is within the upward band, or the effective balance reaches the largest.
-
-The traces are assumptions, not derived from the state transition.
-
 If the leak takes enough over at least one epoch, the effective balance is at most the threshold.
 
-Enough leaves less than the threshold plus an increment, less the downward band.
-
-The first effective balance, the largest and the threshold are whole numbers of increments.
-
-So an effective balance above the threshold is at least the threshold plus an increment.
-
-The increment must be positive and at most the upward band, as on mainnet. -/
+The traces are assumptions, not derived from the state transition. -/
 theorem effectiveBalance_le_of_leak {balance settled effective : Nat → Gwei}
     {score : Nat → Nat} {largest : Gwei} {bias divisor threshold epochs : Nat}
+    -- The increment must be positive and at most the upward band, as on mainnet.
     (bands : preset.IncrementWithinUpwardBand)
+    -- The first effective balance, the largest and the threshold are whole numbers of increments.
+    --
+    -- So an effective balance above the threshold is at least the threshold plus an increment.
     (startAligned : effective 0 % preset.EFFECTIVE_BALANCE_INCREMENT = 0)
     (largestAligned : largest % preset.EFFECTIVE_BALANCE_INCREMENT = 0)
     (thresholdAligned : threshold % preset.EFFECTIVE_BALANCE_INCREMENT.toNat = 0)
+    -- The traces count the epochs of the leak.
     (started : 0 < epochs)
+    -- At the start, the balance is within the upward band of the effective balance.
+    --
+    -- Otherwise the effective balance is at least the largest.
     (startAbove : (balance 0).toNat ≤ (effective 0).toNat + preset.upwardBand ∨
       largest ≤ effective 0)
+    -- In every epoch of the traces the balance does not rise, so the validator never votes again.
     (stays : ∀ t < epochs, (settled t).toNat ≤ (balance t).toNat)
+    -- While the effective balance is above the threshold, each epoch is a leak epoch.
+    --
+    -- In it the score gains the bias.
+    --
+    -- Once the effective balance is at most the threshold, the validator may leave the leak.
+    --
+    -- The leak may also end then.
     (scored : ∀ t < epochs, threshold < (effective t).toNat → score (t + 1) = score t + bias)
+    -- The balance pays the effective balance times the new score.
+    --
+    -- That product is divided by the divisor, and the balance stops at zero.
+    --
+    -- The penalty may be larger, and later steps of the epoch may lower the balance further.
     (penalized : ∀ t < epochs, threshold < (effective t).toNat → (settled t).toNat ≤
       (balance t).toNat - (effective t).toNat * (score t + bias) / divisor)
+    -- The effective balance then follows the balance at that point, with its hysteresis.
+    --
+    -- It falls only once the balance is more than a quarter of an increment below it, on mainnet.
+    --
+    -- The largest effective balance stays fixed: one fork and one kind of credentials.
     (updated : ∀ t < epochs,
       updatedEffectiveBalance preset largest (settled t) (effective t) = .ok (effective (t + 1)))
+    -- The balance may fall again before the next epoch, and it is assumed never to rise.
+    --
+    -- So no reward, deposit or consolidation reaches this validator during the traces.
     (between : ∀ t < epochs, (balance (t + 1)).toNat ≤ (settled t).toNat)
+    -- Enough leaves less than the threshold plus an increment, less the downward band.
     (enough : (balance 0).toNat -
         leakLoss (threshold + preset.EFFECTIVE_BALANCE_INCREMENT.toNat) (score 0) bias divisor
           epochs + preset.downwardBand <
@@ -365,7 +372,9 @@ The bias and the divisor must be positive.
 The threshold plus an increment must exceed the downward band. -/
 theorem effectiveBalance_le_of_leakEpochs {balance settled effective : Nat → Gwei}
     {score : Nat → Nat} {largest : Gwei} {bias divisor threshold epochs : Nat}
+    -- The bias and the divisor must be positive.
     (biasPos : 0 < bias) (divisorPos : 0 < divisor)
+    -- The threshold plus an increment must exceed the downward band.
     (wide : preset.downwardBand < threshold + preset.EFFECTIVE_BALANCE_INCREMENT.toNat)
     (bands : preset.IncrementWithinUpwardBand)
     (startAligned : effective 0 % preset.EFFECTIVE_BALANCE_INCREMENT = 0)
@@ -384,6 +393,11 @@ theorem effectiveBalance_le_of_leakEpochs {balance settled effective : Nat → G
       ((balance 0).toNat + preset.downwardBand + 1 -
         (threshold + preset.EFFECTIVE_BALANCE_INCREMENT.toNat)) ≤ epochs) :
     (effective epochs).toNat ≤ threshold := by
+  -- An effective balance at most the ejection balance only starts the exit.
+  --
+  -- The exit starts at the next registry update.
+  --
+  -- The validator leaves the active set later, after the exit queue, and pays the leak until then.
   have epochsPos : 0 < epochs :=
     Nat.lt_of_lt_of_le (by unfold leakEpochs; exact Nat.succ_pos _) long
   have incPos := bands.1

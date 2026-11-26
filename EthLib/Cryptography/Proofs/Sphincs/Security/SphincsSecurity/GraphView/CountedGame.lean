@@ -3,6 +3,9 @@ module
 public import EthLib.Cryptography.Proofs.Sphincs.Security.SphincsSecurity.GraphView.Cost
 public import EthLib.Cryptography.Proofs.Sphincs.Security.SphincsSecurity.GraphView.HashCalls
 
+open EthLib.Cryptography.HashSig (counted simulate_withCost countHashQueries
+  simulateQ_countHashQueries)
+
 @[expose] public section
 
 section
@@ -57,13 +60,10 @@ theorem fixedWorldCost_lift_hash (f : QueryImpl HashSpec Id)
   apply WriterT.ext
   have hcount : (simulateQ (fixedWorldCost f)
       (liftM computation : OracleComp OracleWorld α)).run =
-      simulateQ (fixedHashWorld f) (QueryCap.counted SourceHash
-        (liftM computation : OracleComp OracleWorld α)) := by
-    rw [QueryCap.simulate_withCost]
-    congr 2
-    funext input
-    cases input <;> simp [fixedWorldCost, QueryImpl.withAddCost_apply, SourceHash]
-  rw [hcount, fixedHashWorld_counted_lift_hash]
+      simulateQ (fixedHashWorld f) (countHashQueries
+        (liftM computation : OracleComp OracleWorld α)) :=
+    (simulateQ_countHashQueries (fixedHashWorld f) _).symm
+  rw [hcount, fixedHashWorld_countHashQueries_lift_hash]
   rfl
 
 theorem fixedCostSource_reveal (f : QueryImpl HashSpec Id) (table : HiddenGraph.Table)

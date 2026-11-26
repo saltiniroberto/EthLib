@@ -8,37 +8,11 @@ public import EthLib.Consensus.Proofs.ForkChoice.Store
 /-!
 # Proofs: the head of the fork choice
 
-Before Gloas the children of a node are the known blocks whose parent is the node's block.
-
-From Gloas a pending node has its empty node as a child, and its full node once it is verified.
-
-From Gloas an empty or full node has the blocks that build on its payload status as children.
-
-The choice among weighted children returns one of them, and none of them is above it.
-
-A payload decision is the empty or the full node of a block from the previous slot.
-
-Such a node weighs nothing.
-
-Any other node weighs its votes in the justified state when the boost does not apply.
-
-The boost applies after a parent older than the previous slot, and after a parent that is not weak.
-
-After a weak parent it needs the timeliness of every block of the store.
-
-It then applies exactly when no other timely block of the parent's proposer is in the slot before.
-
-The head has no child among the viable nodes, so the walk stops only at a leaf.
+These proofs cover the children of a node, their weights, the boost and the walk to the head.
 
 At every fork, the head descends from the justified block.
 
-From Gloas the walk from any known node ends at a descendant of that node.
-
-A viable node with children has a viable child, so from Gloas the head is never a pending node.
-
-From Gloas, let a block of the previous slot have a verified payload and both its nodes viable.
-
-The walk then takes the full node exactly when the payload extends.
+The head has no child among the viable nodes, so the walk stops only at a leaf.
 -/
 
 @[expose] public section
@@ -192,6 +166,17 @@ theorem getSupportedNode_exists {message : LatestMessage fork}
     · exact ⟨_, getSupportedNode_of_lt_slot gloas found lt⟩
     · exact ⟨_, getSupportedNode_of_same_slot gloas found (UInt64.not_lt.mp lt)⟩
   · exact ⟨_, getSupportedNode_of_lt (Nat.lt_of_not_le gloas)⟩
+
+/-- A supported node descends from a pending node exactly as the vote's block does, at every fork.
+-/
+theorem isAncestor_getSupportedNode {message : LatestMessage fork} {node : ForkChoiceNode}
+    (supported : store.getSupportedNode message = .ok node) (root : Root) :
+    store.isAncestor node ⟨root, .pending⟩ =
+      store.isAncestor ⟨message.root, .pending⟩ ⟨root, .pending⟩ := by
+  by_cases gloas : .glamsterdam ≤ fork
+  · rw [isAncestor_head_pending gloas, getSupportedNode_root supported]
+  · rw [getSupportedNode_of_lt (Nat.lt_of_not_le gloas), Except.ok.injEq] at supported
+    rw [← supported]
 
 /-- From Gloas a vote for a block the store does not hold supports no node. -/
 theorem getSupportedNode_of_unknown {message : LatestMessage fork} (gloas : .glamsterdam ≤ fork)
@@ -397,37 +382,34 @@ private theorem filterM_entries_isEmpty_iff {β ε : Type} {test : Root × β �
     rw [← none]
     exact ⟨fun same => ⟨all, by rw [same]⟩, fun ⟨_, same⟩ => Bool.eq_iff_iff.mpr same.symm⟩
 
-/-- Whether the boost applies, from Gloas, on the blocks of the store and their timeliness.
-
-Without a boosted block it does not apply.
-
-Otherwise the store must hold the boosted block and a parent that is not in the last slot.
-
-A parent older than the slot before the boosted block lets the boost apply.
-
-So does a parent of that slot or later that is not weak.
-
-After a weak parent, every block of the store must have its timeliness for the payload committee.
-
-A timely block of the parent's proposer must not be in the last slot either.
-
-The boost then applies exactly when each such block of the slot before is the parent itself. -/
+/-- Whether the boost applies, from Gloas, on the blocks of the store and their timeliness. -/
 theorem shouldApplyProposerBoost_eq_ok_iff {apply : Bool} (gloas : .glamsterdam ≤ fork) :
     store.shouldApplyProposerBoost config gloas = .ok apply ↔
+      -- Without a boosted block it does not apply.
       store.proposerBoostRoot = Vector.replicate 32 0 ∧ apply = false ∨
+      -- Otherwise the store must hold the boosted block and a parent that is not in the last slot.
       store.proposerBoostRoot ≠ Vector.replicate 32 0 ∧ ∃ block parent,
         store.blocks[store.proposerBoostRoot]? = some block ∧
         store.blocks[block.parentRoot]? = some parent ∧
         parent.slot.toNat + 1 < 2 ^ 64 ∧
+        -- A parent older than the slot before the boosted block lets the boost apply.
         (parent.slot.toNat + 1 < block.slot.toNat ∧ apply = true ∨
           block.slot.toNat ≤ parent.slot.toNat + 1 ∧
+            -- So does a parent of that slot or later that is not weak.
             (store.isHeadWeak config block.parentRoot = .ok false ∧ apply = true ∨
               store.isHeadWeak config block.parentRoot = .ok true ∧
+                -- After a weak parent, every block of the store must have its timeliness.
+                --
+                -- That timeliness is the one for the payload committee.
                 (∀ (root : Root) (other : BeaconBlock preset fork),
                   store.blocks[root]? = some other →
                   ∃ timely, (store.ptcTimeliness gloas)[root]? = some timely ∧
+                    -- A timely block of the parent's proposer must not be in the last slot either.
                     (timely = true → other.proposerIndex = parent.proposerIndex →
                       other.slot.toNat + 1 < 2 ^ 64)) ∧
+                -- Take each timely block of the parent's proposer in the slot before.
+                --
+                -- The boost then applies exactly when each such block is the parent itself.
                 (apply = true ↔ ∀ (root : Root) (other : BeaconBlock preset fork),
                   store.blocks[root]? = some other →
                   (store.ptcTimeliness gloas)[root]? = some true →
@@ -846,19 +828,54 @@ theorem getAttestationScore_ok_of_getHead (before : fork < .glamsterdam)
   | error error => simp [scoreOk] at weightOk
   | ok score => exact ⟨score, scoreOk⟩
 
-/-- Before Gloas, a head with a viable node besides the justified block has read its state.
+/-- A pending node is no payload decision of the previous slot.
+
+Neither is a node of a block whose slot is not the previous slot. -/
+theorem isPreviousSlotPayloadDecision_eq_false {node : ForkChoiceNode}
+    {block : BeaconBlock preset fork} {current : Slot}
+    (found : store.blocks[node.root]? = some block)
+    (slotRead : store.getCurrentSlot config = .ok current) (fits : block.slot.toNat + 1 < 2 ^ 64)
+    (older : node.payloadStatus = .pending ∨ block.slot.toNat + 1 ≠ current.toNat) :
+    store.isPreviousSlotPayloadDecision config node = .ok false := by
+  have nextOk : Uint64.addChecked block.slot 1 = .ok (block.slot + 1) :=
+    Uint64.addChecked_of_lt (by simpa using fits)
+  have nextNat : (block.slot + 1).toNat = block.slot.toNat + 1 :=
+    Uint64.toNat_add_of_lt (by simpa using fits)
+  simp only [isPreviousSlotPayloadDecision, Store.block, found, nextOk, slotRead,
+    Except.mapError, bind, Except.bind, pure, Except.pure, Except.ok.injEq]
+  rcases older with pending | differ
+  · simp [pending]
+  · have ne : (block.slot + 1 == current) = false := by
+      simp only [beq_eq_false_iff_ne, ne_eq]
+      intro same
+      exact differ (by rw [← nextNat, same])
+    simp [ne]
+
+/-- A head with a viable node besides the justified block's pending node read the justified state.
+
+This holds at every fork.
 
 It gives a receiver's justified state without assuming the read. -/
-theorem checkpointState_justified_of_getHead (before : fork < .glamsterdam)
+theorem checkpointState_justified_of_getHead
     {nodes : List ForkChoiceNode} {head node : ForkChoiceNode}
     (tree : store.getFilteredNodeTree config = .ok nodes)
     (found : store.getHead config = .ok head) (member : node ∈ nodes)
-    (other : node ≠ ⟨store.justifiedCheckpoint.root, .pending⟩) :
+    -- From Gloas the node may be a payload node of the justified block.
+    (other : node ≠ ⟨store.justifiedCheckpoint.root, .pending⟩)
+    -- From Gloas the justified block must be older than the previous slot.
+    (justifiedEarly : .glamsterdam ≤ fork → ∃ current justifiedBlock,
+      store.getCurrentSlot config = .ok current ∧
+      store.blocks[store.justifiedCheckpoint.root]? = some justifiedBlock ∧
+      justifiedBlock.slot.toNat + 1 < current.toNat) :
     ∃ state, store.checkpointState store.justifiedCheckpoint = .ok state := by
-  have notGloas : ¬ .glamsterdam ≤ fork := Nat.not_le_of_lt before
   have walk : store.filterNodeTree config ⟨store.justifiedCheckpoint.root, .pending⟩ =
       .ok nodes := tree
-  simp only [getHead, notGloas, false_and, ↓reduceIte, tree, bind, Except.bind] at found
+  have nonemptyNodes : nodes.isEmpty = false := by
+    cases nodes with
+    | nil => cases member
+    | cons _ _ => rfl
+  simp only [getHead, nonemptyNodes, Bool.false_eq_true, and_false, ↓reduceIte, tree, bind,
+    Except.bind] at found
   -- The first step of the walk weighs the children of the justified block among the nodes.
   rw [getHeadFrom] at found
   obtain ⟨result, chosen⟩ : ∃ result, store.heaviestChild config store.justifiedTally nodes
@@ -888,7 +905,20 @@ theorem checkpointState_justified_of_getHead (before : fork < .glamsterdam)
   cases stateOk : store.checkpointState store.justifiedCheckpoint with
   | ok state => exact ⟨state, rfl⟩
   | error e =>
-    simp [getWeight, notGloas, justifiedTally, stateOk, bind, Except.bind, pure, Except.pure]
+  by_cases gloas : .glamsterdam ≤ fork
+  · -- From Gloas the child is a payload node of the justified block, older than the previous slot.
+    obtain ⟨current, justifiedBlock, currentOk, justifiedFound, early⟩ := justifiedEarly gloas
+    rw [getNodeChildren_of_pending gloas rfl, Except.ok.injEq] at childrenOk
+    subst childrenOk
+    have childRoot : child.root = store.justifiedCheckpoint.root := by
+      simp only [List.mem_cons] at childMem
+      rcases childMem with rfl | rest
+      · rfl
+      · split at rest <;> simp_all
+    have decision := isPreviousSlotPayloadDecision_eq_false (config := config)
+      (childRoot ▸ justifiedFound) currentOk (by have := current.toNat_lt; omega) (.inr (by omega))
+    simp [getWeight, gloas, decision, justifiedTally, stateOk, bind, Except.bind] at weightOk
+  · simp [getWeight, gloas, justifiedTally, stateOk, bind, Except.bind, pure, Except.pure]
       at weightOk
 
 /-- A node whose viable subtree can be computed is a known block.
