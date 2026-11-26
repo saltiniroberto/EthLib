@@ -158,8 +158,10 @@ The first step of such a chain is a slot, which computes the root of the genesis
 A block cannot come first, as the genesis state is at the slot of its latest block header. -/
 private theorem ChainList.genesisRooted {fork : Fork} {state : BeaconState preset fork}
     {eth1BlockHash : Hash32} {eth1Timestamp : UInt64} {deposits : Array Deposit}
-    (computed : initializeBeaconStateFromEth1 config checks eth1BlockHash eth1Timestamp deposits =
-      .ok state) :
+    {before : fork < .altair}
+    (computed :
+      initializeBeaconStateFromEth1 config checks eth1BlockHash eth1Timestamp deposits before =
+        .ok state) :
     ∀ {last : ForkedBeaconState preset} (chain : ChainList config checks ⟨fork, state⟩ last),
       (last = ⟨fork, state⟩ ∧ chain.blocks = []) ∨ ∃ root, SszType.hashTreeRoot state = .ok root
   | _, .nil => .inl ⟨rfl, rfl⟩
@@ -342,8 +344,10 @@ Each link that a state of the chain records is a link along these headers.
 The last state has the header of its last block, or the genesis header, as its tip. -/
 private theorem ChainList.recordedHeaders {fork : Fork} {state : BeaconState preset fork}
     {eth1BlockHash : Hash32} {eth1Timestamp : UInt64} {deposits : Array Deposit}
-    (computed : initializeBeaconStateFromEth1 config checks eth1BlockHash eth1Timestamp deposits =
-      .ok state)
+    {before : fork < .altair}
+    (computed :
+      initializeBeaconStateFromEth1 config checks eth1BlockHash eth1Timestamp deposits before =
+        .ok state)
     {genesisRoot : Root} (rooted : SszType.hashTreeRoot state = .ok genesisRoot)
     (nonzero : genesisRoot ≠ Vector.replicate 32 0) :
     ∀ {last : ForkedBeaconState preset} (chain : ChainList config checks ⟨fork, state⟩ last),
@@ -614,8 +618,10 @@ theorem accountable_safety_isSlashableAttestationData_of_chainLists
     (apart : preset.MIN_SEED_LOOKAHEAD.toNat + 2 < preset.EPOCHS_PER_HISTORICAL_VECTOR.toNat)
     {fork : Fork} {state : BeaconState preset fork} {eth1BlockHash : Hash32}
     {eth1Timestamp : UInt64} {deposits : Array Deposit}
-    (computed : initializeBeaconStateFromEth1 config checks eth1BlockHash eth1Timestamp deposits =
-      .ok state)
+    (before : fork < .altair)
+    (computed :
+      initializeBeaconStateFromEth1 config checks eth1BlockHash eth1Timestamp deposits before =
+        .ok state)
     {last₁ last₂ : ForkedBeaconState preset}
     (chain₁ : ChainList config checks ⟨fork, state⟩ last₁)
     (chain₂ : ChainList config checks ⟨fork, state⟩ last₂)
@@ -700,7 +706,7 @@ theorem accountable_safety_isSlashableAttestationData_of_chainLists
         SszType.hashTreeRoot applied.after = .ok (Vector.replicate 32 0)) := by
   refine (Classical.em _).elim (fun events => .inr events) (fun events => .inl ?_)
   refine accountable_safety_isSlashableAttestationData_of_statesRoot positive window apart
-    computed chain₁ chain₂ large₁ large₂ ?_
+    before computed chain₁ chain₂ large₁ large₂ ?_
   -- Without a hash event, the two finalized blocks conflict in the order of the lists' roots.
   obtain ⟨genesisRoot, rooted⟩ : ∃ root, SszType.hashTreeRoot state = .ok root := by
     rcases ChainList.genesisRooted computed chain₁ with ⟨-, empty⟩ | rooted

@@ -208,8 +208,10 @@ theorem slackFinalized_activeSetAt (positive : 0 < preset.SLOTS_PER_EPOCH.toNat)
     (apart : preset.MIN_SEED_LOOKAHEAD.toNat + 2 < preset.EPOCHS_PER_HISTORICAL_VECTOR.toNat)
     {fork : Fork} {state : BeaconState preset fork} {eth1BlockHash : Hash32}
     {eth1Timestamp : UInt64} {deposits : Array Deposit}
-    (computed : initializeBeaconStateFromEth1 config checks eth1BlockHash eth1Timestamp deposits =
-      .ok state)
+    {before : fork < .altair}
+    (computed :
+      initializeBeaconStateFromEth1 config checks eth1BlockHash eth1Timestamp deposits before =
+        .ok state)
     {last : ForkedBeaconState preset} (chain : ChainList config checks ⟨fork, state⟩ last)
     (bounds : ∀ step ∈ chain.steps, SlackStepBounds block step.1 step.2) :
     SlackFinalized (fun c => activeSetAt last.state c.epoch)
@@ -238,8 +240,10 @@ theorem slackJustifiedCheckpoints_activeSetAt (positive : 0 < preset.SLOTS_PER_E
     (apart : preset.MIN_SEED_LOOKAHEAD.toNat + 2 < preset.EPOCHS_PER_HISTORICAL_VECTOR.toNat)
     {fork : Fork} {state : BeaconState preset fork} {eth1BlockHash : Hash32}
     {eth1Timestamp : UInt64} {deposits : Array Deposit}
-    (computed : initializeBeaconStateFromEth1 config checks eth1BlockHash eth1Timestamp deposits =
-      .ok state)
+    {before : fork < .altair}
+    (computed :
+      initializeBeaconStateFromEth1 config checks eth1BlockHash eth1Timestamp deposits before =
+        .ok state)
     {last : ForkedBeaconState preset} (chain : ChainList config checks ⟨fork, state⟩ last)
     (bounds : ∀ step ∈ chain.steps, SlackStepBounds block step.1 step.2) :
     SlackJustifiedCheckpoints (fun c => activeSetAt last.state c.epoch)
@@ -261,8 +265,10 @@ theorem slackFinalized_activeSetAt_of_subset (positive : 0 < preset.SLOTS_PER_EP
     (apart : preset.MIN_SEED_LOOKAHEAD.toNat + 2 < preset.EPOCHS_PER_HISTORICAL_VECTOR.toNat)
     {fork : Fork} {state : BeaconState preset fork} {eth1BlockHash : Hash32}
     {eth1Timestamp : UInt64} {deposits : Array Deposit}
-    (computed : initializeBeaconStateFromEth1 config checks eth1BlockHash eth1Timestamp deposits =
-      .ok state)
+    {before : fork < .altair}
+    (computed :
+      initializeBeaconStateFromEth1 config checks eth1BlockHash eth1Timestamp deposits before =
+        .ok state)
     {last : ForkedBeaconState preset} (chain : ChainList config checks ⟨fork, state⟩ last)
     (bounds : ∀ step ∈ chain.steps, SlackStepBounds block step.1 step.2)
     (weights : ∀ c, chain.balances block c ⊆ W c) (included : chain.votes ⊆ attested) :

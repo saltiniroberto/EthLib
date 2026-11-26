@@ -145,11 +145,13 @@ private theorem latestBlockHeader_activateAtGenesis {index : Nat}
 Its state root is zero. -/
 theorem initializeBeaconStateFromEth1_latestBlockHeader {eth1BlockHash : Hash32}
     {eth1Timestamp : UInt64} {deposits : Array Deposit}
-    (computed : initializeBeaconStateFromEth1 config checks eth1BlockHash eth1Timestamp deposits =
-      .ok after) :
+    {before : fork < .altair}
+    (computed :
+      initializeBeaconStateFromEth1 config checks eth1BlockHash eth1Timestamp deposits before =
+        .ok after) :
     after.latestBlockHeader.slot = 0 ∧
       after.latestBlockHeader.stateRoot = Vector.replicate 32 0 := by
-  obtain ⟨_, _, _, _, activated, _, depositedOk, activatedOk, rfl⟩ :=
+  obtain ⟨_, _, _, activated, _, depositedOk, activatedOk, rfl⟩ :=
     initializeBeaconStateFromEth1_ok computed
   have deposited :=
     latestBlockHeader_foldlM (fun _ _ _ ok => latestBlockHeader_genesisDeposit ok) depositedOk
