@@ -95,62 +95,6 @@ private theorem getElem?_append_of_eq_some {α : Type} {list : List α} {i : Nat
   rw [List.getElem?_append_left (List.getElem?_eq_some_iff.mp found).1]
   exact found
 
-/-- A block has the root of its header, whose last field is the root of the body of the block.
-
-It holds for every preset: the roots of a block, of its body and of a header are untyped roots.
--/
-theorem BeaconBlock.hashTreeRoot_header_eq {fork : Fork} {block : BeaconBlock preset fork}
-    {bodyRoot : Root} (rooted : SszType.hashTreeRoot block.body = .ok bodyRoot) :
-    SszType.hashTreeRoot (BeaconBlockHeader.mk block.slot block.proposerIndex block.parentRoot
-      block.stateRoot bodyRoot) = SszType.hashTreeRoot block := by
-  -- The body and the root of the body have one root: that root as one chunk.
-  have bodyRooted : SszType.root block.body = .ok bodyRoot.toArray := by
-    unfold SszType.hashTreeRoot at rooted
-    cases root : SszType.root block.body with
-    | error fault =>
-      rw [root] at rooted
-      cases rooted
-    | ok bytes =>
-      rw [root] at rooted
-      exact congrArg Except.ok (toChunk_ok_iff.mp rooted)
-  have chunkRooted : SszType.root bodyRoot = .ok bodyRoot.toArray := by
-    have own := SszType.hashTreeRoot_bytes32 bodyRoot
-    unfold SszType.hashTreeRoot at own
-    cases root : SszType.root bodyRoot with
-    | error fault =>
-      rw [root] at own
-      cases own
-    | ok bytes =>
-      rw [root] at own
-      exact congrArg Except.ok (toChunk_ok_iff.mp own)
-  -- The roots of the fields agree, the last one included.
-  let fieldRoots : Except Err Bytes → Except Err (List Bytes) := fun last =>
-    SszType.root block.slot >>= fun first =>
-      (SszType.root block.proposerIndex >>= fun second =>
-        (SszType.root block.parentRoot >>= fun third =>
-          (SszType.root block.stateRoot >>= fun fourth =>
-            (last >>= fun fifth => pure [fifth]) >>= fun rest => pure (fourth :: rest)) >>=
-            fun rest => pure (third :: rest)) >>=
-          fun rest => pure (second :: rest)) >>=
-        fun rest => pure (first :: rest)
-  have unfolded : ∀ {γ : Type} [SszType γ] (last : γ),
-      SszFields.roots (block.slot, block.proposerIndex, block.parentRoot, block.stateRoot, last) =
-        fieldRoots (SszType.root last) := fun _ => rfl
-  -- The two containers differ only in the name of the last field, which no root reads.
-  have roots : SszType.root (BeaconBlockHeader.mk block.slot block.proposerIndex
-      block.parentRoot block.stateRoot bodyRoot) = SszType.root block := by
-    change SszFields.roots (block.slot, block.proposerIndex, block.parentRoot, block.stateRoot,
-        bodyRoot) >>= summaryRoot (.container ["slot", "proposer_index", "parent_root",
-          "state_root", "body_root"]) =
-      SszFields.roots (block.slot, block.proposerIndex, block.parentRoot, block.stateRoot,
-        block.body) >>= summaryRoot (.container ["slot", "proposer_index", "parent_root",
-          "state_root", "body"])
-    rw [unfolded, unfolded, bodyRooted, chunkRooted]
-    congr 1
-    funext fields
-    exact hashTreeRoot_container_names _ _ _ _
-  simp only [SszType.hashTreeRoot, roots]
-
 /-- A chain from the genesis state that applies a block passes through a step from that state.
 
 The first step of such a chain is a slot, which computes the root of the genesis state.
@@ -445,7 +389,7 @@ private theorem ChainList.recordedHeaders {fork : Fork} {state : BeaconState pre
         subst last
         rw [List.getElem?_concat_length] at found
         cases found
-        refine ⟨tip, header, tipAt, headerAt, ?_, BeaconBlock.hashTreeRoot_header_eq bodyRooted⟩
+        refine ⟨tip, header, tipAt, headerAt, ?_, BeaconBlock.hashTreeRoot_header bodyRooted⟩
         rw [← settled]
         exact parentRooted
     · intro forked member link linked
