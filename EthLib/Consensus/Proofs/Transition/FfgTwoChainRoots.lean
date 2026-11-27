@@ -9,14 +9,6 @@ Two chains of steps start from one genesis state and end at two last states.
 
 Their roots are ordered by the links that the states on their runs record, and by no others.
 
-Other branches from the genesis state add no link, so they add no collision of header roots.
-
-Each step on the two runs keeps these links in order.
-
-That is what the refinement asks of the order.
-
-So each chain finalizes its checkpoint in this order, by slack links of its own kind.
-
 When the blocks of the two finalized checkpoints conflict in this order, validators are slashable.
 
 The bound on their stake is the guaranteed intersection, as for the order of `ChainRoot`.
@@ -40,6 +32,7 @@ def TwoChainRoot (_config : Config) (_checks : SignatureChecks)
 /-- Two roots are in order when links of states on the two runs lead from the older to the newer. -/
 instance TwoChainRoot.instPreorder (first last₁ last₂ : ForkedBeaconState preset) :
     Preorder (TwoChainRoot config checks first last₁ last₂) where
+  -- Other branches from the genesis state add no link, so they add no collision of header roots.
   le older newer := Relation.ReflTransGen (fun older newer => ∃ forked,
     Relation.ReflTransGen (ChainStep config checks) first forked ∧
       (Relation.ReflTransGen (ChainStep config checks) forked last₁ ∨
@@ -73,6 +66,9 @@ theorem SlackStepBounds.of_toTwoChainRoot {first last₁ last₂ last : ForkedBe
     (step : ChainStep config checks forked after)
     (rest : Relation.ReflTransGen (ChainStep config checks) after last) :
     SlackStepBounds (toTwoChainRoot config checks first last₁ last₂) forked after := by
+  -- Each step on the two runs keeps in order the links that its states record.
+  --
+  -- That is what the refinement asks of the order.
   refine ⟨large forked after reach step rest, fun _ member => .single ⟨after, reach.tail step, ?_,
     member⟩⟩
   rcases ends with rfl | rfl
@@ -82,56 +78,29 @@ theorem SlackStepBounds.of_toTwoChainRoot {first last₁ last₂ last : ForkedBe
 open scoped Classical in
 /-- Accountable safety for two chains of steps from one genesis state, in the order of their roots.
 
-It is the theorem for the order of `ChainRoot`, with the order of the two runs in its place.
+If each step meets a stake bound and the finalized blocks conflict, slack links justify `l` and `r`.
 
-Each chain ends at its last state, `last₁` or `last₂`.
+Both lie between the finalized epochs, and some validators active at both signed two slashable data.
 
-Each step on any run between genesis and a last state must meet the bound on the stake.
-
-The blocks of the two finalized checkpoints must conflict in the order of the two runs.
-
-Then two checkpoints `l` and `r` of the model have the property below.
-
-Their epochs lie between the epochs of the two finalized checkpoints.
-
-The slack links of the two chains justify them, with the votes and balances of both runs.
-
-They come with last states `a` and `b`, each one of `last₁` and `last₂`.
-
-They come with weights `wl` and `wr`, the balances of a justifying state of either run.
-
-Take `L` and `L'`, the active sets of the epoch of `l` and of the next epoch in `a`.
-
-Take `R` and `R'`, the active sets of the epoch of `r` and of the next epoch in `b`.
-
-Some validators of `L` and `R` each signed two attestation data that the specification slashes.
-
-Each of the two data is included in a block of one of the two runs.
-
-These validators hold at least the guaranteed intersection under `wl`.
-
-That is the least stake that a quorum of `L` up to the slack of `L'` shares with one of `R`.
-
-The second bound is the first with the two sides swapped, counted under `wr`.
-
-An epoch must have at least one slot, and the buffer of roots must cover three epochs.
-
-The seed lookahead must leave room in the buffer of RANDAO mixes.
-
-The genesis state built from deposits exists only before Altair. -/
+These validators hold at least the guaranteed intersection of the two active sets, both ways. -/
 theorem accountable_safety_isSlashableAttestationData_of_twoChainRoot
+    -- An epoch must have at least one slot, and the buffer of roots must cover three epochs.
     (positive : 0 < preset.SLOTS_PER_EPOCH.toNat)
     (window : 3 * preset.SLOTS_PER_EPOCH.toNat ≤ preset.SLOTS_PER_HISTORICAL_ROOT.toNat)
+    -- The seed lookahead must leave room in the buffer of RANDAO mixes.
     (apart : preset.MIN_SEED_LOOKAHEAD.toNat + 2 < preset.EPOCHS_PER_HISTORICAL_VECTOR.toNat)
     {fork : Fork} {state : BeaconState preset fork} {eth1BlockHash : Hash32}
     {eth1Timestamp : UInt64} {deposits : Array Deposit}
+    -- The genesis state built from deposits exists only before Altair.
     (before : fork < .altair)
     (computed :
       initializeBeaconStateFromEth1 config checks eth1BlockHash eth1Timestamp deposits before =
         .ok state)
     {last₁ last₂ : ForkedBeaconState preset}
+    -- Each chain ends at its last state, `last₁` or `last₂`.
     (steps₁ : Relation.ReflTransGen (ChainStep config checks) ⟨fork, state⟩ last₁)
     (steps₂ : Relation.ReflTransGen (ChainStep config checks) ⟨fork, state⟩ last₂)
+    -- Each step on any run between genesis and a last state must meet the bound on the stake.
     (large₁ : ∀ forked after,
       Relation.ReflTransGen (ChainStep config checks) ⟨fork, state⟩ forked →
       ChainStep config checks forked after →
@@ -150,12 +119,17 @@ theorem accountable_safety_isSlashableAttestationData_of_twoChainRoot
       3 * preset.EFFECTIVE_BALANCE_INCREMENT.toNat <
         2 * stake (fun index => balanceAt forked.state index.toNat)
           (getActiveValidatorIndices forked.state (getCurrentEpoch forked.state)).toFinset)
+    -- It is the theorem for the order of `ChainRoot`, with the order of the two runs in its place.
+    --
+    -- The blocks of the two finalized checkpoints must conflict in the order of the two runs.
     (conflicting : Conflicting
       (toTwoChainRoot config checks ⟨fork, state⟩ last₁ last₂
         last₁.state.finalizedCheckpoint.root)
       (toTwoChainRoot config checks ⟨fork, state⟩ last₁ last₂
         last₂.state.finalizedCheckpoint.root)) :
+    -- Then two checkpoints `l` and `r` of the model have the property below.
     ∃ l r : Models.Ffg.Checkpoint (TwoChainRoot config checks ⟨fork, state⟩ last₁ last₂),
+      -- Their epochs lie between the epochs of the two finalized checkpoints.
       min last₁.state.finalizedCheckpoint.epoch.toNat
         last₂.state.finalizedCheckpoint.epoch.toNat ≤ l.epoch ∧
       l.epoch ≤ max last₁.state.finalizedCheckpoint.epoch.toNat
@@ -164,6 +138,7 @@ theorem accountable_safety_isSlashableAttestationData_of_twoChainRoot
         last₂.state.finalizedCheckpoint.epoch.toNat ≤ r.epoch ∧
       r.epoch ≤ max last₁.state.finalizedCheckpoint.epoch.toNat
         last₂.state.finalizedCheckpoint.epoch.toNat ∧
+      -- The slack links of the two chains justify them, with the votes and balances of both runs.
       JustifiedBy (fun s t => ∃ last ∈ ({last₁, last₂} : Set (ForkedBeaconState preset)),
           SlackLink (fun c => activeSetAt last.state c.epoch)
             (fun c => activeSetAt last.state (c.epoch + 1))
@@ -186,8 +161,10 @@ theorem accountable_safety_isSlashableAttestationData_of_twoChainRoot
               (runVotes config checks ⟨fork, state⟩ last₁ ∪
                 runVotes config checks ⟨fork, state⟩ last₂)) s t)
         (toTwoChainRoot config checks ⟨fork, state⟩ last₁ last₂ (Vector.replicate 32 0)) r ∧
+      -- They come with last states `a` and `b`, each one of `last₁` and `last₂`.
       ∃ a ∈ ({last₁, last₂} : Set (ForkedBeaconState preset)),
       ∃ b ∈ ({last₁, last₂} : Set (ForkedBeaconState preset)),
+      -- They come with weights `wl` and `wr`, the balances of a justifying state of either run.
       ∃ wl ∈ justifyingBalances config checks
           (toTwoChainRoot config checks ⟨fork, state⟩ last₁ last₂) ⟨fork, state⟩ last₁ l ∪
         justifyingBalances config checks
@@ -196,6 +173,21 @@ theorem accountable_safety_isSlashableAttestationData_of_twoChainRoot
           (toTwoChainRoot config checks ⟨fork, state⟩ last₁ last₂) ⟨fork, state⟩ last₁ r ∪
         justifyingBalances config checks
           (toTwoChainRoot config checks ⟨fork, state⟩ last₁ last₂) ⟨fork, state⟩ last₂ r,
+        -- Take `L` and `L'`, the active sets of the epoch of `l` and of the next epoch in `a`.
+        --
+        -- Take `R` and `R'`, the active sets of the epoch of `r` and of the next epoch in `b`.
+        --
+        -- Some validators of `L` and `R` each signed two attestation data.
+        --
+        -- The specification slashes each such pair of data.
+        --
+        -- Each of the two data is included in a block of one of the two runs.
+        --
+        -- These validators hold at least the guaranteed intersection under `wl`.
+        --
+        -- That is the least stake that a quorum of `L` shares with a quorum of `R`.
+        --
+        -- The quorum of `L` is up to the slack of `L'`, and that of `R` up to the slack of `R'`.
         guaranteedIntersection (activeSetAt a.state l.epoch) (activeSetAt a.state (l.epoch + 1))
             (activeSetAt b.state r.epoch) (activeSetAt b.state (r.epoch + 1)) wl wr ≤
           stake wl {validator ∈ activeSetAt a.state l.epoch ∩ activeSetAt b.state r.epoch |
@@ -205,6 +197,7 @@ theorem accountable_safety_isSlashableAttestationData_of_twoChainRoot
               (validator, data2) ∈ runVotes config checks ⟨fork, state⟩ last₁ ∪
                 runVotes config checks ⟨fork, state⟩ last₂ ∧
               isSlashableAttestationData data1 data2 = true} ∧
+        -- The second bound is the first with the two sides swapped, counted under `wr`.
         guaranteedIntersection (activeSetAt b.state r.epoch) (activeSetAt b.state (r.epoch + 1))
             (activeSetAt a.state l.epoch) (activeSetAt a.state (l.epoch + 1)) wr wl ≤
           stake wr {validator ∈ activeSetAt b.state r.epoch ∩ activeSetAt a.state l.epoch |
@@ -215,6 +208,8 @@ theorem accountable_safety_isSlashableAttestationData_of_twoChainRoot
                 runVotes config checks ⟨fork, state⟩ last₂ ∧
               isSlashableAttestationData data1 data2 = true} := by
   -- Each chain finalizes its checkpoint in the order of the two runs.
+  --
+  -- So each chain finalizes its checkpoint in this order, by slack links of its own kind.
   obtain ⟨l, r, lo₁, hi₁, lo₂, hi₂, justifiedL, justifiedR, a, ha, b, hb, wl, hwl, wr, hwr,
       boundL, boundR⟩ :=
     accountable_safety_guaranteedIntersection (ι := ForkedBeaconState preset)

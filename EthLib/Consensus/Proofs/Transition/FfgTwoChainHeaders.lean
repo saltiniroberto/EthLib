@@ -15,25 +15,7 @@ Then validators are slashable, or the hashes failed in one of two named ways.
 
 The first way is a collision among the headers that the two chains record.
 
-These are the genesis header and the headers of the listed blocks.
-
-The genesis header is the latest block header of the genesis state, with the state's root.
-
-The root of the header of a listed block is the root of the block.
-
 The second way is the zero root, the specification's value for no block and for no state root.
-
-It is the root of a listed block or of a state that the chains record.
-
-These states are the genesis state and the state after each listed block.
-
-Without these events, each root that a state of the two chains records is a recorded header's.
-
-Two consecutive slots then record one header twice, or a header and the next one on the chain.
-
-So the links of the two chains order a root before another only along a chain, by parent roots.
-
-So two blocks that conflict on the two chains conflict in the order of the two lists' roots.
 -/
 
 @[expose] public section
@@ -187,24 +169,21 @@ private theorem LinkAlong.append {headers : List BeaconBlockHeader} {link : Root
 
 /-- The header at a position of a list is the latest one of a state, and what the state records.
 
-Its state root is not zero, and a state at slot zero is at the first position.
-
 Either the state holds it as its latest block header, and recorded its root at the slot before.
 
-Or the state holds it with a zero state root, and has its state root as its own root.
-
-The header is then at the slot of the state.
-
-The root recorded at the slot before is then the root of the header before it. -/
+Or the state holds it with a zero state root, and has its state root as its own root. -/
 private def TipOf (headers : List BeaconBlockHeader) (count : Nat) {fork : Fork}
     (state : BeaconState preset fork) : Prop :=
+  -- The header's state root is not zero, and a state at slot zero is at the first position.
   ∃ tip, headers[count]? = some tip ∧ tip.stateRoot ≠ Vector.replicate 32 0 ∧
     (state.slot = 0 → count = 0) ∧
     ((state.latestBlockHeader = tip ∧
         ∀ root, getBlockRootAtSlot state (state.slot - 1) = .ok root →
           SszType.hashTreeRoot tip = .ok root) ∨
       (state.latestBlockHeader = { tip with stateRoot := Vector.replicate 32 0 } ∧
+        -- The header is then at the slot of the state.
         SszType.hashTreeRoot state = .ok tip.stateRoot ∧ tip.slot = state.slot ∧
+        -- The root recorded at the slot before is then the root of the header before it.
         ∀ root, getBlockRootAtSlot state (state.slot - 1) = .ok root →
           ∃ before prior, before + 1 = count ∧ headers[before]? = some prior ∧
             SszType.hashTreeRoot prior = .ok root))
@@ -281,8 +260,6 @@ private theorem TipOf.advanceSlotAcross {headers : List BeaconBlockHeader} {coun
 
 The genesis state must have a nonzero root, and each listed block its true nonzero state root.
 
-The headers are the genesis header, then the header of each listed block.
-
 Each link that a state of the chain records is a link along these headers.
 
 The last state has the header of its last block, or the genesis header, as its tip. -/
@@ -299,6 +276,7 @@ private theorem ChainList.recordedHeaders {fork : Fork} {state : BeaconState pre
         SszType.hashTreeRoot applied.after = .ok applied.signed.message.stateRoot) →
       (∀ applied ∈ chain.appliedBlocks,
         SszType.hashTreeRoot applied.after ≠ .ok (Vector.replicate 32 0)) →
+      -- The headers are the genesis header, then the header of each listed block.
       ∃ headers, RecordedHeaders { state.latestBlockHeader with stateRoot := genesisRoot }
           chain.blocks headers ∧
         (∀ forked ∈ chain.states, ∀ link ∈ rootLinks forked.state, LinkAlong headers link) ∧
@@ -523,52 +501,29 @@ end TwoChains
 open scoped Classical in
 /-- Accountable safety for two chains given as lists from one genesis state, with the hash events.
 
-Each list ends at its last state, `last₁` or `last₂`.
+Each step must meet a stake bound, and each listed block must hold the root of the state after it.
 
-Each step of each list must meet the bound on the stake.
+If two listed finalized blocks conflict, the slashable stake is at least a guaranteed intersection.
 
-The state root of each listed block must be the root of the state after it.
-
-`F₁` and `F₂` are listed blocks of the two lists, with the roots of the two finalized checkpoints.
-
-Neither list may apply one of them at or before the other, blocks compared as messages.
-
-Then validators are slashable, with the bound of the guaranteed intersection.
-
-The checkpoints `l` and `r` and the bound are as for the order of the two lists' roots.
-
-Or two different headers that the two chains record have one root.
-
-These headers are the genesis header and the headers of the listed blocks.
-
-The genesis header is the latest block header of the genesis state, with the state's root.
-
-The root of the header of a listed block is the root of the block, so the blocks stand for them.
-
-A listed block comes after slot zero, so its header is never the genesis header.
-
-Or a listed block has the zero root, or a state that the chains record has it.
-
-These states are the genesis state and the state after each listed block.
-
-An epoch must have at least one slot, and the buffer of roots must cover three epochs.
-
-The seed lookahead must leave room in the buffer of RANDAO mixes.
-
-The genesis state built from deposits exists only before Altair. -/
+Or two recorded headers share a root, or a listed block or a recorded state has the zero root. -/
 theorem accountable_safety_isSlashableAttestationData_of_chainLists
+    -- An epoch must have at least one slot, and the buffer of roots must cover three epochs.
     (positive : 0 < preset.SLOTS_PER_EPOCH.toNat)
     (window : 3 * preset.SLOTS_PER_EPOCH.toNat ≤ preset.SLOTS_PER_HISTORICAL_ROOT.toNat)
+    -- The seed lookahead must leave room in the buffer of RANDAO mixes.
     (apart : preset.MIN_SEED_LOOKAHEAD.toNat + 2 < preset.EPOCHS_PER_HISTORICAL_VECTOR.toNat)
     {fork : Fork} {state : BeaconState preset fork} {eth1BlockHash : Hash32}
     {eth1Timestamp : UInt64} {deposits : Array Deposit}
+    -- The genesis state built from deposits exists only before Altair.
     (before : fork < .altair)
     (computed :
       initializeBeaconStateFromEth1 config checks eth1BlockHash eth1Timestamp deposits before =
         .ok state)
     {last₁ last₂ : ForkedBeaconState preset}
+    -- Each list ends at its last state, `last₁` or `last₂`.
     (chain₁ : ChainList config checks ⟨fork, state⟩ last₁)
     (chain₂ : ChainList config checks ⟨fork, state⟩ last₂)
+    -- Each step of each list must meet the bound on the stake.
     (large₁ : ∀ step ∈ chain₁.steps, step.2.state.slot ≠ step.1.state.slot →
       (step.1.state.slot + 1) % preset.SLOTS_PER_EPOCH = 0 →
       3 * preset.EFFECTIVE_BALANCE_INCREMENT.toNat <
@@ -579,17 +534,25 @@ theorem accountable_safety_isSlashableAttestationData_of_chainLists
       3 * preset.EFFECTIVE_BALANCE_INCREMENT.toNat <
         2 * stake (fun index => balanceAt step.1.state index.toNat)
           (getActiveValidatorIndices step.1.state (getCurrentEpoch step.1.state)).toFinset)
+    -- The state root of each listed block must be the root of the state after it.
     (stateRooted₁ : ∀ applied ∈ chain₁.appliedBlocks,
       SszType.hashTreeRoot applied.after = .ok applied.signed.message.stateRoot)
     (stateRooted₂ : ∀ applied ∈ chain₂.appliedBlocks,
       SszType.hashTreeRoot applied.after = .ok applied.signed.message.stateRoot)
+    -- `F₁` and `F₂` are listed blocks of the two lists.
+    --
+    -- Their roots are the roots of the two finalized checkpoints.
     {F₁ F₂ : (fork : Fork) × BeaconBlock preset fork}
     (listed₁ : F₁ ∈ chain₁.blocks)
     (rooted₁ : SszType.hashTreeRoot F₁.2 = .ok last₁.state.finalizedCheckpoint.root)
     (listed₂ : F₂ ∈ chain₂.blocks)
     (rooted₂ : SszType.hashTreeRoot F₂.2 = .ok last₂.state.finalizedCheckpoint.root)
+    -- Neither list may apply one of them at or before the other, blocks compared as messages.
     (conflicting : ¬chain₁.AppliesAtOrBefore F₁ F₂ ∧ ¬chain₂.AppliesAtOrBefore F₁ F₂ ∧
       ¬chain₁.AppliesAtOrBefore F₂ F₁ ∧ ¬chain₂.AppliesAtOrBefore F₂ F₁) :
+    -- Then validators are slashable, with the bound of the guaranteed intersection.
+    --
+    -- The checkpoints `l` and `r` and the bound are as for the order of the two lists' roots.
     (∃ l r : Models.Ffg.Checkpoint (StatesRoot (chain₁.states ++ chain₂.states)),
       min last₁.state.finalizedCheckpoint.epoch.toNat
         last₂.state.finalizedCheckpoint.epoch.toNat ≤ l.epoch ∧
@@ -635,14 +598,27 @@ theorem accountable_safety_isSlashableAttestationData_of_chainLists
               (validator, data1) ∈ chain₁.votes ∪ chain₂.votes ∧
               (validator, data2) ∈ chain₁.votes ∪ chain₂.votes ∧
               isSlashableAttestationData data1 data2 = true}) ∨
+    -- Or two different headers that the two chains record have one root.
+    --
+    -- These headers are the genesis header and the headers of the listed blocks.
+    --
+    -- The genesis header is the latest block header of the genesis state, with the state's root.
+    --
+    -- The root of the header of a listed block is the root of the block.
+    --
+    -- So the blocks stand for the headers.
     ((∃ block ∈ chain₁.blocks ++ chain₂.blocks, ∃ block' ∈ chain₁.blocks ++ chain₂.blocks,
         block ≠ block' ∧ ∃ root, SszType.hashTreeRoot block.2 = .ok root ∧
           SszType.hashTreeRoot block'.2 = .ok root) ∨
+      -- A listed block comes after slot zero, so its header is never the genesis header.
       ∃ block ∈ chain₁.blocks ++ chain₂.blocks, ∃ genesisRoot root,
         SszType.hashTreeRoot state = .ok genesisRoot ∧
         SszType.hashTreeRoot { state.latestBlockHeader with stateRoot := genesisRoot } =
           .ok root ∧
         SszType.hashTreeRoot block.2 = .ok root) ∨
+    -- Or a listed block has the zero root, or a state that the chains record has it.
+    --
+    -- These states are the genesis state and the state after each listed block.
     ((∃ block ∈ chain₁.blocks ++ chain₂.blocks,
         SszType.hashTreeRoot block.2 = .ok (Vector.replicate 32 0)) ∨
       SszType.hashTreeRoot state = .ok (Vector.replicate 32 0) ∨
@@ -652,6 +628,8 @@ theorem accountable_safety_isSlashableAttestationData_of_chainLists
   refine accountable_safety_isSlashableAttestationData_of_statesRoot positive window apart
     before computed chain₁ chain₂ large₁ large₂ ?_
   -- Without a hash event, the two finalized blocks conflict in the order of the lists' roots.
+  --
+  -- So two blocks that conflict on the two chains conflict in the order of the two lists' roots.
   obtain ⟨genesisRoot, rooted⟩ : ∃ root, SszType.hashTreeRoot state = .ok root := by
     rcases ChainList.genesisRooted computed chain₁ with ⟨-, empty⟩ | rooted
     · rw [empty] at listed₁
@@ -692,6 +670,7 @@ theorem accountable_safety_isSlashableAttestationData_of_chainLists
   have nonzeroAfter : ∀ applied ∈ chain₁.appliedBlocks ++ chain₂.appliedBlocks,
       SszType.hashTreeRoot applied.after ≠ .ok (Vector.replicate 32 0) :=
     fun applied member zero => events (.inr (.inr (.inr ⟨applied, member, zero⟩)))
+  -- Without these events, each root that a state of the two chains records is a recorded header's.
   obtain ⟨headers₁, recorded₁, links₁, -⟩ := chain₁.recordedHeaders computed rooted nonzero
     stateRooted₁ fun applied member => nonzeroAfter applied (List.mem_append_left _ member)
   obtain ⟨headers₂, recorded₂, links₂, -⟩ := chain₂.recordedHeaders computed rooted nonzero
@@ -702,6 +681,10 @@ theorem accountable_safety_isSlashableAttestationData_of_chainLists
     cases chain
     · exact recorded₂
     · exact recorded₁
+  -- Two consecutive slots then record one header twice, or a header and the next one on the chain.
+  --
+  -- So the links of the two chains order a root before another only along a chain, by parent roots.
+  --
   -- An order of two roots along the links of the lists keeps every root after the first block.
   have descends : ∀ {older : (fork : Fork) × BeaconBlock preset fork} {start finish : Root},
       toStatesRoot (chain₁.states ++ chain₂.states) start ≤

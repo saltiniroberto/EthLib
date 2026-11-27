@@ -14,8 +14,6 @@ A block leaves its header as the latest block header, at every fork, with a zero
 
 It runs at the slot of the state, after the latest block header, whose root is its parent.
 
-That header has a zero state root until the next slot, which fills it with the root of the state.
-
 A slot step with its upgrades records the root of the latest block header at the slot of the state.
 
 Every other root that it records was recorded at the same slot before.
@@ -63,13 +61,14 @@ theorem processBlock_latestBlockHeader {engine : ExecutionEngine preset fork}
   obtain ⟨bodyRoot, bodyRooted, header⟩ := latestBlockHeader_processBlock computed
   exact ⟨slot, newer, parentRoot, bodyRoot, bodyRooted, header⟩
 
-/-! ## The slots -/
+/-! ## The slots
+
+The header of a block has a zero state root until the next slot, which fills it with the state root.
+-/
 
 /-- One slot step with its upgrades: the header it leaves latest, and the roots it records.
 
 The caching fills the state root of the latest block header when it is zero, with the state root.
-
-That header is the latest block header after the step, one slot later.
 
 The step records the root of that header at the slot of the state before it.
 
@@ -77,6 +76,7 @@ Every other root that it records was recorded at the same slot before. -/
 theorem advanceSlotAcross_latestBlockHeader {forked after : ForkedBeaconState preset}
     (computed : advanceSlotAcross config checks forked = .ok after) :
     (∃ stateRoot, SszType.hashTreeRoot forked.state = .ok stateRoot ∧
+      -- That header is the latest block header after the step, one slot later.
       after.state.latestBlockHeader =
         if forked.state.latestBlockHeader.stateRoot = Vector.replicate 32 0 then
           { forked.state.latestBlockHeader with stateRoot }

@@ -11,17 +11,11 @@ The theorems on runs read their votes and weights from every run between two sta
 
 A chain given as data has its own votes and weights.
 
-Its votes are those that the attestations of the blocks it applies cast.
-
-Its weights are the effective balances of its own states that end an epoch.
-
 The finalized checkpoint of its last state is slack-finalized with these votes and weights.
 
 The validator sets are the active sets read in its last state, as for a run.
 
 The proof is the induction of the theorem on runs, over the steps of the list.
-
-A block step there asks only that the set of votes hold the votes of its own block.
 -/
 
 @[expose] public section
@@ -47,6 +41,7 @@ Its committees are those of the state before the block.
 So the set holds the votes that the chain includes, and no others. -/
 def votes {last : ForkedBeaconState preset} (chain : ChainList config checks first last) :
     Set (ValidatorIndex × AttestationData) :=
+  -- The votes of a chain are those that the attestations of the blocks it applies cast.
   {vote | ∃ applied ∈ chain.appliedBlocks, vote ∈ blockVotes applied.before applied.signed.message}
 
 /-- The effective balances of each state of a chain whose next step on it may justify a checkpoint.
@@ -59,6 +54,7 @@ Its block is that of the root that the state records for the start of that epoch
 def balances (block : Root → β) {last : ForkedBeaconState preset}
     (chain : ChainList config checks first last) (c : Models.Ffg.Checkpoint β) :
     Set (ValidatorIndex → ℕ) :=
+  -- The weights of a chain are the effective balances of its own states that end an epoch.
   {weights | ∃ step ∈ chain.steps, step.2.state.slot ≠ step.1.state.slot ∧
     (step.1.state.slot + 1) % preset.SLOTS_PER_EPOCH = 0 ∧
     ∃ (current : Bool) (root : Root),
@@ -128,13 +124,11 @@ Each step must meet the bounds of a step.
 
 At a slot that ends an epoch, the sets and weights must match the state for both recent epochs.
 
-The set of votes must hold the votes of the blocks that the chain applies.
-
-An epoch must have at least one slot, and the buffer of roots must cover three epochs.
-
-The seed lookahead must leave room in the buffer of RANDAO mixes. -/
+The set of votes must hold the votes of the blocks that the chain applies. -/
 theorem slackFinalityInvariant (positive : 0 < preset.SLOTS_PER_EPOCH.toNat)
+    -- An epoch must have at least one slot, and the buffer of roots must cover three epochs.
     (window : 3 * preset.SLOTS_PER_EPOCH.toNat ≤ preset.SLOTS_PER_HISTORICAL_ROOT.toNat)
+    -- The seed lookahead must leave room in the buffer of RANDAO mixes.
     (apart : preset.MIN_SEED_LOOKAHEAD.toNat + 2 < preset.EPOCHS_PER_HISTORICAL_VECTOR.toNat)
     (holds : SlackFinalityInvariant V U W genesis attested block first) :
     ∀ {last : ForkedBeaconState preset} (chain : ChainList config checks first last),
@@ -163,6 +157,7 @@ theorem slackFinalityInvariant (positive : 0 < preset.SLOTS_PER_EPOCH.toNat)
       (fun vote ⟨applied, member, cast⟩ => included ⟨applied, List.mem_append_left _ member, cast⟩)
     have newest : _ ∈ (ChainList.block earlier engine signed validateResult applied).steps :=
       List.mem_append_right _ (List.mem_singleton_self _)
+    -- A block step there asks only that the set of votes hold the votes of its own block.
     exact earlierHolds.of_applySignedBlock positive window apart (bounds _ newest).links
       (fun vote cast => included ⟨_, List.mem_append_right _ (List.mem_singleton_self _), cast⟩)
       applied
@@ -190,24 +185,17 @@ theorem targetSetsMatch {last : ForkedBeaconState preset}
 
 The validator set of a checkpoint is the active set of its epoch in the last state.
 
-Its second set is the active set of the next epoch in the last state.
-
 Its weights are the balances of the chain, and the votes are those its blocks cast.
 
-Each step of the chain must meet the bounds on the stake and the blocks.
-
-An epoch must have at least one slot, and the buffer of roots must cover three epochs.
-
-The seed lookahead must leave room in the buffer of RANDAO mixes.
-
-The genesis block of the model is the block of the zero root.
-
-The genesis state built from deposits exists only before Altair. -/
+Each step of the chain must meet the bounds on the stake and the blocks. -/
 theorem slackFinalized_activeSetAt (positive : 0 < preset.SLOTS_PER_EPOCH.toNat)
+    -- An epoch must have at least one slot, and the buffer of roots must cover three epochs.
     (window : 3 * preset.SLOTS_PER_EPOCH.toNat ≤ preset.SLOTS_PER_HISTORICAL_ROOT.toNat)
+    -- The seed lookahead must leave room in the buffer of RANDAO mixes.
     (apart : preset.MIN_SEED_LOOKAHEAD.toNat + 2 < preset.EPOCHS_PER_HISTORICAL_VECTOR.toNat)
     {fork : Fork} {state : BeaconState preset fork} {eth1BlockHash : Hash32}
     {eth1Timestamp : UInt64} {deposits : Array Deposit}
+    -- The genesis state built from deposits exists only before Altair.
     {before : fork < .altair}
     (computed :
       initializeBeaconStateFromEth1 config checks eth1BlockHash eth1Timestamp deposits before =
@@ -215,7 +203,9 @@ theorem slackFinalized_activeSetAt (positive : 0 < preset.SLOTS_PER_EPOCH.toNat)
     {last : ForkedBeaconState preset} (chain : ChainList config checks ⟨fork, state⟩ last)
     (bounds : ∀ step ∈ chain.steps, SlackStepBounds block step.1 step.2) :
     SlackFinalized (fun c => activeSetAt last.state c.epoch)
+      -- The second set of a checkpoint is the active set of the next epoch in the last state.
       (fun c => activeSetAt last.state (c.epoch + 1)) (chain.balances block)
+      -- The genesis block of the model is the block of the zero root.
       (block (Vector.replicate 32 0)) (ffgVotes block chain.votes)
       (last.state.finalizedCheckpoint.toFfg block) :=
   (slackFinalityInvariant positive window apart
@@ -228,15 +218,11 @@ theorem slackFinalized_activeSetAt (positive : 0 < preset.SLOTS_PER_EPOCH.toNat)
 
 The sets, weights and votes are those of the theorem on the finalized checkpoint.
 
-Each step of the chain must meet the bounds on the stake and the blocks.
-
-An epoch must have at least one slot, and the buffer of roots must cover three epochs.
-
-The seed lookahead must leave room in the buffer of RANDAO mixes.
-
-The genesis block of the model is the block of the zero root. -/
+Each step of the chain must meet the bounds on the stake and the blocks. -/
 theorem slackJustifiedCheckpoints_activeSetAt (positive : 0 < preset.SLOTS_PER_EPOCH.toNat)
+    -- An epoch must have at least one slot, and the buffer of roots must cover three epochs.
     (window : 3 * preset.SLOTS_PER_EPOCH.toNat ≤ preset.SLOTS_PER_HISTORICAL_ROOT.toNat)
+    -- The seed lookahead must leave room in the buffer of RANDAO mixes.
     (apart : preset.MIN_SEED_LOOKAHEAD.toNat + 2 < preset.EPOCHS_PER_HISTORICAL_VECTOR.toNat)
     {fork : Fork} {state : BeaconState preset fork} {eth1BlockHash : Hash32}
     {eth1Timestamp : UInt64} {deposits : Array Deposit}
@@ -248,6 +234,7 @@ theorem slackJustifiedCheckpoints_activeSetAt (positive : 0 < preset.SLOTS_PER_E
     (bounds : ∀ step ∈ chain.steps, SlackStepBounds block step.1 step.2) :
     SlackJustifiedCheckpoints (fun c => activeSetAt last.state c.epoch)
       (fun c => activeSetAt last.state (c.epoch + 1)) (chain.balances block)
+      -- The genesis block of the model is the block of the zero root.
       (block (Vector.replicate 32 0)) (ffgVotes block chain.votes) block last.state :=
   (slackFinalityInvariant positive window apart
     (initializeBeaconStateFromEth1_slackFinalityInvariant computed) chain bounds
